@@ -3,6 +3,8 @@ import Papa from "papaparse";
 import { useAuth } from "./hooks/useAuth";
 import { useSupabaseTable } from "./hooks/useSupabaseTable";
 import { useSolicitudes } from "./hooks/useSolicitudes";
+import { subirArchivo } from "./lib/storage";
+import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import {
   ShoppingCart, Wrench, Building2, CheckCircle2, XCircle, Clock,
@@ -311,14 +313,26 @@ function FirmaBlock({ rol, firma }) {
   );
 }
 
-// input de archivo simulado (guarda solo el nombre, no hay almacenamiento real en este prototipo)
-function AdjuntarArchivo({ nombre, onSeleccionar, label, small }) {
+// input de archivo: sube de verdad a Supabase Storage y guarda la URL pública resultante
+function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta }) {
+  const [subiendo, setSubiendo] = useState(false);
+  const manejar = async (file) => {
+    setSubiendo(true);
+    const url = await subirArchivo(file, carpeta || "adjuntos");
+    setSubiendo(false);
+    if (url) onSeleccionar(url);
+  };
+  // si "nombre" es una URL de Storage, mostramos solo el nombre del archivo (sin el prefijo de fecha)
+  const mostrar = nombre ? decodeURIComponent(nombre.split("/").pop().replace(/^\d+_/, "")) : null;
   return (
-    <label className={`inline-flex items-center gap-1.5 border border-dashed border-slate-300 rounded-md px-2 py-1 cursor-pointer text-slate-500 hover:border-indigo-400 hover:text-indigo-600 ${small ? "text-[11px]" : "text-xs"}`}>
-      <Paperclip size={small ? 11 : 13} />
-      {nombre ? <span className="truncate max-w-[120px]">{nombre}</span> : <span>{label || "Adjuntar archivo"}</span>}
-      <input type="file" accept=".pdf,image/*" className="hidden" onChange={(e) => e.target.files[0] && onSeleccionar(e.target.files[0].name)} />
-    </label>
+    <span className="inline-flex items-center gap-1.5">
+      <label className={`inline-flex items-center gap-1.5 border border-dashed border-slate-300 rounded-md px-2 py-1 cursor-pointer text-slate-500 hover:border-indigo-400 hover:text-indigo-600 ${small ? "text-[11px]" : "text-xs"}`}>
+        <Paperclip size={small ? 11 : 13} />
+        {subiendo ? <span>Subiendo...</span> : mostrar ? <span className="truncate max-w-[120px]">{mostrar}</span> : <span>{label || "Adjuntar archivo"}</span>}
+        <input type="file" accept=".pdf,image/*" className="hidden" disabled={subiendo} onChange={(e) => e.target.files[0] && manejar(e.target.files[0])} />
+      </label>
+      {nombre && !subiendo && <a href={nombre} target="_blank" rel="noreferrer" className={`text-indigo-600 underline ${small ? "text-[11px]" : "text-xs"}`}>ver</a>}
+    </span>
   );
 }
 
@@ -413,10 +427,12 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
 --------------------------------------------------------- */
 function PerfilUsuario({ currentUser, onGuardar }) {
   const [preview, setPreview] = useState(currentUser.firmaFotoUrl);
-  const cargarFoto = (file) => {
-    const reader = new FileReader();
-    reader.onload = () => setPreview(reader.result);
-    reader.readAsDataURL(file);
+  const [subiendo, setSubiendo] = useState(false);
+  const cargarFoto = async (file) => {
+    setSubiendo(true);
+    const url = await subirArchivo(file, "firmas");
+    setSubiendo(false);
+    if (url) setPreview(url);
   };
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-md">
@@ -426,8 +442,8 @@ function PerfilUsuario({ currentUser, onGuardar }) {
       <label className="text-xs font-medium text-slate-500">Firma (foto)</label>
       <div className="border border-dashed border-slate-300 rounded-lg p-4 mt-1 text-center">
         {preview ? <img src={preview} alt="firma" className="h-20 mx-auto object-contain mb-2" /> : <div className="text-xs text-slate-400 mb-2">Sin firma cargada. Sube una foto de tu firma en papel.</div>}
-        <label className="inline-flex items-center gap-1.5 text-xs text-indigo-600 font-medium cursor-pointer"><Camera size={13} /> {preview ? "Cambiar foto" : "Subir foto"}
-          <input type="file" accept="image/*" className="hidden" onChange={(e) => e.target.files[0] && cargarFoto(e.target.files[0])} />
+        <label className="inline-flex items-center gap-1.5 text-xs text-indigo-600 font-medium cursor-pointer"><Camera size={13} /> {subiendo ? "Subiendo..." : preview ? "Cambiar foto" : "Subir foto"}
+          <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => e.target.files[0] && cargarFoto(e.target.files[0])} />
         </label>
       </div>
       <button onClick={() => onGuardar({ ...currentUser, firmaFotoUrl: preview })} className="mt-4 bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium">Guardar perfil</button>
@@ -591,8 +607,9 @@ function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, concepto
   const submit = () => {
     if (!items.length || items.some((i) => !i.nombre.trim()) || !objetivo.trim() || !justificacion.trim()) return;
     const jefe = usuarios.find((u) => u.areaId === areaId && u.rol === "Jefe de Área");
+    const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
     onCrear({
-      id: nextId(), folio: "SOL-" + (1000 + Math.floor(Math.random() * 8999)),
+      id: nextId(), folio,
       tipo, empresaId, areaId, centroCostoId, conceptoGastoId, solicitanteId: currentUser.id,
       fechaCreacion: hoy(), fechaEstimada, objetivo, justificacion,
       status: "aprobacion_jefe",
@@ -608,8 +625,15 @@ function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, concepto
       ocEnviada: { archivoNombre: "", fecha: "", usuario: "" },
       recepcion: { archivoNombre: "", comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
       historialEstados: [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
-      notificaciones: [{ fecha: ahoraISO(), mensaje: jefe ? `Correo enviado a ${jefe.nombre} (${jefe.email || "sin correo"}): tienes una nueva solicitud pendiente de aprobación.` : `Solicitud creada. No hay un jefe de área configurado para notificar.` }],
+      notificaciones: [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
     });
+    if (jefe?.email) {
+      enviarCorreo(
+        jefe.email,
+        `Nueva solicitud pendiente: ${folio}`,
+        `<p>Hola ${jefe.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Orden de compra" : "Orden de servicio"}) y quedó pendiente de tu aprobación.</p><p><b>Objetivo:</b> ${objetivo}</p>`
+      );
+    }
   };
 
   return (
@@ -1182,6 +1206,13 @@ function SolicitudDetalle({ solicitud, areas, empresas, usuarios, proveedores, c
     else if (s === "orden") {
       if (!solicitud.ocEnviada.archivoNombre) return;
       patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): la orden ${solicitud.folio} fue enviada al proveedor.`) });
+      if (solicitante?.email) {
+        enviarCorreo(
+          solicitante.email,
+          `Tu orden ${solicitud.folio} fue enviada al proveedor`,
+          `<p>Hola ${solicitante.nombre},</p><p>La orden <b>${solicitud.folio}</b> ya fue enviada al proveedor y quedó lista para recepción.</p>`
+        );
+      }
     }
     else if (s === "oc_enviada") patch({ status: "recepcion", historialEstados: empujarHistorial("recepcion") });
     else if (s === "recepcion") {
@@ -1360,10 +1391,9 @@ function ListaSolicitudes({ solicitudes, areas, empresas, onAbrir, onExportar })
    LOGOS DE EMPRESAS
 --------------------------------------------------------- */
 function EmpresasLogos({ empresas, onGuardar }) {
-  const cargarLogo = (empresa, file) => {
-    const reader = new FileReader();
-    reader.onload = () => onGuardar({ ...empresa, logoUrl: reader.result });
-    reader.readAsDataURL(file);
+  const cargarLogo = async (empresa, file) => {
+    const url = await subirArchivo(file, "logos");
+    if (url) onGuardar({ ...empresa, logoUrl: url });
   };
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
