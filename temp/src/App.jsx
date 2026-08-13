@@ -83,7 +83,7 @@ const UMBRAL_GERENCIA = 12000000;
 const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "caja", "paquete", "hora", "servicio"];
 const IVA_OPCIONES = [0, 5, 19];
 const COLORS = ["#4f46e5", "#f59e0b", "#10b981", "#ef4444", "#0ea5e9", "#a855f7"];
-const ROLES = ["Solicitante", "Jefe de Área", "Dirección Financiera", "Gerencia", "Compras"];
+const ROLES = ["Solicitante", "Jefe de Área", "Dirección Financiera", "Gerencia", "Compras", "Administrador"];
 
 const PASOS = [
   { key: "solicitud", label: "Solicitud creada" },
@@ -181,14 +181,14 @@ function duracion(iniISO, finISO) {
 /* ---------------------------------------------------------
    PERMISOS
 --------------------------------------------------------- */
-const puedeAprobarJefe = (u, s) => u.rol === "Jefe de Área" && u.areaId === s.areaId;
-const puedeGestionarCotizaciones = (u) => u.rol === "Compras";
-const puedeAprobarFinanciera = (u) => u.rol === "Dirección Financiera";
-const puedeAprobarGerencia = (u) => u.rol === "Gerencia";
-const puedeVerCatalogos = (u) => ["Compras", "Dirección Financiera", "Gerencia"].includes(u.rol);
-const puedeVerTodasSolicitudes = (u) => u.rol !== "Solicitante";
-const puedeEditarPagos = (u) => u.rol === "Dirección Financiera";
-const puedeVerHistorico = (u) => u.rol === "Compras";
+const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (u.rol === "Jefe de Área" && u.areaId === s.areaId);
+const puedeGestionarCotizaciones = (u) => u.rol === "Administrador" || u.rol === "Compras";
+const puedeAprobarFinanciera = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
+const puedeAprobarGerencia = (u) => u.rol === "Administrador" || u.rol === "Gerencia";
+const puedeVerCatalogos = (u) => u.rol === "Administrador" || ["Compras", "Dirección Financiera", "Gerencia"].includes(u.rol);
+const puedeVerTodasSolicitudes = (u) => u.rol === "Administrador" || u.rol !== "Solicitante";
+const puedeEditarPagos = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
+const puedeVerHistorico = (u) => u.rol === "Administrador" || u.rol === "Compras";
 
 /* ---------------------------------------------------------
    DATOS SEMILLA
@@ -816,7 +816,7 @@ function ResumenTotales({ solicitud }) {
 --------------------------------------------------------- */
 function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGuardarItems, onDecision }) {
   const [observacion, setObservacion] = useState("");
-  const esCompras = currentUser.rol === "Compras";
+  const esCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
   if (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "no_aplica") return null;
 
   if (solicitud.revisionCompras.estado !== "pendiente") {
