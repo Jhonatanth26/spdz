@@ -1329,19 +1329,37 @@ function SolicitudDetalle({ solicitud, areas, empresas, usuarios, proveedores, c
   );
 }
 
-function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, onAbrir, onExportar, titulo }) {
+// nombre(s) del/los proveedor(es) adjudicado(s) en una solicitud (según la cotización seleccionada por ítem)
+function proveedoresAdjudicados(s, proveedores) {
+  const nombres = [...new Set(s.items.map((it) => {
+    if (!it.cotizaciones.length) return null;
+    const idx = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad);
+    const cot = it.cotizaciones[idx];
+    if (!cot) return null;
+    return proveedores.find((p) => p.id === cot.proveedorId)?.nombre || cot.proveedorNombre || null;
+  }).filter(Boolean))];
+  return nombres.length ? nombres.join(", ") : "—";
+}
+
+function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, onAbrir, onExportar, titulo }) {
   const [fArea, setFArea] = useState("todas");
   const [fEmpresa, setFEmpresa] = useState("todas");
   const [fEstado, setFEstado] = useState("todos");
   const [fCreadoPor, setFCreadoPor] = useState("todos");
+  const [fDesde, setFDesde] = useState("");
+  const [fHasta, setFHasta] = useState("");
 
   const creadores = usuarios.filter((u) => solicitudes.some((s) => s.solicitanteId === u.id));
   const filtradas = solicitudes.filter((s) =>
     (fArea === "todas" || s.areaId === fArea) &&
     (fEmpresa === "todas" || s.empresaId === fEmpresa) &&
     (fEstado === "todos" || s.status === fEstado) &&
-    (fCreadoPor === "todos" || s.solicitanteId === fCreadoPor)
+    (fCreadoPor === "todos" || s.solicitanteId === fCreadoPor) &&
+    (!fDesde || s.fechaCreacion >= fDesde) &&
+    (!fHasta || s.fechaCreacion <= fHasta)
   );
+  const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta;
+  const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); };
 
   return (
     <div className="space-y-4">
@@ -1363,23 +1381,38 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, onAbrir, onE
           <label className="text-[11px] font-medium text-slate-500">Estado</label>
           <select value={fEstado} onChange={(e) => setFEstado(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="todos">Todos</option>{PASOS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}<option value="rechazada">Rechazada</option></select>
         </div>
-        {(fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fCreadoPor !== "todos") && (
-          <button onClick={() => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFCreadoPor("todos"); }} className="text-xs text-slate-500 underline mb-1.5">Limpiar filtros</button>
-        )}
+        <div>
+          <label className="text-[11px] font-medium text-slate-500">Fecha de registro — desde</label>
+          <input type="date" value={fDesde} onChange={(e) => setFDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label className="text-[11px] font-medium text-slate-500">hasta</label>
+          <input type="date" value={fHasta} onChange={(e) => setFHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" />
+        </div>
+        {hayFiltros && <button onClick={limpiarFiltros} className="text-xs text-slate-500 underline mb-1.5">Limpiar filtros</button>}
         <div className="text-xs text-slate-400 ml-auto mb-1.5">{filtradas.length} de {solicitudes.length} solicitudes</div>
       </div>
-      <ListaSolicitudes solicitudes={filtradas} areas={areas} empresas={empresas} onAbrir={onAbrir} onExportar={onExportar} />
+      <ListaSolicitudes solicitudes={filtradas} areas={areas} empresas={empresas} proveedores={proveedores} onAbrir={onAbrir} onExportar={onExportar} />
     </div>
   );
 }
 
-function ListaSolicitudes({ solicitudes, areas, empresas, onAbrir, onExportar }) {
+function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, onAbrir, onExportar }) {
   return (
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+    <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2 font-medium">Folio</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2 font-medium">Folio</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
         <tbody>{solicitudes.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
-          return (<tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => onAbrir(s.id)}><td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td><td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td><td className="px-4 py-2.5 text-slate-600">{area?.nombre}</td><td className="px-4 py-2.5 text-slate-600">{empresa?.nombre}</td><td className="px-4 py-2.5 text-right text-slate-600">{fmt(totalSolicitud(s))}</td><td className="px-4 py-2.5"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : "slate"}>{s.status === "rechazada" ? "Rechazada" : paso?.label}</Badge></td>
+          return (<tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => onAbrir(s.id)}>
+            <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
+            <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
+            <td className="px-4 py-2.5 text-slate-600">{area?.nombre}</td>
+            <td className="px-4 py-2.5 text-slate-600">{empresa?.nombre}</td>
+            <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{s.fechaCreacion}</td>
+            <td className="px-4 py-2.5 text-slate-600 max-w-[220px] truncate" title={s.objetivo}>{s.objetivo}</td>
+            <td className="px-4 py-2.5 text-slate-600 max-w-[160px] truncate" title={proveedoresAdjudicados(s, proveedores)}>{proveedoresAdjudicados(s, proveedores)}</td>
+            <td className="px-4 py-2.5 text-right text-slate-600">{fmt(totalSolicitud(s))}</td>
+            <td className="px-4 py-2.5"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : "slate"}>{s.status === "rechazada" ? "Rechazada" : paso?.label}</Badge></td>
             <td className="px-4 py-2.5 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
             <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
       </table>
@@ -1614,7 +1647,7 @@ export default function App() {
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
           />
         ) : (
-          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} onAbrir={setAbierta} onExportar={setExportando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
+          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} onAbrir={setAbierta} onExportar={setExportando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         )}
       </main>
 
