@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from "react";
 import Papa from "papaparse";
+import * as XLSX from "xlsx";
 import { useAuth } from "./hooks/useAuth";
 import { useSupabaseTable } from "./hooks/useSupabaseTable";
 import { useSolicitudes } from "./hooks/useSolicitudes";
@@ -224,7 +225,7 @@ function datosSemilla() {
     pagos: planPagosVacio(),
     pagosConfirmados: false,
     ocEnviada: { archivoNombre: "", fecha: "", usuario: "" },
-    recepcion: { archivoNombre: "", comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
+    recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-20T09:00:00.000Z" },
       { status: "aprobacion_jefe", fecha: "2026-07-20T09:05:00.000Z" },
@@ -255,7 +256,7 @@ function datosSemilla() {
     pagos: planPagosVacio(),
     pagosConfirmados: false,
     ocEnviada: { archivoNombre: "", fecha: "", usuario: "" },
-    recepcion: { archivoNombre: "", comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
+    recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-22T10:00:00.000Z" },
       { status: "aprobacion_jefe", fecha: "2026-07-22T10:02:00.000Z" },
@@ -485,7 +486,13 @@ function Dashboard({ areas, solicitudes }) {
 --------------------------------------------------------- */
 function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
   const [filtroEmpresa, setFiltroEmpresa] = useState("todas");
-  const base = filtroEmpresa === "todas" ? solicitudes : solicitudes.filter((s) => s.empresaId === filtroEmpresa);
+  const [fDesde, setFDesde] = useState("");
+  const [fHasta, setFHasta] = useState("");
+  const base = solicitudes.filter((s) =>
+    (filtroEmpresa === "todas" || s.empresaId === filtroEmpresa) &&
+    (!fDesde || s.fechaCreacion >= fDesde) &&
+    (!fHasta || s.fechaCreacion <= fHasta)
+  );
 
   const porArea = areas.map((a) => ({ nombre: a.nombre, monto: base.filter((s) => s.areaId === a.id && !["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0) }));
   const porTipo = [{ nombre: "Compra", value: base.filter((s) => s.tipo === "compra").length }, { nombre: "Servicio", value: base.filter((s) => s.tipo === "servicio").length }];
@@ -505,11 +512,24 @@ function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="text-sm font-medium text-slate-700">Filtrar por empresa</div>
-        <select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
-          <option value="todas">Todas las empresas</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
-        </select>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-end gap-3">
+          <div>
+            <div className="text-[11px] font-medium text-slate-500 mb-1">Filtrar por empresa</div>
+            <select value={filtroEmpresa} onChange={(e) => setFiltroEmpresa(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm">
+              <option value="todas">Todas las empresas</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+            </select>
+          </div>
+          <div>
+            <div className="text-[11px] font-medium text-slate-500 mb-1">Desde</div>
+            <input type="date" value={fDesde} onChange={(e) => setFDesde(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm" />
+          </div>
+          <div>
+            <div className="text-[11px] font-medium text-slate-500 mb-1">Hasta</div>
+            <input type="date" value={fHasta} onChange={(e) => setFHasta(e.target.value)} className="border border-slate-200 rounded-lg px-3 py-1.5 text-sm" />
+          </div>
+          {(fDesde || fHasta) && <button onClick={() => { setFDesde(""); setFHasta(""); }} className="text-xs text-slate-500 underline mb-1.5">Limpiar fechas</button>}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -583,10 +603,11 @@ function HistoricoCompras({ nombreItem, historico, setHistorico }) {
 /* ---------------------------------------------------------
    NUEVA SOLICITUD
 --------------------------------------------------------- */
-function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
+function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
   const [tipo, setTipo] = useState("compra");
   const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
   const [areaId, setAreaId] = useState(currentUser.areaId || areas[0].id);
+  const [departamentoId, setDepartamentoId] = useState("");
   const [centroCostoId, setCentroCostoId] = useState(centrosCosto[0]?.id || "");
   const [conceptoGastoId, setConceptoGastoId] = useState(conceptosGasto[0]?.id || "");
   const [fechaEstimada, setFechaEstimada] = useState("");
@@ -594,6 +615,7 @@ function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, concepto
   const [justificacion, setJustificacion] = useState("");
   const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: 19, cotizaciones: [] }]);
   const [pagosSugeridos, setPagosSugeridos] = useState(planPagosVacio());
+  const departamentosDelArea = departamentos.filter((d) => d.areaId === areaId);
 
   const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
@@ -610,7 +632,7 @@ function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, concepto
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
     onCrear({
       id: nextId(), folio,
-      tipo, empresaId, areaId, centroCostoId, conceptoGastoId, solicitanteId: currentUser.id,
+      tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCostoId, conceptoGastoId, solicitanteId: currentUser.id,
       fechaCreacion: hoy(), fechaEstimada, objetivo, justificacion,
       status: "aprobacion_jefe",
       revisionCompras: tipo === "compra" ? { estado: "pendiente", observacion: "", usuario: "", fecha: "" } : { estado: "no_aplica", observacion: "", usuario: "", fecha: "" },
@@ -623,7 +645,7 @@ function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, concepto
       },
       pagosSugeridos, pagos: planPagosVacio(), pagosConfirmados: false,
       ocEnviada: { archivoNombre: "", fecha: "", usuario: "" },
-      recepcion: { archivoNombre: "", comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
+      recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
       historialEstados: [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
       notificaciones: [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
     });
@@ -631,7 +653,7 @@ function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, concepto
       enviarCorreo(
         jefe.email,
         `Nueva solicitud pendiente: ${folio}`,
-        `<p>Hola ${jefe.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Orden de compra" : "Orden de servicio"}) y quedó pendiente de tu aprobación.</p><p><b>Objetivo:</b> ${objetivo}</p>`
+        `<p>Hola ${jefe.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}) y quedó pendiente de tu aprobación.</p><p><b>Objetivo:</b> ${objetivo}</p>`
       );
     }
   };
@@ -643,12 +665,13 @@ function NuevaSolicitud({ areas, empresas, itemsCatalogo, centrosCosto, concepto
         <div>
           <label className="text-xs font-medium text-slate-500">Tipo de solicitud</label>
           <div className="flex gap-2 mt-1">
-            <button onClick={() => setTipo("compra")} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${tipo === "compra" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}><ShoppingCart size={15} /> Orden de compra</button>
-            <button onClick={() => setTipo("servicio")} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${tipo === "servicio" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}><Wrench size={15} /> Orden de servicio</button>
+            <button onClick={() => setTipo("compra")} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${tipo === "compra" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}><ShoppingCart size={15} /> Solicitud de compra</button>
+            <button onClick={() => setTipo("servicio")} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${tipo === "servicio" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}><Wrench size={15} /> Orden de servicio/trabajo</button>
           </div>
         </div>
         <div><label className="text-xs font-medium text-slate-500">Empresa</label><select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
-        <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
+        <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => { setAreaId(e.target.value); setDepartamentoId(""); }} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
+        <div><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentosDelArea.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Solicitante</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500">{currentUser.nombre} (firma automática)</div></div>
         <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Layers size={12} /> Centro de costo</label><select value={centroCostoId} onChange={(e) => setCentroCostoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{centrosCosto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Concepto de gasto</label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{conceptosGasto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
@@ -929,12 +952,25 @@ function OcEnviadaPanel({ solicitud, currentUser, onGuardar }) {
    RECEPCIÓN
 --------------------------------------------------------- */
 function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
-  const [r, setR] = useState(solicitud.recepcion);
+  const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []) });
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); };
+  const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
+  const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
       <div className="font-medium text-slate-700 flex items-center gap-2"><PackageCheck size={16} /> Recepción</div>
-      <AdjuntarArchivo nombre={r.archivoNombre} label="Adjuntar soporte de recepción (PDF/foto)" onSeleccionar={(n) => set({ archivoNombre: n })} />
+      <div>
+        <label className="text-xs font-medium text-slate-500 mb-1 block">Soportes de recepción (puedes adjuntar varios)</label>
+        <div className="space-y-1.5">
+          {r.archivos.map((url, i) => (
+            <div key={i} className="flex items-center gap-2">
+              <AdjuntarArchivo nombre={url} onSeleccionar={() => {}} />
+              <button onClick={() => quitarArchivo(i)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
+            </div>
+          ))}
+          <AdjuntarArchivo nombre={null} label={r.archivos.length ? "Adjuntar otro archivo (PDF/foto)" : "Adjuntar soporte de recepción (PDF/foto)"} onSeleccionar={agregarArchivo} />
+        </div>
+      </div>
       <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Comentarios (opcional)</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
       <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={r.recibidoSatisfaccion} onChange={(e) => set({ recibidoSatisfaccion: e.target.checked })} /> Recibo a satisfacción</label>
       {!r.recibidoSatisfaccion && <div className="text-[11px] text-amber-600">Marca "Recibo a satisfacción" para poder completar la solicitud.</div>}
@@ -945,7 +981,7 @@ function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
 /* ---------------------------------------------------------
    ORDEN DE COMPRA / TRABAJO — documento consolidado
 --------------------------------------------------------- */
-function OrdenDocumento({ solicitud, empresa, area, solicitante, proveedores, centrosCosto, conceptosGasto }) {
+function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, proveedores, centrosCosto, conceptosGasto }) {
   const d = desgloseSolicitud(solicitud);
   const exportarPDF = () => window.print();
   const centroCosto = centrosCosto.find((c) => c.id === solicitud.centroCostoId);
@@ -971,7 +1007,7 @@ function OrdenDocumento({ solicitud, empresa, area, solicitante, proveedores, ce
         <div className="flex items-center gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-12 max-w-[120px] object-contain" />}
           <div>
-            <div className="text-base font-semibold text-slate-800">{solicitud.tipo === "compra" ? "Orden de Compra" : "Orden de Trabajo / Servicio"}</div>
+            <div className="text-base font-semibold text-slate-800">{solicitud.tipo === "compra" ? "Solicitud de Compra" : "Orden de servicio/trabajo"}</div>
             <div className="text-xs text-slate-400">{solicitud.folio} · {empresa?.nombre}</div>
           </div>
         </div>
@@ -979,7 +1015,7 @@ function OrdenDocumento({ solicitud, empresa, area, solicitante, proveedores, ce
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-        <div><b>Área:</b> {area?.nombre}</div><div><b>Solicitante:</b> {solicitante?.nombre}</div>
+        <div><b>Área:</b> {area?.nombre}{departamento && ` — ${departamento.nombre}`}</div><div><b>Solicitante:</b> {solicitante?.nombre}</div>
         <div><b>Centro de costo:</b> {centroCosto?.nombre || "—"}</div><div><b>Concepto de gasto:</b> {conceptoGasto?.nombre || "—"}</div>
         <div><b>Fecha creación:</b> {solicitud.fechaCreacion}</div><div><b>Fecha estimada:</b> {solicitud.fechaEstimada || "—"}</div>
       </div>
@@ -1073,10 +1109,10 @@ function OrdenDocumento({ solicitud, empresa, area, solicitante, proveedores, ce
       )}
 
       {/* OC ENVIADA Y RECEPCIÓN */}
-      {(solicitud.ocEnviada.archivoNombre || solicitud.recepcion.archivoNombre || solicitud.recepcion.comentario) && (
+      {(solicitud.ocEnviada.archivoNombre || (solicitud.recepcion.archivos && solicitud.recepcion.archivos.length) || solicitud.recepcion.comentario) && (
         <div className="grid grid-cols-2 gap-3 text-xs">
           <div><div className="font-medium text-slate-500 mb-0.5">OC enviada al proveedor</div><div className="text-slate-600">{solicitud.ocEnviada.archivoNombre ? `${solicitud.ocEnviada.archivoNombre} · ${solicitud.ocEnviada.fecha}` : "—"}</div></div>
-          <div><div className="font-medium text-slate-500 mb-0.5">Recepción</div><div className="text-slate-600">{solicitud.recepcion.recibidoSatisfaccion ? "Recibido a satisfacción" : "Pendiente"}{solicitud.recepcion.archivoNombre && ` · ${solicitud.recepcion.archivoNombre}`}{solicitud.recepcion.comentario && <div className="italic">"{solicitud.recepcion.comentario}"</div>}</div></div>
+          <div><div className="font-medium text-slate-500 mb-0.5">Recepción</div><div className="text-slate-600">{solicitud.recepcion.recibidoSatisfaccion ? "Recibido a satisfacción" : "Pendiente"}{solicitud.recepcion.archivos?.length > 0 && ` · ${solicitud.recepcion.archivos.length} archivo(s) adjunto(s)`}{solicitud.recepcion.comentario && <div className="italic">"{solicitud.recepcion.comentario}"</div>}</div></div>
         </div>
       )}
 
@@ -1163,9 +1199,10 @@ function accionLabel(solicitud, total) {
   }
 }
 
-function SolicitudDetalle({ solicitud, areas, empresas, usuarios, proveedores, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onVolver }) {
+function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onVolver }) {
   const [observacion, setObservacion] = useState("");
   const area = areas.find((a) => a.id === solicitud.areaId);
+  const departamento = departamentos.find((d) => d.id === solicitud.departamentoId);
   const empresa = empresas.find((e) => e.id === solicitud.empresaId);
   const solicitante = usuarios.find((u) => u.id === solicitud.solicitanteId);
   const total = totalSolicitud(solicitud);
@@ -1242,8 +1279,8 @@ function SolicitudDetalle({ solicitud, areas, empresas, usuarios, proveedores, c
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
-            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Orden de compra" : "Orden de servicio"}</Badge>{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
-            <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
+            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
+            <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
           </div>
           <div className="text-right">
             <div className="text-xs text-slate-400">Total solicitud (con IVA)</div>
@@ -1306,7 +1343,7 @@ function SolicitudDetalle({ solicitud, areas, empresas, usuarios, proveedores, c
       {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} onGuardar={(r) => patch({ recepcion: r })} />}
 
       <div className="print-wrapper-oculto" style={{ display: "none" }}>
-        <OrdenDocumento solicitud={solicitud} empresa={empresa} area={area} solicitante={solicitante} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} />
+        <OrdenDocumento solicitud={solicitud} empresa={empresa} area={area} departamento={departamento} solicitante={solicitante} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} />
       </div>
 
       <TiempoProceso historial={solicitud.historialEstados} />
@@ -1361,9 +1398,39 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
   const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta;
   const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); };
 
+  const exportarExcel = () => {
+    const filas = filtradas.map((s) => {
+      const area = areas.find((a) => a.id === s.areaId);
+      const empresa = empresas.find((e) => e.id === s.empresaId);
+      const solicitante = usuarios.find((u) => u.id === s.solicitanteId);
+      const paso = PASOS.find((p) => p.key === s.status);
+      return {
+        "Consecutivo": s.folio,
+        "Tipo": s.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo",
+        "Área": area?.nombre || "",
+        "Empresa": empresa?.nombre || "",
+        "Solicitante": solicitante?.nombre || "",
+        "Fecha de registro": s.fechaCreacion,
+        "Fecha estimada": s.fechaEstimada || "",
+        "Objetivo": s.objetivo,
+        "Justificación": s.justificacion,
+        "Proveedor adjudicado": proveedoresAdjudicados(s, proveedores),
+        "Total (IVA incl.)": totalSolicitud(s),
+        "Estado": s.status === "rechazada" ? "Rechazada" : (paso?.label || s.status),
+      };
+    });
+    const hoja = XLSX.utils.json_to_sheet(filas);
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Solicitudes");
+    XLSX.writeFile(libro, `solicitudes_${hoy()}.xlsx`);
+  };
+
   return (
     <div className="space-y-4">
-      <h2 className="text-lg font-semibold text-slate-800">{titulo}</h2>
+      <div className="flex items-center justify-between">
+        <h2 className="text-lg font-semibold text-slate-800">{titulo}</h2>
+        <button onClick={exportarExcel} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
+      </div>
       <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
         <div>
           <label className="text-[11px] font-medium text-slate-500">Creado por</label>
@@ -1457,6 +1524,7 @@ function EmpresasLogos({ empresas, onGuardar }) {
 function Catalogos({
   empresas, guardarEmpresa, eliminarEmpresa,
   areas,
+  departamentos, guardarDepartamento, eliminarDepartamento,
   proveedores, guardarProveedor, eliminarProveedor,
   usuarios, guardarUsuario, eliminarUsuario,
   itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo,
@@ -1465,7 +1533,7 @@ function Catalogos({
 }) {
   const [sub, setSub] = useState("empresas");
   const tabs = [
-    { key: "empresas", label: "Empresas", icon: Building2 }, { key: "proveedores", label: "Proveedores", icon: Truck },
+    { key: "empresas", label: "Empresas", icon: Building2 }, { key: "departamentos", label: "Áreas y departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
     { key: "centros", label: "Centros de costo", icon: Layers }, { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
   ];
@@ -1477,6 +1545,14 @@ function Catalogos({
         <>
           <EmpresasLogos empresas={empresas} onGuardar={guardarEmpresa} />
           <CrudTable titulo="Empresas parametrizadas" icon={Building2} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }]} datos={empresas} onGuardar={guardarEmpresa} onEliminar={eliminarEmpresa} plantilla={{ nombre: "", nit: "" }} />
+        </>
+      )}
+      {sub === "departamentos" && (
+        <>
+          <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">Cada área puede tener varios departamentos a cargo. Al crear una solicitud, la persona elige su área y el departamento que reporta — esa información queda registrada para el flujo de aprobaciones.</div>
+          <CrudTable titulo="Departamentos" icon={Layers}
+            columnas={[{ key: "nombre", label: "Nombre" }, { key: "areaId", label: "Área", type: "select", options: areas.map((a) => ({ value: a.id, label: a.nombre })) }]}
+            datos={departamentos} onGuardar={guardarDepartamento} onEliminar={eliminarDepartamento} plantilla={{ nombre: "", areaId: "" }} />
         </>
       )}
       {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }, { key: "contacto", label: "Contacto" }, { key: "email", label: "Correo electrónico" }]} datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedor} plantilla={{ nombre: "", nit: "", contacto: "", email: "" }} />}
@@ -1502,10 +1578,15 @@ function Catalogos({
    APP PRINCIPAL
 --------------------------------------------------------- */
 export default function App() {
-  // --- Catálogos leídos/guardados en Supabase (áreas, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
-  const { datos: areas, cargando: cargandoAreas } = useSupabaseTable('areas', {
+  // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
+  const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea } = useSupabaseTable('areas', {
     desdeDb: (r) => ({ id: r.id, nombre: r.nombre, presupuesto: r.presupuesto_mensual }),
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, presupuesto_mensual: r.presupuesto }),
+    orderBy: 'nombre',
+  });
+  const { datos: departamentos, cargando: cargandoDepartamentos, guardar: guardarDepartamento, eliminar: eliminarDepartamento } = useSupabaseTable('departamentos', {
+    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, areaId: r.area_id }),
+    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, area_id: r.areaId }),
     orderBy: 'nombre',
   });
   const { datos: empresas, cargando: cargandoEmpresas, guardar: guardarEmpresa, eliminar: eliminarEmpresa } = useSupabaseTable('empresas', {
@@ -1534,7 +1615,7 @@ export default function App() {
   const { datos: conceptosGasto, cargando: cargandoConceptos, guardar: guardarConceptoGasto, eliminar: eliminarConceptoGasto, guardarVarios: importarConceptos } = useSupabaseTable('conceptos_gasto', {
     orderBy: 'nombre',
   });
-  const cargandoCatalogos = cargandoAreas || cargandoEmpresas || cargandoProveedores || cargandoUsuarios || cargandoItems || cargandoCentros || cargandoConceptos;
+  const cargandoCatalogos = cargandoAreas || cargandoDepartamentos || cargandoEmpresas || cargandoProveedores || cargandoUsuarios || cargandoItems || cargandoCentros || cargandoConceptos;
 
   const [historico, setHistorico] = useState(HISTORICO_INIT);
   const { solicitudes, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB } = useSolicitudes();
@@ -1627,11 +1708,11 @@ export default function App() {
 
       <main className="flex-1 p-6 overflow-auto">
         {creando ? (
-          <NuevaSolicitud areas={areas} empresas={empresas} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
         ) : solicitudAbierta ? (
-          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
+          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} />
         ) : tab === "estadisticas" ? (
@@ -1640,6 +1721,7 @@ export default function App() {
           <Catalogos
             empresas={empresas} guardarEmpresa={guardarEmpresa} eliminarEmpresa={eliminarEmpresa}
             areas={areas}
+            departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
             proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
             usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario}
             itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
@@ -1657,6 +1739,7 @@ export default function App() {
             solicitud={exportando}
             empresa={empresas.find((e) => e.id === exportando.empresaId)}
             area={areas.find((a) => a.id === exportando.areaId)}
+            departamento={departamentos.find((d) => d.id === exportando.departamentoId)}
             solicitante={usuarios.find((u) => u.id === exportando.solicitanteId)}
             proveedores={proveedores}
             centrosCosto={centrosCosto}
