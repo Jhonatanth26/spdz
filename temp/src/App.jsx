@@ -1032,8 +1032,9 @@ function CalificacionSelect({ value, onChange, disabled }) {
 
 function EvaluacionPanel({ solicitud, currentUser, onGuardar }) {
   const e = solicitud.evaluacion || { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } };
-  const puedeSolicitante = currentUser.rol === "Solicitante" || puedeGestionarCotizaciones(currentUser);
-  const puedeCompras = puedeGestionarCotizaciones(currentUser);
+  // cada rol edita solo su bloque; el resto puede verlo (solo lectura) para tener el contexto completo
+  const puedeSolicitante = currentUser.rol === "Solicitante" || currentUser.rol === "Administrador";
+  const puedeCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
   const yaFinalizada = solicitud.status !== "recepcion";
 
   const setSolicitante = (campo, val) => onGuardar({ ...e, solicitante: { ...e.solicitante, [campo]: val } });
@@ -1044,25 +1045,23 @@ function EvaluacionPanel({ solicitud, currentUser, onGuardar }) {
       <div className="font-medium text-slate-700 flex items-center gap-2"><Award size={16} /> Evaluación de recepción {!yaFinalizada && <span className="text-[11px] text-amber-600 font-normal">(obligatoria para completar)</span>}</div>
 
       <div className="border border-slate-200 rounded-lg p-3">
-        <div className="text-sm font-medium text-slate-700 mb-2">Solicitante / Compras</div>
+        <div className="text-sm font-medium text-slate-700 mb-2">Solicitante {!puedeSolicitante && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
         <div className="grid grid-cols-2 gap-3 mb-2">
           <div><label className="text-xs text-slate-500 block mb-1">Calidad (1-10)</label><CalificacionSelect value={e.solicitante.calidad} onChange={(v) => setSolicitante("calidad", v)} disabled={!puedeSolicitante || yaFinalizada} /></div>
           <div><label className="text-xs text-slate-500 block mb-1">Entrega oportuna (1-10)</label><CalificacionSelect value={e.solicitante.entregaOportuna} onChange={(v) => setSolicitante("entregaOportuna", v)} disabled={!puedeSolicitante || yaFinalizada} /></div>
         </div>
         <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
         <textarea value={e.solicitante.observaciones} onChange={(ev) => setSolicitante("observaciones", ev.target.value)} disabled={!puedeSolicitante || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
-        {!puedeSolicitante && !yaFinalizada && <div className="text-[11px] text-slate-400 mt-1">Solo el solicitante o Compras pueden calificar esta parte.</div>}
       </div>
 
       <div className="border border-slate-200 rounded-lg p-3">
-        <div className="text-sm font-medium text-slate-700 mb-2">Compras</div>
+        <div className="text-sm font-medium text-slate-700 mb-2">Compras {!puedeCompras && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
         <div className="grid grid-cols-2 gap-3 mb-2">
           <div><label className="text-xs text-slate-500 block mb-1">Precio (1-10)</label><CalificacionSelect value={e.compras.precio} onChange={(v) => setCompras("precio", v)} disabled={!puedeCompras || yaFinalizada} /></div>
           <div><label className="text-xs text-slate-500 block mb-1">Servicio al cliente (1-10)</label><CalificacionSelect value={e.compras.servicioCliente} onChange={(v) => setCompras("servicioCliente", v)} disabled={!puedeCompras || yaFinalizada} /></div>
         </div>
         <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
         <textarea value={e.compras.observaciones} onChange={(ev) => setCompras("observaciones", ev.target.value)} disabled={!puedeCompras || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
-        {!puedeCompras && !yaFinalizada && <div className="text-[11px] text-slate-400 mt-1">Solo Compras puede calificar esta parte.</div>}
       </div>
 
       {!yaFinalizada && !evaluacionCompleta(solicitud) && <div className="text-[11px] text-amber-600">Faltan calificaciones obligatorias (calidad, entrega oportuna, precio y servicio al cliente) para poder completar la solicitud.</div>}
