@@ -345,7 +345,8 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   const [mensajeImport, setMensajeImport] = useState("");
   const iniciarEdicion = (fila) => { setEditId(fila.id); setForm(fila); setCreando(false); };
   const iniciarCreacion = () => { setEditId(null); setForm(plantilla); setCreando(true); };
-  const guardar = () => { onGuardar(editId ? { ...form, id: editId } : { ...form, id: nextId() }); setEditId(null); setCreando(false); setForm(plantilla); };
+  const primerCampoVacio = !String(form[columnas[0]?.key] || "").trim();
+  const guardar = () => { if (primerCampoVacio) return; onGuardar(editId ? { ...form, id: editId } : { ...form, id: nextId() }); setEditId(null); setCreando(false); setForm(plantilla); };
   const cancelar = () => { setEditId(null); setCreando(false); setForm(plantilla); };
   const Campo = (c) => c.type === "select" ? (
     <select value={form[c.key] || ""} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-full">
@@ -400,13 +401,13 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
           {creando && (
             <tr className="border-t border-slate-100 bg-indigo-50/40">
               {columnas.map((c) => <td key={c.key} className="px-4 py-1.5">{Campo(c)}</td>)}
-              <td className="px-4 py-1.5 text-right whitespace-nowrap"><button onClick={guardar} className="text-emerald-600 text-xs font-medium mr-2">Guardar</button><button onClick={cancelar} className="text-slate-400 text-xs">Cancelar</button></td>
+              <td className="px-4 py-1.5 text-right whitespace-nowrap"><button onClick={guardar} disabled={primerCampoVacio} className="text-emerald-600 text-xs font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">Guardar</button><button onClick={cancelar} className="text-slate-400 text-xs">Cancelar</button></td>
             </tr>
           )}
           {datos.map((fila) => editId === fila.id ? (
             <tr key={fila.id} className="border-t border-slate-100 bg-indigo-50/40">
               {columnas.map((c) => <td key={c.key} className="px-4 py-1.5">{Campo(c)}</td>)}
-              <td className="px-4 py-1.5 text-right whitespace-nowrap"><button onClick={guardar} className="text-emerald-600 text-xs font-medium mr-2">Guardar</button><button onClick={cancelar} className="text-slate-400 text-xs">Cancelar</button></td>
+              <td className="px-4 py-1.5 text-right whitespace-nowrap"><button onClick={guardar} disabled={primerCampoVacio} className="text-emerald-600 text-xs font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">Guardar</button><button onClick={cancelar} className="text-slate-400 text-xs">Cancelar</button></td>
             </tr>
           ) : (
             <tr key={fila.id} className="border-t border-slate-100">
@@ -604,7 +605,7 @@ function HistoricoCompras({ nombreItem, historico, setHistorico }) {
 /* ---------------------------------------------------------
    NUEVA SOLICITUD
 --------------------------------------------------------- */
-function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
+function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
   const [tipo, setTipo] = useState("compra");
   const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
   const [areaId, setAreaId] = useState(currentUser.areaId || areas[0].id);
@@ -628,6 +629,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, centros
 
   const submit = () => {
     if (!items.length || items.some((i) => !i.nombre.trim()) || !objetivo.trim() || !justificacion.trim()) return;
+    // los ítems escritos a mano (sin elegir del catálogo) también quedan guardados ahí, para no perder esa información
+    items.forEach((it) => {
+      if (!it.itemCatalogoId && it.nombre.trim()) {
+        const yaExiste = itemsCatalogo.some((c) => c.nombre.trim().toLowerCase() === it.nombre.trim().toLowerCase());
+        if (!yaExiste) guardarItemCatalogo({ nombre: it.nombre.trim(), unidadDefault: it.unidad, categoria: "" });
+      }
+    });
     const jefe = usuarios.find((u) => u.areaId === areaId && u.rol === "Jefe de Área");
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
     onCrear({
@@ -1745,7 +1753,7 @@ export default function App() {
 
       <main className="flex-1 p-6 overflow-auto">
         {creando ? (
-          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
         ) : solicitudAbierta ? (
