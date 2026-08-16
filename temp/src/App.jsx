@@ -1852,10 +1852,12 @@ export default function App() {
   const guardarPerfil = async (u) => { await actualizarPerfil({ firma_foto_url: u.firmaFotoUrl }); setPerfil(false); };
   const solicitudAbierta = solicitudes.find((s) => s.id === abierta);
   const solicitudesVisibles = puedeVerTodasSolicitudes(currentUser) ? solicitudes : solicitudes.filter((s) => s.solicitanteId === currentUser.id);
+  const solicitudesPorFirmar = solicitudes.filter((s) => s.status === "orden" && !todasOrdenesFirmadas(s, proveedores));
 
-  const NavBtn = ({ id, icon: Icon, label }) => (
+  const NavBtn = ({ id, icon: Icon, label, badge }) => (
     <button title={label} onClick={() => { setTab(id); setAbierta(null); setCreando(false); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left ${!menuExpandido ? "justify-center px-2" : ""} ${tab === id && !abierta && !creando && !perfil ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
-      <Icon size={16} className="shrink-0" /> {menuExpandido && label}
+      <Icon size={16} className="shrink-0" /> {menuExpandido && <span className="flex-1">{label}</span>}
+      {!!badge && <span className={`text-[10px] font-bold rounded-full px-1.5 py-0.5 ${tab === id ? "bg-white text-indigo-600" : "bg-rose-500 text-white"}`}>{badge}</span>}
     </button>
   );
 
@@ -1879,6 +1881,7 @@ export default function App() {
         </button>
         <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         <NavBtn id="dashboard" icon={LayoutDashboard} label="Dashboard" />
+        {puedeAprobarGerencia(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
         <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
         {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
 
@@ -1904,6 +1907,18 @@ export default function App() {
           <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} />
+        ) : tab === "porFirmar" && puedeAprobarGerencia(currentUser) ? (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">Órdenes por firmar</h2>
+              <p className="text-xs text-slate-400 mt-1">Solicitudes en el paso "Orden generada" que tienen al menos una orden de proveedor pendiente de tu firma.</p>
+            </div>
+            {solicitudesPorFirmar.length ? (
+              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} onAbrir={setAbierta} onExportar={setExportando} />
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay órdenes pendientes de firma en este momento.</div>
+            )}
+          </div>
         ) : tab === "estadisticas" ? (
           <Estadisticas solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} proveedores={proveedores} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
