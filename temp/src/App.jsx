@@ -225,7 +225,7 @@ function datosSemilla() {
     pagosSugeridos: { anticipo: { valor: 40000, fecha: "2026-08-01" }, intermedio: { activo: false, valor: "", fecha: "" }, final: { valor: 60000, fecha: "2026-08-10" } },
     pagos: planPagosVacio(),
     pagosConfirmados: false,
-    ocEnviada: { archivoOriginalUrl: "", archivoFirmadoUrl: "", fecha: "", usuario: "" },
+    ocEnviada: { ordenesProveedor: [] },
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-20T09:00:00.000Z" },
@@ -256,7 +256,7 @@ function datosSemilla() {
     pagosSugeridos: planPagosVacio(),
     pagos: planPagosVacio(),
     pagosConfirmados: false,
-    ocEnviada: { archivoOriginalUrl: "", archivoFirmadoUrl: "", fecha: "", usuario: "" },
+    ocEnviada: { ordenesProveedor: [] },
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-22T10:00:00.000Z" },
@@ -652,7 +652,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         gerencia: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
       },
       pagosSugeridos, pagos: planPagosVacio(), pagosConfirmados: false,
-      ocEnviada: { archivoOriginalUrl: "", archivoFirmadoUrl: "", fecha: "", usuario: "" },
+      ocEnviada: { ordenesProveedor: [] },
       recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
       historialEstados: [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
       notificaciones: [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
@@ -944,49 +944,65 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
 /* ---------------------------------------------------------
    ORDEN ENVIADA AL PROVEEDOR
 --------------------------------------------------------- */
-function OcEnviadaPanel({ solicitud, currentUser, onGuardar }) {
-  const [firmando, setFirmando] = useState(false);
-  const oc = solicitud.ocEnviada;
+function OcEnviadaPanel({ solicitud, proveedores, currentUser, onGuardar }) {
+  const [firmandoIdx, setFirmandoIdx] = useState(null);
   if (solicitud.status !== "orden") return null;
 
-  const subirOriginal = (url) => onGuardar({ archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" });
+  const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
+  const ordenes = necesarios.map((n) => {
+    const existente = (solicitud.ocEnviada.ordenesProveedor || []).find((o) => mismoProveedor(o, n));
+    return existente || { ...n, archivoOriginalUrl: "", archivoFirmadoUrl: "", fecha: "", usuario: "" };
+  });
 
-  const firmarDocumento = async () => {
-    if (!oc.archivoOriginalUrl) return;
-    setFirmando(true);
+  const actualizarOrden = (idx, cambios) => {
+    const copia = ordenes.map((o, i) => (i === idx ? { ...o, ...cambios } : o));
+    onGuardar({ ordenesProveedor: copia });
+  };
+
+  const firmarOrden = async (idx) => {
+    const orden = ordenes[idx];
+    if (!orden.archivoOriginalUrl) return;
+    setFirmandoIdx(idx);
     try {
-      const blob = await firmarPDF(oc.archivoOriginalUrl, currentUser.firmaFotoUrl, currentUser.nombre);
-      const archivo = new File([blob], `OC_firmada_${solicitud.folio}.pdf`, { type: "application/pdf" });
+      const blob = await firmarPDF(orden.archivoOriginalUrl, currentUser.firmaFotoUrl, currentUser.nombre);
+      const archivo = new File([blob], `OC_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, { type: "application/pdf" });
       const url = await subirArchivo(archivo, "ordenes-firmadas");
-      if (url) onGuardar({ ...oc, archivoFirmadoUrl: url, fecha: hoy(), usuario: currentUser.nombre });
+      if (url) actualizarOrden(idx, { archivoFirmadoUrl: url, fecha: hoy(), usuario: currentUser.nombre });
       else alert("No se pudo guardar el documento firmado. Intenta de nuevo.");
     } catch (e) {
       console.error("Error firmando el PDF:", e);
       alert("No se pudo firmar el documento. Verifica que el archivo cargado sea un PDF válido (no una imagen).");
     }
-    setFirmando(false);
+    setFirmandoIdx(null);
   };
 
-  return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Envío de la orden al proveedor</div>
-      <div className="text-xs text-slate-500">Sube aquí la orden de compra/servicio generada en el sistema contable (en PDF). Gerencia podrá firmarla digitalmente sin descargarla, imprimirla ni volver a subirla.</div>
-      <AdjuntarArchivo nombre={oc.archivoOriginalUrl} label="Adjuntar OC del sistema contable (PDF)" onSeleccionar={subirOriginal} carpeta="ordenes-originales" />
+  if (!necesarios.length) return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 text-xs text-amber-600">No se detectó ningún proveedor adjudicado todavía — revisa el cuadro comparativo antes de continuar.</div>
+  );
 
-      {oc.archivoOriginalUrl && (
-        <div className="border border-slate-200 rounded-lg p-3">
-          {oc.archivoFirmadoUrl ? (
-            <div className="text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 size={13} /> Documento firmado por {oc.usuario} el {oc.fecha}. <a href={oc.archivoFirmadoUrl} target="_blank" rel="noreferrer" className="underline">Ver PDF firmado</a></div>
-          ) : puedeAprobarGerencia(currentUser) ? (
-            <div>
-              <div className="text-xs text-slate-500 mb-2">{currentUser.firmaFotoUrl ? "Se estampará la firma que tienes guardada en \"Mi perfil\"." : "No tienes una foto de firma guardada — el documento se firmará solo con tu nombre y fecha. Puedes subir tu firma en \"Mi perfil\" para que también aparezca la imagen."}</div>
-              <button onClick={firmarDocumento} disabled={firmando} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50 flex items-center gap-1"><PenTool size={12} /> {firmando ? "Firmando..." : "Firmar documento como Gerencia"}</button>
-            </div>
-          ) : (
-            <div className="text-xs text-amber-600">Pendiente de firma de Gerencia antes de poder marcar como enviada.</div>
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+      <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Envío de la orden al proveedor</div>
+      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud — cada uno necesita su propia orden de compra/servicio (del sistema contable) y su propia firma de Gerencia.</div>
+
+      {ordenes.map((o, i) => (
+        <div key={i} className="border border-slate-200 rounded-lg p-3 space-y-2">
+          <div className="text-sm font-medium text-slate-700 flex items-center gap-2"><Truck size={13} /> {o.proveedorNombre}</div>
+          <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" />
+          {o.archivoOriginalUrl && (
+            o.archivoFirmadoUrl ? (
+              <div className="text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 size={13} /> Firmada por {o.usuario} el {o.fecha}. <a href={o.archivoFirmadoUrl} target="_blank" rel="noreferrer" className="underline">Ver PDF firmado</a></div>
+            ) : puedeAprobarGerencia(currentUser) ? (
+              <div>
+                <div className="text-[11px] text-slate-500 mb-1">{currentUser.firmaFotoUrl ? "Se estampará tu firma guardada en \"Mi perfil\"." : "Sin foto de firma guardada — se firmará solo con nombre y fecha."}</div>
+                <button onClick={() => firmarOrden(i)} disabled={firmandoIdx === i} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50 flex items-center gap-1"><PenTool size={12} /> {firmandoIdx === i ? "Firmando..." : "Firmar como Gerencia"}</button>
+              </div>
+            ) : (
+              <div className="text-xs text-amber-600">Pendiente de firma de Gerencia.</div>
+            )
           )}
         </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -1152,9 +1168,13 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       )}
 
       {/* OC ENVIADA Y RECEPCIÓN */}
-      {(solicitud.ocEnviada.archivoFirmadoUrl || (solicitud.recepcion.archivos && solicitud.recepcion.archivos.length) || solicitud.recepcion.comentario) && (
+      {((solicitud.ocEnviada.ordenesProveedor && solicitud.ocEnviada.ordenesProveedor.length) || (solicitud.recepcion.archivos && solicitud.recepcion.archivos.length) || solicitud.recepcion.comentario) && (
         <div className="grid grid-cols-2 gap-3 text-xs">
-          <div><div className="font-medium text-slate-500 mb-0.5">OC enviada al proveedor</div><div className="text-slate-600">{solicitud.ocEnviada.archivoFirmadoUrl ? `Firmada por ${solicitud.ocEnviada.usuario} · ${solicitud.ocEnviada.fecha}` : "—"}</div></div>
+          <div><div className="font-medium text-slate-500 mb-0.5">Órdenes enviadas al proveedor</div>
+            {(solicitud.ocEnviada.ordenesProveedor || []).length ? (solicitud.ocEnviada.ordenesProveedor || []).map((o, i) => (
+              <div key={i} className="text-slate-600">{o.proveedorNombre}: {o.archivoFirmadoUrl ? `firmada por ${o.usuario} · ${o.fecha}` : "sin firmar"}</div>
+            )) : <div className="text-slate-600">—</div>}
+          </div>
           <div><div className="font-medium text-slate-500 mb-0.5">Recepción</div><div className="text-slate-600">{solicitud.recepcion.recibidoSatisfaccion ? "Recibido a satisfacción" : "Pendiente"}{solicitud.recepcion.archivos?.length > 0 && ` · ${solicitud.recepcion.archivos.length} archivo(s) adjunto(s)`}{solicitud.recepcion.comentario && <div className="italic">"{solicitud.recepcion.comentario}"</div>}</div></div>
         </div>
       )}
@@ -1284,7 +1304,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     else if (s === "aprobacion_financiera") { const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) }); }
     else if (s === "aprobacion_gerencia") patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") });
     else if (s === "orden") {
-      if (!solicitud.ocEnviada.archivoFirmadoUrl) return;
+      if (!todasOrdenesFirmadas(solicitud, proveedores)) return;
       patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): la orden ${solicitud.folio} fue enviada al proveedor.`) });
       if (solicitante?.email) {
         enviarCorreo(
@@ -1381,7 +1401,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true })} />
       )}
 
-      <OcEnviadaPanel solicitud={solicitud} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
+      <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
 
       {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} onGuardar={(r) => patch({ recepcion: r })} />}
 
@@ -1401,7 +1421,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           {mostrarObservacion && (<div><label className="text-xs font-medium text-slate-500">Observación de aprobación (opcional)</label><textarea value={observacion} onChange={(e) => setObservacion(e.target.value)} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" placeholder="Comentarios sobre esta aprobación..." /></div>)}
           <div className="flex gap-2 justify-end">
             <button onClick={rechazar} className="px-4 py-2 rounded-lg text-sm text-rose-600 border border-rose-200 flex items-center gap-1"><XCircle size={15} /> Rechazar</button>
-            <button onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "orden" && !solicitud.ocEnviada.archivoFirmadoUrl) || (solicitud.status === "recepcion" && !solicitud.recepcion.recibidoSatisfaccion)} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
+            <button onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && !solicitud.recepcion.recibidoSatisfaccion)} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
           </div>
         </div>
       )}
@@ -1419,6 +1439,37 @@ function proveedoresAdjudicados(s, proveedores) {
     return proveedores.find((p) => p.id === cot.proveedorId)?.nombre || cot.proveedorNombre || null;
   }).filter(Boolean))];
   return nombres.length ? nombres.join(", ") : "—";
+}
+
+// lista de proveedores distintos adjudicados en una solicitud, con id (si es del catálogo) y nombre
+function proveedoresAdjudicadosDetalle(s, proveedores) {
+  const vistos = new Set();
+  const lista = [];
+  s.items.forEach((it) => {
+    if (!it.cotizaciones.length) return;
+    const idx = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad);
+    const cot = it.cotizaciones[idx];
+    if (!cot) return;
+    const prov = proveedores.find((p) => p.id === cot.proveedorId);
+    const clave = prov?.id || cot.proveedorNombre || "sin-proveedor";
+    if (vistos.has(clave)) return;
+    vistos.add(clave);
+    lista.push({ proveedorId: prov?.id || null, proveedorNombre: prov?.nombre || cot.proveedorNombre || "Proveedor sin definir" });
+  });
+  return lista;
+}
+
+// compara si dos referencias de proveedor (id o nombre libre) son la misma
+function mismoProveedor(a, b) {
+  if (a.proveedorId || b.proveedorId) return a.proveedorId === b.proveedorId;
+  return a.proveedorNombre === b.proveedorNombre;
+}
+
+// true si ya existe una orden firmada para cada proveedor adjudicado de la solicitud
+function todasOrdenesFirmadas(solicitud, proveedores) {
+  const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
+  const ordenes = solicitud.ocEnviada.ordenesProveedor || [];
+  return necesarios.length > 0 && necesarios.every((n) => ordenes.some((o) => mismoProveedor(o, n) && o.archivoFirmadoUrl));
 }
 
 function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, onAbrir, onExportar, titulo }) {
