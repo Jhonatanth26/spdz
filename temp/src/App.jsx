@@ -226,6 +226,8 @@ function datosSemilla() {
     pagos: planPagosVacio(),
     pagosConfirmados: false,
     ocEnviada: { ordenesProveedor: [] },
+    prioridad: null,
+    evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-20T09:00:00.000Z" },
@@ -257,6 +259,8 @@ function datosSemilla() {
     pagos: planPagosVacio(),
     pagosConfirmados: false,
     ocEnviada: { ordenesProveedor: [] },
+    prioridad: null,
+    evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-22T10:00:00.000Z" },
@@ -653,6 +657,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       },
       pagosSugeridos, pagos: planPagosVacio(), pagosConfirmados: false,
       ocEnviada: { ordenesProveedor: [] },
+    prioridad: null,
+    evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
       recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
       historialEstados: [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
       notificaciones: [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
@@ -1010,7 +1016,59 @@ function OcEnviadaPanel({ solicitud, proveedores, currentUser, onGuardar }) {
 /* ---------------------------------------------------------
    RECEPCIÓN
 --------------------------------------------------------- */
-function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
+/* ---------------------------------------------------------
+   EVALUACIÓN POSTERIOR A LA RECEPCIÓN (obligatoria para completar)
+--------------------------------------------------------- */
+function CalificacionSelect({ value, onChange, disabled }) {
+  return (
+    <select value={value || ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} disabled={disabled} className="border border-slate-200 rounded-md px-2 py-1.5 text-sm w-20 disabled:bg-slate-50">
+      <option value="">—</option>
+      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
+    </select>
+  );
+}
+
+function EvaluacionPanel({ solicitud, currentUser, onGuardar }) {
+  const e = solicitud.evaluacion || { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } };
+  const puedeSolicitante = currentUser.rol === "Solicitante" || puedeGestionarCotizaciones(currentUser);
+  const puedeCompras = puedeGestionarCotizaciones(currentUser);
+  const yaFinalizada = solicitud.status !== "recepcion";
+
+  const setSolicitante = (campo, val) => onGuardar({ ...e, solicitante: { ...e.solicitante, [campo]: val } });
+  const setCompras = (campo, val) => onGuardar({ ...e, compras: { ...e.compras, [campo]: val } });
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+      <div className="font-medium text-slate-700 flex items-center gap-2"><Award size={16} /> Evaluación de recepción {!yaFinalizada && <span className="text-[11px] text-amber-600 font-normal">(obligatoria para completar)</span>}</div>
+
+      <div className="border border-slate-200 rounded-lg p-3">
+        <div className="text-sm font-medium text-slate-700 mb-2">Solicitante / Compras</div>
+        <div className="grid grid-cols-2 gap-3 mb-2">
+          <div><label className="text-xs text-slate-500 block mb-1">Calidad (1-10)</label><CalificacionSelect value={e.solicitante.calidad} onChange={(v) => setSolicitante("calidad", v)} disabled={!puedeSolicitante || yaFinalizada} /></div>
+          <div><label className="text-xs text-slate-500 block mb-1">Entrega oportuna (1-10)</label><CalificacionSelect value={e.solicitante.entregaOportuna} onChange={(v) => setSolicitante("entregaOportuna", v)} disabled={!puedeSolicitante || yaFinalizada} /></div>
+        </div>
+        <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
+        <textarea value={e.solicitante.observaciones} onChange={(ev) => setSolicitante("observaciones", ev.target.value)} disabled={!puedeSolicitante || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
+        {!puedeSolicitante && !yaFinalizada && <div className="text-[11px] text-slate-400 mt-1">Solo el solicitante o Compras pueden calificar esta parte.</div>}
+      </div>
+
+      <div className="border border-slate-200 rounded-lg p-3">
+        <div className="text-sm font-medium text-slate-700 mb-2">Compras</div>
+        <div className="grid grid-cols-2 gap-3 mb-2">
+          <div><label className="text-xs text-slate-500 block mb-1">Precio (1-10)</label><CalificacionSelect value={e.compras.precio} onChange={(v) => setCompras("precio", v)} disabled={!puedeCompras || yaFinalizada} /></div>
+          <div><label className="text-xs text-slate-500 block mb-1">Servicio al cliente (1-10)</label><CalificacionSelect value={e.compras.servicioCliente} onChange={(v) => setCompras("servicioCliente", v)} disabled={!puedeCompras || yaFinalizada} /></div>
+        </div>
+        <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
+        <textarea value={e.compras.observaciones} onChange={(ev) => setCompras("observaciones", ev.target.value)} disabled={!puedeCompras || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
+        {!puedeCompras && !yaFinalizada && <div className="text-[11px] text-slate-400 mt-1">Solo Compras puede calificar esta parte.</div>}
+      </div>
+
+      {!yaFinalizada && !evaluacionCompleta(solicitud) && <div className="text-[11px] text-amber-600">Faltan calificaciones obligatorias (calidad, entrega oportuna, precio y servicio al cliente) para poder completar la solicitud.</div>}
+    </div>
+  );
+}
+
+
   const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []) });
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
@@ -1179,6 +1237,17 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
         </div>
       )}
 
+      {/* EVALUACIÓN */}
+      {solicitud.evaluacion && (solicitud.evaluacion.solicitante?.calidad || solicitud.evaluacion.compras?.precio) && (
+        <div>
+          <div className="text-xs font-medium text-slate-500 mb-1">Evaluación de recepción</div>
+          <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="text-slate-600">Calidad: {solicitud.evaluacion.solicitante?.calidad ?? "—"}/10 · Entrega oportuna: {solicitud.evaluacion.solicitante?.entregaOportuna ?? "—"}/10{solicitud.evaluacion.solicitante?.observaciones && <div className="italic">"{solicitud.evaluacion.solicitante.observaciones}"</div>}</div>
+            <div className="text-slate-600">Precio: {solicitud.evaluacion.compras?.precio ?? "—"}/10 · Servicio al cliente: {solicitud.evaluacion.compras?.servicioCliente ?? "—"}/10{solicitud.evaluacion.compras?.observaciones && <div className="italic">"{solicitud.evaluacion.compras.observaciones}"</div>}</div>
+          </div>
+        </div>
+      )}
+
       {/* HISTORIAL DE ESTADOS / LEAD TIME */}
       <div>
         <div className="text-xs font-medium text-slate-500 mb-1">Historial del proceso (lead time)</div>
@@ -1264,6 +1333,7 @@ function accionLabel(solicitud, total) {
 
 function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onVolver }) {
   const [observacion, setObservacion] = useState("");
+  const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
   const area = areas.find((a) => a.id === solicitud.areaId);
   const departamento = departamentos.find((d) => d.id === solicitud.departamentoId);
   const empresa = empresas.find((e) => e.id === solicitud.empresaId);
@@ -1298,7 +1368,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const firmar = () => ({ aprobado: true, nombre: currentUser.nombre, fecha: hoy(), observacion, fotoUrl: currentUser.firmaFotoUrl || null });
   const avanzar = () => {
     const s = solicitud.status;
-    if (s === "aprobacion_jefe") patch({ status: "cotizando", firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) });
+    if (s === "aprobacion_jefe") patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) });
     else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
     else if (s === "comparativo") { const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) }); }
     else if (s === "aprobacion_financiera") { const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) }); }
@@ -1317,6 +1387,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     else if (s === "oc_enviada") patch({ status: "recepcion", historialEstados: empujarHistorial("recepcion") });
     else if (s === "recepcion") {
       if (!solicitud.recepcion.recibidoSatisfaccion) return;
+      if (!evaluacionCompleta(solicitud)) return;
       if (solicitud.tipo === "servicio") {
         const pagado = totalPagado(solicitud.pagos);
         if (pagado < total - 0.5) return;
@@ -1342,7 +1413,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
-            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
+            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
           </div>
           <div className="text-right">
@@ -1405,6 +1476,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} onGuardar={(r) => patch({ recepcion: r })} />}
 
+      {["recepcion", "completada"].includes(solicitud.status) && <EvaluacionPanel solicitud={solicitud} currentUser={currentUser} onGuardar={(ev) => patch({ evaluacion: ev })} />}
+
       <div className="print-wrapper-oculto" style={{ display: "none" }}>
         <OrdenDocumento solicitud={solicitud} empresa={empresa} area={area} departamento={departamento} solicitante={solicitante} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} />
       </div>
@@ -1418,10 +1491,20 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {solicitud.status !== "completada" && solicitud.status !== "rechazada" && autorizado && (
         <div className="space-y-2">
+          {solicitud.status === "aprobacion_jefe" && (
+            <div>
+              <label className="text-xs font-medium text-slate-500">Prioridad</label>
+              <div className="flex gap-2 mt-1">
+                {["Alto", "Medio", "Bajo"].map((p) => (
+                  <button key={p} type="button" onClick={() => setPrioridadSel(p)} className={`px-3 py-1.5 rounded-lg text-xs font-medium border ${prioridadSel === p ? (p === "Alto" ? "bg-rose-600 text-white border-rose-600" : p === "Medio" ? "bg-amber-500 text-white border-amber-500" : "bg-slate-500 text-white border-slate-500") : "bg-white text-slate-600 border-slate-200"}`}>{p}</button>
+                ))}
+              </div>
+            </div>
+          )}
           {mostrarObservacion && (<div><label className="text-xs font-medium text-slate-500">Observación de aprobación (opcional)</label><textarea value={observacion} onChange={(e) => setObservacion(e.target.value)} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" placeholder="Comentarios sobre esta aprobación..." /></div>)}
           <div className="flex gap-2 justify-end">
             <button onClick={rechazar} className="px-4 py-2 rounded-lg text-sm text-rose-600 border border-rose-200 flex items-center gap-1"><XCircle size={15} /> Rechazar</button>
-            <button onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && !solicitud.recepcion.recibidoSatisfaccion)} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
+            <button onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
           </div>
         </div>
       )}
@@ -1470,6 +1553,13 @@ function todasOrdenesFirmadas(solicitud, proveedores) {
   const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
   const ordenes = solicitud.ocEnviada.ordenesProveedor || [];
   return necesarios.length > 0 && necesarios.every((n) => ordenes.some((o) => mismoProveedor(o, n) && o.archivoFirmadoUrl));
+}
+
+// true si ambas evaluaciones (solicitante y compras) ya tienen sus calificaciones obligatorias
+function evaluacionCompleta(solicitud) {
+  const e = solicitud.evaluacion;
+  if (!e) return false;
+  return !!e.solicitante?.calidad && !!e.solicitante?.entregaOportuna && !!e.compras?.precio && !!e.compras?.servicioCliente;
 }
 
 function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, onAbrir, onExportar, titulo }) {
@@ -1562,11 +1652,12 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, onAbrir, 
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
         <tbody>{solicitudes.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
           return (<tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => onAbrir(s.id)}>
             <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
             <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
+            <td className="px-4 py-2.5">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td>
             <td className="px-4 py-2.5 text-slate-600">{area?.nombre}</td>
             <td className="px-4 py-2.5 text-slate-600">{empresa?.nombre}</td>
             <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{s.fechaCreacion}</td>
