@@ -615,7 +615,6 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, centros
   const [justificacion, setJustificacion] = useState("");
   const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: 19, cotizaciones: [] }]);
   const [pagosSugeridos, setPagosSugeridos] = useState(planPagosVacio());
-  const departamentosDelArea = departamentos.filter((d) => d.areaId === areaId);
 
   const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
@@ -670,8 +669,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, centros
           </div>
         </div>
         <div><label className="text-xs font-medium text-slate-500">Empresa</label><select value={empresaId} onChange={(e) => setEmpresaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
-        <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => { setAreaId(e.target.value); setDepartamentoId(""); }} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
-        <div><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentosDelArea.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
+        <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
+        <div><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Solicitante</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500">{currentUser.nombre} (firma automática)</div></div>
         <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Layers size={12} /> Centro de costo</label><select value={centroCostoId} onChange={(e) => setCentroCostoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{centrosCosto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Concepto de gasto</label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{conceptosGasto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
@@ -1523,7 +1522,7 @@ function EmpresasLogos({ empresas, onGuardar }) {
 --------------------------------------------------------- */
 function Catalogos({
   empresas, guardarEmpresa, eliminarEmpresa,
-  areas,
+  areas, guardarArea, eliminarArea,
   departamentos, guardarDepartamento, eliminarDepartamento,
   proveedores, guardarProveedor, eliminarProveedor,
   usuarios, guardarUsuario, eliminarUsuario,
@@ -1533,7 +1532,7 @@ function Catalogos({
 }) {
   const [sub, setSub] = useState("empresas");
   const tabs = [
-    { key: "empresas", label: "Empresas", icon: Building2 }, { key: "departamentos", label: "Áreas y departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
+    { key: "empresas", label: "Empresas", icon: Building2 }, { key: "areas", label: "Áreas", icon: Layers }, { key: "departamentos", label: "Departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
     { key: "centros", label: "Centros de costo", icon: Layers }, { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
   ];
@@ -1547,13 +1546,15 @@ function Catalogos({
           <CrudTable titulo="Empresas parametrizadas" icon={Building2} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }]} datos={empresas} onGuardar={guardarEmpresa} onEliminar={eliminarEmpresa} plantilla={{ nombre: "", nit: "" }} />
         </>
       )}
+      {sub === "areas" && (
+        <CrudTable titulo="Áreas" icon={Layers}
+          columnas={[{ key: "nombre", label: "Nombre" }, { key: "presupuesto", label: "Presupuesto mensual", type: "number" }]}
+          datos={areas} onGuardar={guardarArea} onEliminar={eliminarArea} plantilla={{ nombre: "", presupuesto: 0 }} />
+      )}
       {sub === "departamentos" && (
-        <>
-          <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">Cada área puede tener varios departamentos a cargo. Al crear una solicitud, la persona elige su área y el departamento que reporta — esa información queda registrada para el flujo de aprobaciones.</div>
-          <CrudTable titulo="Departamentos" icon={Layers}
-            columnas={[{ key: "nombre", label: "Nombre" }, { key: "areaId", label: "Área", type: "select", options: areas.map((a) => ({ value: a.id, label: a.nombre })) }]}
-            datos={departamentos} onGuardar={guardarDepartamento} onEliminar={eliminarDepartamento} plantilla={{ nombre: "", areaId: "" }} />
-        </>
+        <CrudTable titulo="Departamentos" icon={Layers}
+          columnas={[{ key: "nombre", label: "Nombre" }]}
+          datos={departamentos} onGuardar={guardarDepartamento} onEliminar={eliminarDepartamento} plantilla={{ nombre: "" }} />
       )}
       {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }, { key: "contacto", label: "Contacto" }, { key: "email", label: "Correo electrónico" }]} datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedor} plantilla={{ nombre: "", nit: "", contacto: "", email: "" }} />}
       {sub === "usuarios" && (
@@ -1581,7 +1582,7 @@ export default function App() {
   // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
   const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea } = useSupabaseTable('areas', {
     desdeDb: (r) => ({ id: r.id, nombre: r.nombre, presupuesto: r.presupuesto_mensual }),
-    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, presupuesto_mensual: r.presupuesto }),
+    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, presupuesto_mensual: Number(r.presupuesto) || 0 }),
     orderBy: 'nombre',
   });
   const { datos: departamentos, cargando: cargandoDepartamentos, guardar: guardarDepartamento, eliminar: eliminarDepartamento } = useSupabaseTable('departamentos', {
@@ -1720,7 +1721,7 @@ export default function App() {
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             empresas={empresas} guardarEmpresa={guardarEmpresa} eliminarEmpresa={eliminarEmpresa}
-            areas={areas}
+            areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea}
             departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
             proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
             usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario}
