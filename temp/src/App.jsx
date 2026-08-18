@@ -165,7 +165,9 @@ function mejorCotizacionIdx(cotizaciones, cantidadSolicitada) {
 }
 function desgloseItem(item) {
   if (!item.cotizaciones.length) {
-    const subtotal = (parseFloat(item.precioEstimado) || 0) * (parseFloat(item.cantidad) || 0);
+    const tasa = item.moneda && item.moneda !== "COP" ? (parseFloat(item.tasaCambio) || 1) : 1;
+    const precioEnCop = (parseFloat(item.precioEstimado) || 0) * tasa;
+    const subtotal = precioEnCop * (parseFloat(item.cantidad) || 0);
     const ivaPct = parseFloat(item.ivaEstimado ?? 19) || 0;
     const iva = subtotal * (ivaPct / 100);
     return { subtotal, iva, total: subtotal + iva };
@@ -638,10 +640,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const [fechaEstimada, setFechaEstimada] = useState("");
   const [objetivo, setObjetivo] = useState("");
   const [justificacion, setJustificacion] = useState("");
-  const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: 19, cotizaciones: [] }]);
+  const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, ivaEstimado: 19, cotizaciones: [] }]);
   const [pagosSugeridos, setPagosSugeridos] = useState(planPagosVacio());
 
-  const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: 19, cotizaciones: [] }]);
+  const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
   const updateItem = (id, field, val) => setItems(items.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
   const elegirDelCatalogo = (id, catalogoId) => {
@@ -720,11 +722,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             <select value={it.itemCatalogoId} onChange={(e) => elegirDelCatalogo(it.id, e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs">
               <option value="">Ítem libre (escribir abajo)</option>{itemsCatalogo.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
             </select>
-            <div className="flex gap-2 items-start">
+            <div className="flex gap-2 items-start flex-wrap">
               <input placeholder="Descripción del ítem" value={it.nombre} onChange={(e) => updateItem(it.id, "nombre", e.target.value)} className="flex-[2] border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <input type="number" min="0" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.unidad} onChange={(e) => updateItem(it.id, "unidad", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
               <input type="number" min="0" placeholder="Precio est." value={it.precioEstimado} onChange={(e) => updateItem(it.id, "precioEstimado", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+              <select value={it.moneda} onChange={(e) => updateItem(it.id, "moneda", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+              {it.moneda !== "COP" && <input type="number" min="0" step="0.01" placeholder={`Tasa ${it.moneda}→COP`} title={`¿Cuántos COP equivalen a 1 ${it.moneda}?`} value={it.tasaCambio} onChange={(e) => updateItem(it.id, "tasaCambio", e.target.value)} className="w-28 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />}
               <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
@@ -759,7 +763,7 @@ function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo
   const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
   const [guardadoMsg, setGuardadoMsg] = useState(false);
   const update = (i, field, val) => { const copy = [...cots]; copy[i] = { ...copy[i], [field]: val }; setCots(copy); };
-  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: "", precioFinal: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: item.ivaEstimado ?? 19, archivoNombre: "" }]);
+  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: item.ivaEstimado ?? 19, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
   const guardar = () => { onGuardar(item.id, cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario)); setGuardadoMsg(true); setTimeout(() => setGuardadoMsg(false), 2500); };
 
