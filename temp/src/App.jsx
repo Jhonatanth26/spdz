@@ -752,7 +752,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 
   const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
-  const updateItem = (id, field, val) => setItems(items.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
+  const updateItem = (id, field, val) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
   const [cargandoTasaItem, setCargandoTasaItem] = useState(null);
   const actualizarTasaItem = async (id, moneda) => {
     if (!moneda || moneda === "COP") return;
@@ -905,7 +905,7 @@ function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo
   const [abierto, setAbierto] = useState(!compacto);
   const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
   const [guardadoMsg, setGuardadoMsg] = useState(false);
-  const update = (i, field, val) => { const copy = [...cots]; copy[i] = { ...copy[i], [field]: val }; setCots(copy); };
+  const update = (i, field, val) => setCots((prev) => prev.map((c, idx) => (idx === i ? { ...c, [field]: val } : c)));
   const [cargandoTasa, setCargandoTasa] = useState(null);
   const actualizarTasaAutomatica = async (i, moneda) => {
     if (!moneda || moneda === "COP") return;
