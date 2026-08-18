@@ -165,8 +165,13 @@ function mejorCotizacionIdx(cotizaciones, cantidadSolicitada) {
 }
 function desgloseItem(item) {
   if (!item.cotizaciones.length) {
+    const inicial = parseFloat(item.precioEstimado) || 0;
+    const descuento = parseFloat(item.descuentoValor);
+    const precioConDescuento = descuento > 0
+      ? Math.max(0, item.descuentoTipo === "porcentaje" ? inicial * (1 - descuento / 100) : inicial - descuento)
+      : inicial;
     const tasa = item.moneda && item.moneda !== "COP" ? (parseFloat(item.tasaCambio) || 1) : 1;
-    const precioEnCop = (parseFloat(item.precioEstimado) || 0) * tasa;
+    const precioEnCop = precioConDescuento * tasa;
     const subtotal = precioEnCop * (parseFloat(item.cantidad) || 0);
     const ivaPct = parseFloat(item.ivaEstimado ?? 19) || 0;
     const iva = subtotal * (ivaPct / 100);
@@ -640,10 +645,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const [fechaEstimada, setFechaEstimada] = useState("");
   const [objetivo, setObjetivo] = useState("");
   const [justificacion, setJustificacion] = useState("");
-  const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, ivaEstimado: 19, cotizaciones: [] }]);
+  const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const [pagosSugeridos, setPagosSugeridos] = useState(planPagosVacio());
 
-  const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, ivaEstimado: 19, cotizaciones: [] }]);
+  const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
   const updateItem = (id, field, val) => setItems(items.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
   const elegirDelCatalogo = (id, catalogoId) => {
@@ -729,6 +734,11 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               <input type="number" min="0" placeholder="Precio est." value={it.precioEstimado} onChange={(e) => updateItem(it.id, "precioEstimado", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.moneda} onChange={(e) => updateItem(it.id, "moneda", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
               {it.moneda !== "COP" && <input type="number" min="0" step="0.01" placeholder={`Tasa ${it.moneda}→COP`} title={`¿Cuántos COP equivalen a 1 ${it.moneda}?`} value={it.tasaCambio} onChange={(e) => updateItem(it.id, "tasaCambio", e.target.value)} className="w-28 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />}
+              <select value={it.descuentoTipo} onChange={(e) => updateItem(it.id, "descuentoTipo", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">
+                <option value="porcentaje">Desc. %</option>
+                <option value="valor">Desc. $</option>
+              </select>
+              <input type="number" min="0" placeholder={it.descuentoTipo === "valor" ? "Descuento en $" : "Descuento en %"} value={it.descuentoValor} onChange={(e) => updateItem(it.id, "descuentoValor", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
