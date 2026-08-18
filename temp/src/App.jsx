@@ -1019,8 +1019,8 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Envío de la orden al proveedor</div>
-      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud — cada uno necesita su propia orden de compra/servicio (del sistema contable) y su propia firma de Dirección Financiera.</div>
+      <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Firma y envío de la orden al proveedor</div>
+      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud. Sube aquí la orden generada en el sistema contable de cada uno; se envía a <b>Dirección Financiera</b> para su firma digital — la orden ya firmada por Dirección Financiera es la que se envía al proveedor.</div>
 
       {ordenes.map((o, i) => (
         <div key={i} className="border border-slate-200 rounded-lg p-3 space-y-2">
