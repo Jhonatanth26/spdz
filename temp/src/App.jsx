@@ -853,8 +853,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               itemsCatalogo={itemsCatalogo}
               valorTexto={it.nombre}
               catalogoId={it.itemCatalogoId}
-              onElegir={(cat) => setItems(items.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: cat.id, nombre: cat.nombre, unidad: cat.unidadDefault } : i)))}
-              onEscribir={(texto) => setItems(items.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: "", nombre: texto } : i)))}
+              onElegir={(cat) => setItems((prev) => prev.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: cat.id, nombre: cat.nombre, unidad: cat.unidadDefault } : i)))}
+              onEscribir={(texto) => setItems((prev) => prev.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: "", nombre: texto } : i)))}
             />
             <div className="flex gap-2 items-start flex-wrap">
               <input type="number" min="0" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
@@ -875,6 +875,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
+            {parseFloat(it.precioEstimado) > 0 && (() => { const d = desgloseItem(it); return (
+              <div className="text-[11px] text-slate-500 pl-1">Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b></div>
+            ); })()}
             {/* el solicitante puede adjuntar hasta 3 cotizaciones desde ya, opcional */}
             <CotizacionForm item={it} proveedores={[]} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" />
           </div>
