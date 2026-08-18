@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { useAuth } from "./hooks/useAuth";
 import { useSupabaseTable } from "./hooks/useSupabaseTable";
 import { useSolicitudes } from "./hooks/useSolicitudes";
-import { subirArchivo } from "./lib/storage";
+import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_MB } from "./lib/storage";
 import { firmarPDF } from "./lib/firmarPdf";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
@@ -337,7 +337,7 @@ function FirmaBlock({ rol, firma }) {
     <div className="border border-slate-200 rounded-lg p-3">
       <div className="text-[11px] text-slate-400 mb-1">Firma {rol}</div>
       {firma.fotoUrl ? (
-        <img src={firma.fotoUrl} alt={`firma ${rol}`} className="h-10 object-contain mb-1" />
+        <ImagenPrivada path={firma.fotoUrl} alt={`firma ${rol}`} className="h-10 object-contain mb-1" />
       ) : (
         <div className="font-serif italic text-slate-700 text-base border-b border-slate-300 pb-1 mb-1">{firma.nombre}</div>
       )}
@@ -348,15 +348,43 @@ function FirmaBlock({ rol, firma }) {
 }
 
 // input de archivo: sube de verdad a Supabase Storage y guarda la URL pública resultante
+// muestra una imagen guardada en el bucket privado, resolviendo su URL temporal al montar
+function ImagenPrivada({ path, alt, className }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    let vivo = true;
+    if (path) obtenerUrlFirmada(path).then((u) => { if (vivo) setUrl(u); });
+    else setUrl(null);
+    return () => { vivo = false; };
+  }, [path]);
+  if (!path) return null;
+  return url ? <img src={url} alt={alt || ""} className={className} /> : <div className={`${className} bg-slate-100 animate-pulse rounded`} />;
+}
+
+// enlace que resuelve la URL temporal justo al hacer clic (no queda expuesta en el HTML)
+function EnlacePrivado({ path, children, className }) {
+  const [cargando, setCargando] = useState(false);
+  const abrir = async () => {
+    if (!path) return;
+    setCargando(true);
+    const url = await obtenerUrlFirmada(path);
+    setCargando(false);
+    if (url) window.open(url, "_blank", "noopener,noreferrer");
+    else alert("No se pudo abrir el archivo.");
+  };
+  return <button type="button" onClick={abrir} disabled={cargando} className={className}>{cargando ? "Abriendo..." : children}</button>;
+}
+
 function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta }) {
   const [subiendo, setSubiendo] = useState(false);
   const manejar = async (file) => {
+    if (!archivoDentroDelLimite(file)) { alert(`El archivo pesa más de ${TAMANO_MAXIMO_MB} MB. Sube uno más liviano.`); return; }
     setSubiendo(true);
-    const url = await subirArchivo(file, carpeta || "adjuntos");
+    const ruta = await subirArchivo(file, carpeta || "adjuntos");
     setSubiendo(false);
-    if (url) onSeleccionar(url);
+    if (ruta) onSeleccionar(ruta);
   };
-  // si "nombre" es una URL de Storage, mostramos solo el nombre del archivo (sin el prefijo de fecha)
+  // "nombre" ahora es la ruta guardada en Storage; mostramos solo el nombre del archivo (sin el prefijo de fecha)
   const mostrar = nombre ? decodeURIComponent(nombre.split("/").pop().replace(/^\d+_/, "")) : null;
   return (
     <span className="inline-flex items-center gap-1.5">
@@ -365,12 +393,12 @@ function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta }) {
         {subiendo ? <span>Subiendo...</span> : mostrar ? <span className="truncate max-w-[120px]">{mostrar}</span> : <span>{label || "Adjuntar archivo"}</span>}
         <input type="file" accept=".pdf,image/*" className="hidden" disabled={subiendo} onChange={(e) => e.target.files[0] && manejar(e.target.files[0])} />
       </label>
-      {nombre && !subiendo && <a href={nombre} target="_blank" rel="noreferrer" className={`text-indigo-600 underline ${small ? "text-[11px]" : "text-xs"}`}>ver</a>}
+      {nombre && !subiendo && <EnlacePrivado path={nombre} className={`text-indigo-600 underline ${small ? "text-[11px]" : "text-xs"}`}>ver</EnlacePrivado>}
     </span>
   );
 }
 
-function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar, plantilla }) {
+function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar, plantilla, currentUser }) {
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(plantilla);
   const [creando, setCreando] = useState(false);
@@ -381,13 +409,20 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   const primerCampoVacio = !String(form[columnas[0]?.key] || "").trim();
   const guardar = () => { if (primerCampoVacio) return; onGuardar(editId ? { ...form, id: editId } : { ...form, id: nextId() }); setEditId(null); setCreando(false); setForm(plantilla); };
   const cancelar = () => { setEditId(null); setCreando(false); setForm(plantilla); };
-  const Campo = (c) => c.type === "select" ? (
-    <select value={form[c.key] || ""} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-full">
-      <option value="">—</option>{c.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
-  ) : (
-    <input type={c.type || "text"} value={form[c.key] || ""} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-full" />
-  );
+  const Campo = (c) => {
+    const bloqueado = c.soloAdmin && currentUser?.rol !== "Administrador";
+    if (bloqueado) {
+      const valorMostrado = c.type === "select" ? (c.options.find((o) => o.value === form[c.key])?.label || "—") : (form[c.key] || "—");
+      return <div title="Solo un Administrador puede cambiar este campo" className="border border-slate-100 bg-slate-50 rounded-md px-2 py-1 text-xs w-full text-slate-400">{valorMostrado}</div>;
+    }
+    return c.type === "select" ? (
+      <select value={form[c.key] || ""} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-full">
+        <option value="">—</option>{c.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    ) : (
+      <input type={c.type || "text"} value={form[c.key] || ""} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-full" />
+    );
+  };
 
   const todosSeleccionados = datos.length > 0 && seleccionados.length === datos.length;
   const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : datos.map((f) => f.id));
@@ -483,10 +518,11 @@ function PerfilUsuario({ currentUser, onGuardar }) {
   const [preview, setPreview] = useState(currentUser.firmaFotoUrl);
   const [subiendo, setSubiendo] = useState(false);
   const cargarFoto = async (file) => {
+    if (!archivoDentroDelLimite(file)) { alert(`El archivo pesa más de ${TAMANO_MAXIMO_MB} MB. Sube uno más liviano.`); return; }
     setSubiendo(true);
-    const url = await subirArchivo(file, "firmas");
+    const ruta = await subirArchivo(file, "firmas");
     setSubiendo(false);
-    if (url) setPreview(url);
+    if (ruta) setPreview(ruta);
   };
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-md">
@@ -495,7 +531,7 @@ function PerfilUsuario({ currentUser, onGuardar }) {
       <div className="text-xs text-slate-400 mb-4">{currentUser.cargo} · {currentUser.rol}</div>
       <label className="text-xs font-medium text-slate-500">Firma (foto)</label>
       <div className="border border-dashed border-slate-300 rounded-lg p-4 mt-1 text-center">
-        {preview ? <img src={preview} alt="firma" className="h-20 mx-auto object-contain mb-2" /> : <div className="text-xs text-slate-400 mb-2">Sin firma cargada. Sube una foto de tu firma en papel.</div>}
+        {preview ? <ImagenPrivada path={preview} alt="firma" className="h-20 mx-auto object-contain mb-2" /> : <div className="text-xs text-slate-400 mb-2">Sin firma cargada. Sube una foto de tu firma en papel.</div>}
         <label className="inline-flex items-center gap-1.5 text-xs text-indigo-600 font-medium cursor-pointer"><Camera size={13} /> {subiendo ? "Subiendo..." : preview ? "Cambiar foto" : "Subir foto"}
           <input type="file" accept="image/*" className="hidden" disabled={subiendo} onChange={(e) => e.target.files[0] && cargarFoto(e.target.files[0])} />
         </label>
@@ -1095,10 +1131,13 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
     if (!orden.archivoOriginalUrl) return;
     setFirmandoIdx(idx);
     try {
-      const blob = await firmarPDF(orden.archivoOriginalUrl, currentUser.firmaFotoUrl, currentUser.nombre, currentUser.cargo, empresa?.nombre);
+      const urlOriginalFirmada = await obtenerUrlFirmada(orden.archivoOriginalUrl);
+      const urlFirmaFotoFirmada = currentUser.firmaFotoUrl ? await obtenerUrlFirmada(currentUser.firmaFotoUrl) : null;
+      if (!urlOriginalFirmada) throw new Error("No se pudo acceder al documento original.");
+      const blob = await firmarPDF(urlOriginalFirmada, urlFirmaFotoFirmada, currentUser.nombre, currentUser.cargo, empresa?.nombre);
       const archivo = new File([blob], `OC_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, { type: "application/pdf" });
-      const url = await subirArchivo(archivo, "ordenes-firmadas");
-      if (url) actualizarOrden(idx, { archivoFirmadoUrl: url, fecha: hoy(), usuario: currentUser.nombre });
+      const ruta = await subirArchivo(archivo, "ordenes-firmadas");
+      if (ruta) actualizarOrden(idx, { archivoFirmadoUrl: ruta, fecha: hoy(), usuario: currentUser.nombre });
       else alert("No se pudo guardar el documento firmado. Intenta de nuevo.");
     } catch (e) {
       console.error("Error firmando el PDF:", e);
@@ -1122,7 +1161,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
           <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" />
           {o.archivoOriginalUrl && (
             o.archivoFirmadoUrl ? (
-              <div className="text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 size={13} /> Firmada por {o.usuario} el {o.fecha}. <a href={o.archivoFirmadoUrl} target="_blank" rel="noreferrer" className="underline">Ver PDF firmado</a></div>
+              <div className="text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 size={13} /> Firmada por {o.usuario} el {o.fecha}. <EnlacePrivado path={o.archivoFirmadoUrl} className="underline">Ver PDF firmado</EnlacePrivado></div>
             ) : puedeAprobarFinanciera(currentUser) ? (
               <div>
                 <div className="text-[11px] text-slate-500 mb-1">{currentUser.firmaFotoUrl ? "Se estampará tu firma guardada en \"Mi perfil\" en cada hoja del documento, junto a tu nombre, cargo y empresa." : "Sin foto de firma guardada — se firmará cada hoja solo con nombre, cargo y empresa."}</div>
@@ -1251,7 +1290,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       {/* ENCABEZADO */}
       <div className="flex justify-between items-start border-b border-slate-200 pb-3">
         <div className="flex items-center gap-3">
-          {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-12 max-w-[120px] object-contain" />}
+          {empresa?.logoUrl && <ImagenPrivada path={empresa.logoUrl} alt={empresa.nombre} className="h-12 max-w-[120px] object-contain" />}
           <div>
             <div className="text-base font-semibold text-slate-800">{solicitud.tipo === "compra" ? "Solicitud de Compra" : "Orden de servicio/trabajo"}</div>
             <div className="text-xs text-slate-400">{solicitud.folio} · {empresa?.nombre}</div>
@@ -1328,7 +1367,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
               <div className="text-[11px] text-slate-400">{rol}</div>
               {f?.nombre ? (
                 <>
-                  {f.fotoUrl && <img src={f.fotoUrl} className="h-8 object-contain my-1" alt="" />}
+                  {f.fotoUrl && <ImagenPrivada path={f.fotoUrl} className="h-8 object-contain my-1" alt="" />}
                   <div className="font-medium text-slate-700">{f.nombre}</div>
                   <div className="text-[11px] text-slate-400">{f.fecha}{f.aprobado === false ? " · Rechazado" : f.aprobado ? " · Aprobado" : ""}</div>
                   {f.observacion && <div className="text-[11px] text-slate-500 italic mt-0.5">"{f.observacion}"</div>}
@@ -1528,13 +1567,27 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         const pagado = totalPagado(solicitud.pagos);
         if (pagado < total - 0.5) return;
       }
-      patch({ status: "completada", historialEstados: empujarHistorial("completada"), notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue completada.`) });
+      patch({ status: "completada", historialEstados: empujarHistorial("completada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue completada.`) });
+      if (solicitante?.email) {
+        enviarCorreo(
+          solicitante.email,
+          `Tu solicitud ${solicitud.folio} fue completada`,
+          `<p>Hola ${solicitante.nombre},</p><p>Tu solicitud <b>${solicitud.folio}</b> quedó completada. Puedes ver el detalle completo y exportarla a PDF desde la aplicación.</p>`
+        );
+      }
     }
     setObservacion("");
   };
   const rechazar = () => {
     const campo = solicitud.status === "aprobacion_jefe" ? "jefe" : solicitud.status === "aprobacion_director" ? "director" : solicitud.status === "aprobacion_financiera" ? "financiera" : solicitud.status === "aprobacion_gerencia" ? "gerencia" : null;
-    patch({ status: "rechazada", firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada.`) });
+    patch({ status: "rechazada", firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue rechazada.`) });
+    if (solicitante?.email) {
+      enviarCorreo(
+        solicitante.email,
+        `Tu solicitud ${solicitud.folio} fue rechazada`,
+        `<p>Hola ${solicitante.nombre},</p><p>Tu solicitud <b>${solicitud.folio}</b> fue rechazada por ${currentUser.nombre} (${currentUser.rol}).</p>${observacion ? `<p><b>Motivo:</b> ${observacion}</p>` : ""}`
+      );
+    }
     setObservacion("");
   };
 
@@ -1547,7 +1600,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="flex items-start justify-between flex-wrap gap-3">
-          {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
+          {empresa?.logoUrl && <ImagenPrivada path={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
             <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
@@ -1710,6 +1763,22 @@ function evaluacionCompleta(solicitud) {
   return !!e.solicitante?.calidad && !!e.solicitante?.entregaOportuna && !!e.compras?.precio && !!e.compras?.servicioCliente;
 }
 
+// true si esta solicitud está esperando una acción del usuario actual, según su rol y el paso en que está
+function requiereMiAccion(currentUser, s, proveedores) {
+  if (["completada", "rechazada"].includes(s.status)) return false;
+  switch (s.status) {
+    case "aprobacion_jefe": return puedeAprobarJefe(currentUser, s);
+    case "aprobacion_director": return puedeAprobarDirector(currentUser, s);
+    case "cotizando": return puedeGestionarCotizaciones(currentUser) && (s.tipo !== "compra" || s.revisionCompras.estado === "aprobada");
+    case "comparativo": return puedeGestionarCotizaciones(currentUser);
+    case "aprobacion_financiera": return puedeAprobarFinanciera(currentUser);
+    case "aprobacion_gerencia": return puedeAprobarGerencia(currentUser);
+    case "orden": return puedeAprobarFinanciera(currentUser) && !todasOrdenesFirmadas(s, proveedores);
+    case "recepcion": return puedeGestionarCotizaciones(currentUser) && (!s.recepcion.recibidoSatisfaccion || !evaluacionCompleta(s));
+    default: return false;
+  }
+}
+
 function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, onAbrir, onExportar, titulo }) {
   const [fArea, setFArea] = useState("todas");
   const [fEmpresa, setFEmpresa] = useState("todas");
@@ -1717,18 +1786,25 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
   const [fCreadoPor, setFCreadoPor] = useState("todos");
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
+  const [busqueda, setBusqueda] = useState("");
 
   const creadores = usuarios.filter((u) => solicitudes.some((s) => s.solicitanteId === u.id));
+  const texto = busqueda.trim().toLowerCase();
   const filtradas = solicitudes.filter((s) =>
     (fArea === "todas" || s.areaId === fArea) &&
     (fEmpresa === "todas" || s.empresaId === fEmpresa) &&
     (fEstado === "todos" || s.status === fEstado) &&
     (fCreadoPor === "todos" || s.solicitanteId === fCreadoPor) &&
     (!fDesde || s.fechaCreacion >= fDesde) &&
-    (!fHasta || s.fechaCreacion <= fHasta)
+    (!fHasta || s.fechaCreacion <= fHasta) &&
+    (!texto ||
+      s.folio.toLowerCase().includes(texto) ||
+      (s.objetivo || "").toLowerCase().includes(texto) ||
+      s.items.some((it) => it.nombre.toLowerCase().includes(texto)) ||
+      proveedoresAdjudicados(s, proveedores).toLowerCase().includes(texto))
   );
-  const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta;
-  const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); };
+  const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta || busqueda;
+  const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); setBusqueda(""); };
 
   const exportarExcel = () => {
     const filas = filtradas.map((s) => {
@@ -1764,6 +1840,13 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
         <button onClick={exportarExcel} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
       </div>
       <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
+        <div className="flex-1 min-w-[220px]">
+          <label className="text-[11px] font-medium text-slate-500">Buscar</label>
+          <div className="relative mt-1">
+            <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Consecutivo, objetivo, ítem o proveedor..." className="w-full border border-slate-200 rounded-lg pl-3 pr-8 py-1.5 text-sm" />
+            {busqueda && <button onClick={() => setBusqueda("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 text-xs">✕</button>}
+          </div>
+        </div>
         <div>
           <label className="text-[11px] font-medium text-slate-500">Creado por</label>
           <select value={fCreadoPor} onChange={(e) => setFCreadoPor(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="todos">Todos</option>{creadores.map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}</select>
@@ -1825,8 +1908,9 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, onAbrir, 
 --------------------------------------------------------- */
 function EmpresasLogos({ empresas, onGuardar }) {
   const cargarLogo = async (empresa, file) => {
-    const url = await subirArchivo(file, "logos");
-    if (url) onGuardar({ ...empresa, logoUrl: url });
+    if (!archivoDentroDelLimite(file)) { alert(`El archivo pesa más de ${TAMANO_MAXIMO_MB} MB. Sube uno más liviano.`); return; }
+    const ruta = await subirArchivo(file, "logos");
+    if (ruta) onGuardar({ ...empresa, logoUrl: ruta });
   };
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -1836,7 +1920,7 @@ function EmpresasLogos({ empresas, onGuardar }) {
         {empresas.map((e) => (
           <div key={e.id} className="border border-slate-200 rounded-lg p-3 flex items-center gap-3">
             <div className="w-16 h-16 border border-dashed border-slate-300 rounded-lg flex items-center justify-center overflow-hidden bg-slate-50 shrink-0">
-              {e.logoUrl ? <img src={e.logoUrl} alt={e.nombre} className="max-w-full max-h-full object-contain" /> : <Building2 size={20} className="text-slate-300" />}
+              {e.logoUrl ? <ImagenPrivada path={e.logoUrl} alt={e.nombre} className="max-w-full max-h-full object-contain" /> : <Building2 size={20} className="text-slate-300" />}
             </div>
             <div className="flex-1">
               <div className="text-sm font-medium text-slate-700">{e.nombre}</div>
@@ -1855,6 +1939,8 @@ function EmpresasLogos({ empresas, onGuardar }) {
    CATÁLOGOS
 --------------------------------------------------------- */
 function Catalogos({
+  currentUser,
+  solicitudes,
   empresas, guardarEmpresa, eliminarEmpresa,
   areas, guardarArea, eliminarArea,
   departamentos, guardarDepartamento, eliminarDepartamento,
@@ -1870,6 +1956,18 @@ function Catalogos({
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
     { key: "centros", label: "Centros de costo", icon: Layers }, { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
   ];
+
+  // no se puede borrar un proveedor o un ítem que ya está referenciado en alguna solicitud existente
+  const proveedorEnUso = (id) => solicitudes.some((s) => s.items.some((it) => it.cotizaciones.some((c) => c.proveedorId === id)));
+  const eliminarProveedorSeguro = (id) => {
+    if (proveedorEnUso(id)) { alert("Este proveedor tiene cotizaciones registradas en solicitudes existentes y no se puede eliminar (para no romper ese historial). Puedes editarlo, pero no borrarlo."); return; }
+    eliminarProveedor(id);
+  };
+  const itemEnUso = (id) => solicitudes.some((s) => s.items.some((it) => it.itemCatalogoId === id));
+  const eliminarItemCatalogoSeguro = (id) => {
+    if (itemEnUso(id)) { alert("Este ítem está siendo usado en solicitudes existentes y no se puede eliminar."); return; }
+    eliminarItemCatalogo(id);
+  };
 
   return (
     <div className="space-y-4">
@@ -1890,19 +1988,19 @@ function Catalogos({
           columnas={[{ key: "nombre", label: "Nombre" }]}
           datos={departamentos} onGuardar={guardarDepartamento} onEliminar={eliminarDepartamento} plantilla={{ nombre: "" }} />
       )}
-      {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }, { key: "actividadEconomica", label: "Actividad económica" }, { key: "contacto", label: "Contacto" }, { key: "email", label: "Correo electrónico" }]} datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedor} plantilla={{ nombre: "", nit: "", actividadEconomica: "", contacto: "", email: "" }} />}
+      {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }, { key: "actividadEconomica", label: "Actividad económica" }, { key: "contacto", label: "Contacto" }, { key: "email", label: "Correo electrónico" }]} datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro} plantilla={{ nombre: "", nit: "", actividadEconomica: "", contacto: "", email: "" }} />}
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
             El rol determina qué puede aprobar cada usuario: <b>Jefe de Área</b> aprueba solicitudes de su misma área, <b>Dirección Financiera</b> y <b>Gerencia</b> aprueban según el monto, <b>Compras</b> gestiona cotizaciones, histórico y pagos.
             <br /><b>Importante:</b> editar o agregar una fila aquí solo cambia sus datos de perfil (nombre, cargo, área, rol). Para que una persona pueda <i>iniciar sesión</i>, primero debes crearla en Supabase → Authentication → Users con el mismo correo, y vincular su ID ahí.
           </div>
-          <CrudTable titulo="Usuarios y roles" icon={Users}
-            columnas={[{ key: "nombre", label: "Nombre" }, { key: "email", label: "Correo electrónico" }, { key: "cargo", label: "Cargo" }, { key: "areaId", label: "Área", type: "select", options: areas.map((a) => ({ value: a.id, label: a.nombre })) }, { key: "rol", label: "Rol", type: "select", options: ROLES.map((r) => ({ value: r, label: r })) }]}
+          <CrudTable titulo="Usuarios y roles" icon={Users} currentUser={currentUser}
+            columnas={[{ key: "nombre", label: "Nombre" }, { key: "email", label: "Correo electrónico" }, { key: "cargo", label: "Cargo" }, { key: "areaId", label: "Área", type: "select", options: areas.map((a) => ({ value: a.id, label: a.nombre })) }, { key: "rol", label: "Rol", type: "select", options: ROLES.map((r) => ({ value: r, label: r })), soloAdmin: true }]}
             datos={usuarios} onGuardar={guardarUsuario} onEliminar={eliminarUsuario} plantilla={{ nombre: "", email: "", cargo: "", areaId: "", rol: "Solicitante" }} />
         </>
       )}
-      {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogo} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
+      {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
       {sub === "centros" && <CrudTable titulo="Centros de costo" icon={Layers} columnas={[{ key: "nombre", label: "Nombre" }]} datos={centrosCosto} onGuardar={guardarCentroCosto} onEliminar={eliminarCentroCosto} plantilla={{ nombre: "" }} />}
       {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto" icon={ClipboardList} columnas={[{ key: "nombre", label: "Nombre" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ nombre: "" }} />}
     </div>
@@ -1999,6 +2097,7 @@ export default function App() {
   const solicitudAbierta = solicitudes.find((s) => s.id === abierta);
   const solicitudesVisibles = puedeVerTodasSolicitudes(currentUser) ? solicitudes : solicitudes.filter((s) => s.solicitanteId === currentUser.id);
   const solicitudesPorFirmar = solicitudes.filter((s) => s.status === "orden" && !todasOrdenesFirmadas(s, proveedores));
+  const solicitudesMisPendientes = solicitudes.filter((s) => requiereMiAccion(currentUser, s, proveedores));
 
   const NavBtn = ({ id, icon: Icon, label, badge }) => (
     <button title={label} onClick={() => { setTab(id); setAbierta(null); setCreando(false); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left ${!menuExpandido ? "justify-center px-2" : ""} ${tab === id && !abierta && !creando && !perfil ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
@@ -2027,6 +2126,7 @@ export default function App() {
         </button>
         <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         <NavBtn id="dashboard" icon={LayoutDashboard} label="Dashboard" />
+        {currentUser.rol !== "Solicitante" && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
         {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
         <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
         {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
@@ -2053,6 +2153,18 @@ export default function App() {
           <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} />
+        ) : tab === "misPendientes" && currentUser.rol !== "Solicitante" ? (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">Mis pendientes</h2>
+              <p className="text-xs text-slate-400 mt-1">Solicitudes que están esperando una acción tuya en este momento, según tu rol.</p>
+            </div>
+            {solicitudesMisPendientes.length ? (
+              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} onAbrir={setAbierta} onExportar={setExportando} />
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No tienes solicitudes pendientes de tu acción en este momento.</div>
+            )}
+          </div>
         ) : tab === "porFirmar" && puedeAprobarFinanciera(currentUser) ? (
           <div className="space-y-4">
             <div>
@@ -2069,6 +2181,8 @@ export default function App() {
           <Estadisticas solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} proveedores={proveedores} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
+            currentUser={currentUser}
+            solicitudes={solicitudes}
             empresas={empresas} guardarEmpresa={guardarEmpresa} eliminarEmpresa={eliminarEmpresa}
             areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea}
             departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
