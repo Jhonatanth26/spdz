@@ -86,11 +86,12 @@ const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "met
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
 const COLORS = ["#4f46e5", "#f59e0b", "#10b981", "#ef4444", "#0ea5e9", "#a855f7"];
-const ROLES = ["Solicitante", "Jefe de Área", "Dirección Financiera", "Gerencia", "Compras", "Administrador"];
+const ROLES = ["Solicitante", "Jefe de Área", "Director de Área", "Dirección Financiera", "Gerencia", "Compras", "Administrador"];
 
 const PASOS = [
   { key: "solicitud", label: "Solicitud creada" },
   { key: "aprobacion_jefe", label: "Aprobación jefe de área" },
+  { key: "aprobacion_director", label: "Aprobación director de área" },
   { key: "cotizando", label: "Revisión y cotizaciones (compras)" },
   { key: "comparativo", label: "Cuadro comparativo" },
   { key: "aprobacion_financiera", label: "Dirección financiera" },
@@ -210,6 +211,7 @@ function duracion(iniISO, finISO) {
    PERMISOS
 --------------------------------------------------------- */
 const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (u.rol === "Jefe de Área" && u.areaId === s.areaId);
+const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (u.rol === "Director de Área" && u.areaId === s.areaId);
 const puedeGestionarCotizaciones = (u) => u.rol === "Administrador" || u.rol === "Compras";
 const puedeAprobarFinanciera = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
 const puedeAprobarGerencia = (u) => u.rol === "Administrador" || u.rol === "Gerencia";
@@ -686,14 +688,16 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       }
     });
     const jefe = usuarios.find((u) => u.areaId === areaId && u.rol === "Jefe de Área");
+    const director = usuarios.find((u) => u.areaId === areaId && u.rol === "Director de Área");
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
-    // si quien crea la solicitud es el propio jefe del área seleccionada, queda auto-aprobada (no tiene sentido que se apruebe a sí mismo con un clic aparte)
+    // si quien crea la solicitud es el propio jefe del área seleccionada, queda auto-aprobada en ese paso
+    // (no tiene sentido que se apruebe a sí mismo con un clic aparte) — pero igual pasa por Director de Área
     const esJefeDeSuPropiaArea = currentUser.rol === "Jefe de Área" && currentUser.areaId === areaId;
     onCrear({
       id: nextId(), folio,
       tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCostoId, conceptoGastoId, solicitanteId: currentUser.id,
       fechaCreacion: hoy(), fechaEstimada, objetivo, justificacion,
-      status: esJefeDeSuPropiaArea ? "cotizando" : "aprobacion_jefe",
+      status: esJefeDeSuPropiaArea ? "aprobacion_director" : "aprobacion_jefe",
       revisionCompras: tipo === "compra" ? { estado: "pendiente", observacion: "", usuario: "", fecha: "" } : { estado: "no_aplica", observacion: "", usuario: "", fecha: "" },
       items: items.map((i) => ({ ...i, cotizacionSeleccionada: null, observacionSeleccion: "" })),
       firmas: {
@@ -701,6 +705,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         jefe: esJefeDeSuPropiaArea
           ? { aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), observacion: "Creada y aprobada por el mismo jefe de área.", fotoUrl: currentUser.firmaFotoUrl || null }
           : { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
+        director: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         financiera: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         gerencia: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
       },
@@ -710,10 +715,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
       recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
       historialEstados: esJefeDeSuPropiaArea
-        ? [{ status: "solicitud", fecha: ahoraISO() }, { status: "cotizando", fecha: ahoraISO() }]
+        ? [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_director", fecha: ahoraISO() }]
         : [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
       notificaciones: esJefeDeSuPropiaArea
-        ? [{ fecha: ahoraISO(), mensaje: `Solicitud creada y auto-aprobada por ${currentUser.nombre} (jefe de área) — lista para cotizar.` }]
+        ? [{ fecha: ahoraISO(), mensaje: director?.email ? `Solicitud auto-aprobada por ${currentUser.nombre} (jefe de área). Correo enviado a ${director.nombre} (${director.email}) para su aprobación.` : `Solicitud auto-aprobada por ${currentUser.nombre} (jefe de área). No hay un director de área con correo configurado para notificar.` }]
         : [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
     });
     if (!esJefeDeSuPropiaArea && jefe?.email) {
@@ -721,6 +726,12 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         jefe.email,
         `Nueva solicitud pendiente: ${folio}`,
         `<p>Hola ${jefe.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}) y quedó pendiente de tu aprobación.</p><p><b>Objetivo:</b> ${objetivo}</p>`
+      );
+    } else if (esJefeDeSuPropiaArea && director?.email) {
+      enviarCorreo(
+        director.email,
+        `Solicitud pendiente de tu aprobación: ${folio}`,
+        `<p>Hola ${director.nombre},</p><p>La solicitud <b>${folio}</b> fue creada y auto-aprobada por ${currentUser.nombre} (jefe de área) y quedó pendiente de tu aprobación como Director de Área.</p><p><b>Objetivo:</b> ${objetivo}</p>`
       );
     }
   };
@@ -1270,7 +1281,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       <div className="salto-pagina">
         <div className="text-xs font-medium text-slate-500 mb-2">Firmas y aprobaciones</div>
         <div className="grid grid-cols-2 gap-3 text-xs">
-          {[["Solicitante", solicitud.firmas.solicitante], ["Jefe de área", solicitud.firmas.jefe], ["Dirección financiera", solicitud.firmas.financiera], ["Gerencia", solicitud.firmas.gerencia]].map(([rol, f]) => (
+          {[["Solicitante", solicitud.firmas.solicitante], ["Jefe de área", solicitud.firmas.jefe], ["Director de área", solicitud.firmas.director], ["Dirección financiera", solicitud.firmas.financiera], ["Gerencia", solicitud.firmas.gerencia]].map(([rol, f]) => (
             <div key={rol} className="border border-slate-200 rounded-md p-2">
               <div className="text-[11px] text-slate-400">{rol}</div>
               {f?.nombre ? (
@@ -1396,6 +1407,7 @@ function NotificacionesPanel({ notificaciones }) {
 function accionLabel(solicitud, total) {
   switch (solicitud.status) {
     case "aprobacion_jefe": return "Aprobar como jefe de área";
+    case "aprobacion_director": return "Aprobar como director de área";
     case "cotizando": return "Generar cuadro comparativo";
     case "comparativo": return requiereDireccion(total) ? "Enviar a Dirección Financiera" : requiereGerencia(total) ? "Enviar a Gerencia" : "Generar orden";
     case "aprobacion_financiera": return requiereGerencia(total) ? "Aprobar y enviar a Gerencia" : "Aprobar y generar orden";
@@ -1432,6 +1444,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const puedeActuar = () => {
     switch (solicitud.status) {
       case "aprobacion_jefe": return puedeAprobarJefe(currentUser, solicitud);
+      case "aprobacion_director": return puedeAprobarDirector(currentUser, solicitud);
       case "cotizando": return puedeGestionarCotizaciones(currentUser) && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada");
       case "comparativo": return puedeGestionarCotizaciones(currentUser);
       case "aprobacion_financiera": return puedeAprobarFinanciera(currentUser);
@@ -1445,7 +1458,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const firmar = () => ({ aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion, fotoUrl: currentUser.firmaFotoUrl || null });
   const avanzar = () => {
     const s = solicitud.status;
-    if (s === "aprobacion_jefe") patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) });
+    if (s === "aprobacion_jefe") {
+      const director = usuarios.find((u) => u.areaId === solicitud.areaId && u.rol === "Director de Área");
+      patch({ status: "aprobacion_director", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("aprobacion_director"), notificaciones: notificar(director?.email ? `Correo enviado a ${director.nombre} (${director.email}): solicitud ${solicitud.folio} pendiente de tu aprobación.` : `Solicitud aprobada por el jefe de área. No hay un director de área con correo configurado para notificar.`) });
+    }
+    else if (s === "aprobacion_director") patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) });
     else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
     else if (s === "comparativo") { const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) }); }
     else if (s === "aprobacion_financiera") { const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) }); }
@@ -1474,12 +1491,12 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     setObservacion("");
   };
   const rechazar = () => {
-    const campo = solicitud.status === "aprobacion_jefe" ? "jefe" : solicitud.status === "aprobacion_financiera" ? "financiera" : solicitud.status === "aprobacion_gerencia" ? "gerencia" : null;
+    const campo = solicitud.status === "aprobacion_jefe" ? "jefe" : solicitud.status === "aprobacion_director" ? "director" : solicitud.status === "aprobacion_financiera" ? "financiera" : solicitud.status === "aprobacion_gerencia" ? "gerencia" : null;
     patch({ status: "rechazada", firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada.`) });
     setObservacion("");
   };
 
-  const mostrarObservacion = ["aprobacion_jefe", "aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status);
+  const mostrarObservacion = ["aprobacion_jefe", "aprobacion_director", "aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status);
   const autorizado = puedeActuar();
 
   return (
@@ -1562,9 +1579,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><PenTool size={15} /> Firmas</div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <FirmaBlock rol="solicitante" firma={solicitud.firmas.solicitante} />
           <FirmaBlock rol="jefe de área" firma={solicitud.firmas.jefe} />
+          <FirmaBlock rol="director de área" firma={solicitud.firmas.director} />
           <FirmaBlock rol="dirección financiera" firma={solicitud.firmas.financiera} />
           <FirmaBlock rol="gerencia" firma={solicitud.firmas.gerencia} />
         </div>
