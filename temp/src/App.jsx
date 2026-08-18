@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import Papa from "papaparse";
 import * as XLSX from "xlsx";
 import { useAuth } from "./hooks/useAuth";
@@ -656,6 +656,49 @@ function HistoricoCompras({ nombreItem, historico, setHistorico }) {
 /* ---------------------------------------------------------
    NUEVA SOLICITUD
 --------------------------------------------------------- */
+// campo de búsqueda con autocompletado para elegir un ítem del catálogo (o dejarlo libre si no coincide con nada)
+function AutocompletarItem({ itemsCatalogo, valorTexto, catalogoId, onElegir, onEscribir }) {
+  const [abierto, setAbierto] = useState(false);
+  const contenedorRef = useRef(null);
+
+  useEffect(() => {
+    const cerrarSiClicFuera = (e) => { if (contenedorRef.current && !contenedorRef.current.contains(e.target)) setAbierto(false); };
+    document.addEventListener("mousedown", cerrarSiClicFuera);
+    return () => document.removeEventListener("mousedown", cerrarSiClicFuera);
+  }, []);
+
+  const coincidencias = valorTexto.trim()
+    ? itemsCatalogo.filter((c) => c.nombre.toLowerCase().includes(valorTexto.trim().toLowerCase())).slice(0, 30)
+    : itemsCatalogo.slice(0, 30);
+
+  return (
+    <div className="relative" ref={contenedorRef}>
+      <input
+        value={valorTexto}
+        onChange={(e) => { onEscribir(e.target.value); setAbierto(true); }}
+        onFocus={() => setAbierto(true)}
+        placeholder="Descripción del ítem — escribe para buscar en el catálogo"
+        className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm"
+      />
+      {abierto && coincidencias.length > 0 && (
+        <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
+          {coincidencias.map((c) => (
+            <button
+              key={c.id}
+              type="button"
+              onClick={() => { onElegir(c); setAbierto(false); }}
+              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 ${catalogoId === c.id ? "bg-indigo-50 text-indigo-700 font-medium" : "text-slate-700"}`}
+            >
+              {c.nombre} <span className="text-slate-400">({c.unidadDefault})</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
   const [tipo, setTipo] = useState("compra");
   const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
@@ -672,10 +715,6 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
   const updateItem = (id, field, val) => setItems(items.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
-  const elegirDelCatalogo = (id, catalogoId) => {
-    const cat = itemsCatalogo.find((c) => c.id === catalogoId);
-    setItems(items.map((i) => (i.id === id ? (cat ? { ...i, itemCatalogoId: catalogoId, nombre: cat.nombre, unidad: cat.unidadDefault } : { ...i, itemCatalogoId: "" }) : i)));
-  };
   const setCotizacionesItem = (itemId, cots) => setItems(items.map((i) => (i.id === itemId ? { ...i, cotizaciones: cots } : i)));
 
   const submit = () => {
@@ -762,11 +801,14 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       <div className="space-y-2 mb-5">
         {items.map((it) => (
           <div key={it.id} className="bg-slate-50 rounded-lg p-2 space-y-1.5">
-            <select value={it.itemCatalogoId} onChange={(e) => elegirDelCatalogo(it.id, e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs">
-              <option value="">Ítem libre (escribir abajo)</option>{itemsCatalogo.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}
-            </select>
+            <AutocompletarItem
+              itemsCatalogo={itemsCatalogo}
+              valorTexto={it.nombre}
+              catalogoId={it.itemCatalogoId}
+              onElegir={(cat) => setItems(items.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: cat.id, nombre: cat.nombre, unidad: cat.unidadDefault } : i)))}
+              onEscribir={(texto) => setItems(items.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: "", nombre: texto } : i)))}
+            />
             <div className="flex gap-2 items-start flex-wrap">
-              <input placeholder="Descripción del ítem" value={it.nombre} onChange={(e) => updateItem(it.id, "nombre", e.target.value)} className="flex-[2] border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <input type="number" min="0" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.unidad} onChange={(e) => updateItem(it.id, "unidad", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
               <input type="number" min="0" placeholder="Precio est." value={it.precioEstimado} onChange={(e) => updateItem(it.id, "precioEstimado", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
