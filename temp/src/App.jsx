@@ -5,6 +5,7 @@ import { useAuth } from "./hooks/useAuth";
 import { useSupabaseTable } from "./hooks/useSupabaseTable";
 import { useSolicitudes } from "./hooks/useSolicitudes";
 import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_MB } from "./lib/storage";
+import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
@@ -117,12 +118,13 @@ const nextId = () => (idCounter++).toString();
 // si no hay descuento, usa el precio final negociado manualmente, o el precio inicial si no hay ninguno
 function precioFinalEfectivo(cot) {
   const inicial = parseFloat(cot.precioUnitario) || 0;
+  const base = parseFloat(cot.precioFinal) || inicial; // parte del precio final negociado si existe, si no del inicial
   const descuento = parseFloat(cot.descuentoValor);
   if (descuento > 0) {
-    const descontado = cot.descuentoTipo === "porcentaje" ? inicial * (1 - descuento / 100) : inicial - descuento;
+    const descontado = cot.descuentoTipo === "porcentaje" ? base * (1 - descuento / 100) : base - descuento;
     return Math.max(0, descontado);
   }
-  return parseFloat(cot.precioFinal) || inicial;
+  return base;
 }
 // convierte el precio final efectivo a COP, según la moneda y tasa de cambio registradas
 function precioEnCOP(cot) {
@@ -751,6 +753,16 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
   const updateItem = (id, field, val) => setItems(items.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
+  const [cargandoTasaItem, setCargandoTasaItem] = useState(null);
+  const actualizarTasaItem = async (id, moneda) => {
+    if (!moneda || moneda === "COP") return;
+    setCargandoTasaItem(id);
+    const tasa = await obtenerTasaCambioCOP(moneda);
+    setCargandoTasaItem(null);
+    if (tasa) updateItem(id, "tasaCambio", tasa.toFixed(2));
+    else alert("No se pudo obtener la tasa de cambio automática. Ingrésala manualmente.");
+  };
+  const cambiarMonedaItem = (id, moneda) => { updateItem(id, "moneda", moneda); if (moneda !== "COP") actualizarTasaItem(id, moneda); };
   const setCotizacionesItem = (itemId, cots) => setItems(items.map((i) => (i.id === itemId ? { ...i, cotizaciones: cots } : i)));
 
   const submit = () => {
@@ -848,8 +860,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               <input type="number" min="0" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.unidad} onChange={(e) => updateItem(it.id, "unidad", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
               <input type="number" min="0" placeholder="Precio est." value={it.precioEstimado} onChange={(e) => updateItem(it.id, "precioEstimado", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
-              <select value={it.moneda} onChange={(e) => updateItem(it.id, "moneda", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
-              {it.moneda !== "COP" && <input type="number" min="0" step="0.01" placeholder={`Tasa ${it.moneda}→COP`} title={`¿Cuántos COP equivalen a 1 ${it.moneda}?`} value={it.tasaCambio} onChange={(e) => updateItem(it.id, "tasaCambio", e.target.value)} className="w-28 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />}
+              <select value={it.moneda} onChange={(e) => cambiarMonedaItem(it.id, e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+              {it.moneda !== "COP" && (
+                <div className="flex items-center gap-1">
+                  <input type="number" min="0" step="0.01" placeholder={`Tasa ${it.moneda}→COP`} title={`¿Cuántos COP equivalen a 1 ${it.moneda}?`} value={it.tasaCambio} onChange={(e) => updateItem(it.id, "tasaCambio", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+                  <button type="button" onClick={() => actualizarTasaItem(it.id, it.moneda)} disabled={cargandoTasaItem === it.id} title="Actualizar tasa del día" className="text-slate-400 hover:text-indigo-600 disabled:opacity-50 shrink-0">{cargandoTasaItem === it.id ? "..." : "↻"}</button>
+                </div>
+              )}
               <select value={it.descuentoTipo} onChange={(e) => updateItem(it.id, "descuentoTipo", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">
                 <option value="porcentaje">Desc. %</option>
                 <option value="valor">Desc. $</option>
@@ -889,6 +906,16 @@ function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo
   const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
   const [guardadoMsg, setGuardadoMsg] = useState(false);
   const update = (i, field, val) => { const copy = [...cots]; copy[i] = { ...copy[i], [field]: val }; setCots(copy); };
+  const [cargandoTasa, setCargandoTasa] = useState(null);
+  const actualizarTasaAutomatica = async (i, moneda) => {
+    if (!moneda || moneda === "COP") return;
+    setCargandoTasa(i);
+    const tasa = await obtenerTasaCambioCOP(moneda);
+    setCargandoTasa(null);
+    if (tasa) update(i, "tasaCambio", tasa.toFixed(2));
+    else alert("No se pudo obtener la tasa de cambio automática. Ingrésala manualmente.");
+  };
+  const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
   const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: item.ivaEstimado ?? 19, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
   const guardar = () => { onGuardar(item.id, cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario)); setGuardadoMsg(true); setTimeout(() => setGuardadoMsg(false), 2500); };
@@ -909,7 +936,7 @@ function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo
               )}
               <select value={c.unidadCotizada} onChange={(e) => update(i, "unidadCotizada", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
               <input type="number" placeholder="Factor" title={`¿A cuántas ${item.unidad} equivale 1 ${c.unidadCotizada}?`} value={c.factorConversion} onChange={(e) => update(i, "factorConversion", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-              <select value={c.moneda || "COP"} onChange={(e) => update(i, "moneda", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+              <select value={c.moneda || "COP"} onChange={(e) => cambiarMoneda(i, e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
               <input type="number" placeholder="Precio inicial" value={c.precioUnitario} onChange={(e) => update(i, "precioUnitario", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
               <input type="number" placeholder="Precio final neg." value={c.precioFinal} onChange={(e) => update(i, "precioFinal", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
               <select value={c.ivaPct} onChange={(e) => update(i, "ivaPct", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
@@ -917,7 +944,10 @@ function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo
             </div>
             <div className="grid grid-cols-8 gap-1.5 items-center">
               {c.moneda && c.moneda !== "COP" && (
-                <input type="number" placeholder={`Tasa ${c.moneda}→COP`} title={`¿Cuántos COP equivalen a 1 ${c.moneda}?`} value={c.tasaCambio} onChange={(e) => update(i, "tasaCambio", e.target.value)} className="col-span-2 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                <div className="col-span-2 flex items-center gap-1">
+                  <input type="number" placeholder={`Tasa ${c.moneda}→COP`} title={`¿Cuántos COP equivalen a 1 ${c.moneda}?`} value={c.tasaCambio} onChange={(e) => update(i, "tasaCambio", e.target.value)} className="flex-1 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                  <button type="button" onClick={() => actualizarTasaAutomatica(i, c.moneda)} disabled={cargandoTasa === i} title="Actualizar tasa del día" className="text-slate-400 hover:text-indigo-600 disabled:opacity-50 shrink-0">{cargandoTasa === i ? "..." : "↻"}</button>
+                </div>
               )}
               <select value={c.descuentoTipo || "porcentaje"} onChange={(e) => update(i, "descuentoTipo", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">
                 <option value="porcentaje">Desc. %</option>
