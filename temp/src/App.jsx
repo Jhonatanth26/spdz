@@ -668,16 +668,20 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     });
     const jefe = usuarios.find((u) => u.areaId === areaId && u.rol === "Jefe de Área");
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
+    // si quien crea la solicitud es el propio jefe del área seleccionada, queda auto-aprobada (no tiene sentido que se apruebe a sí mismo con un clic aparte)
+    const esJefeDeSuPropiaArea = currentUser.rol === "Jefe de Área" && currentUser.areaId === areaId;
     onCrear({
       id: nextId(), folio,
       tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCostoId, conceptoGastoId, solicitanteId: currentUser.id,
       fechaCreacion: hoy(), fechaEstimada, objetivo, justificacion,
-      status: "aprobacion_jefe",
+      status: esJefeDeSuPropiaArea ? "cotizando" : "aprobacion_jefe",
       revisionCompras: tipo === "compra" ? { estado: "pendiente", observacion: "", usuario: "", fecha: "" } : { estado: "no_aplica", observacion: "", usuario: "", fecha: "" },
       items: items.map((i) => ({ ...i, cotizacionSeleccionada: null, observacionSeleccion: "" })),
       firmas: {
         solicitante: { nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), fotoUrl: currentUser.firmaFotoUrl || null },
-        jefe: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
+        jefe: esJefeDeSuPropiaArea
+          ? { aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), observacion: "Creada y aprobada por el mismo jefe de área.", fotoUrl: currentUser.firmaFotoUrl || null }
+          : { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         financiera: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         gerencia: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
       },
@@ -686,10 +690,14 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     prioridad: null,
     evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
       recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
-      historialEstados: [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
-      notificaciones: [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
+      historialEstados: esJefeDeSuPropiaArea
+        ? [{ status: "solicitud", fecha: ahoraISO() }, { status: "cotizando", fecha: ahoraISO() }]
+        : [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
+      notificaciones: esJefeDeSuPropiaArea
+        ? [{ fecha: ahoraISO(), mensaje: `Solicitud creada y auto-aprobada por ${currentUser.nombre} (jefe de área) — lista para cotizar.` }]
+        : [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
     });
-    if (jefe?.email) {
+    if (!esJefeDeSuPropiaArea && jefe?.email) {
       enviarCorreo(
         jefe.email,
         `Nueva solicitud pendiente: ${folio}`,
