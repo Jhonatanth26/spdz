@@ -373,6 +373,7 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   const [form, setForm] = useState(plantilla);
   const [creando, setCreando] = useState(false);
   const [mensajeImport, setMensajeImport] = useState("");
+  const [seleccionados, setSeleccionados] = useState([]);
   const iniciarEdicion = (fila) => { setEditId(fila.id); setForm(fila); setCreando(false); };
   const iniciarCreacion = () => { setEditId(null); setForm(plantilla); setCreando(true); };
   const primerCampoVacio = !String(form[columnas[0]?.key] || "").trim();
@@ -385,6 +386,16 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   ) : (
     <input type={c.type || "text"} value={form[c.key] || ""} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-full" />
   );
+
+  const todosSeleccionados = datos.length > 0 && seleccionados.length === datos.length;
+  const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : datos.map((f) => f.id));
+  const alternarUno = (id) => setSeleccionados((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const eliminarSeleccionados = () => {
+    if (!seleccionados.length) return;
+    if (!window.confirm(`¿Eliminar ${seleccionados.length} registro(s) seleccionado(s)? Esta acción no se puede deshacer.`)) return;
+    seleccionados.forEach((id) => onEliminar(id));
+    setSeleccionados([]);
+  };
 
   const descargarPlantilla = () => {
     const csv = columnas.map((c) => c.key).join(",") + "\n";
@@ -417,6 +428,9 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
       <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 font-medium text-slate-700"><Icon size={16} /> {titulo}</div>
         <div className="flex items-center gap-2">
+          {seleccionados.length > 0 && (
+            <button onClick={eliminarSeleccionados} className="text-xs text-rose-600 font-medium flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-md px-2 py-1"><Trash2 size={12} /> Eliminar {seleccionados.length} seleccionado{seleccionados.length > 1 ? "s" : ""}</button>
+          )}
           <button onClick={descargarPlantilla} className="text-xs text-slate-500 font-medium flex items-center gap-1"><FileText size={12} /> Plantilla CSV</button>
           <label className="text-xs text-indigo-600 font-medium flex items-center gap-1 cursor-pointer"><UploadIcon size={12} /> Importar CSV
             <input type="file" accept=".csv" className="hidden" onChange={(e) => e.target.files[0] && importarCSV(e.target.files[0])} />
@@ -426,21 +440,26 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
       </div>
       {mensajeImport && <div className="px-5 py-1.5 text-[11px] text-emerald-600 bg-emerald-50 border-b border-emerald-100">{mensajeImport}</div>}
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 text-slate-500 text-xs"><tr>{columnas.map((c) => <th key={c.key} className="text-left px-4 py-2 font-medium">{c.label}</th>)}<th></th></tr></thead>
+        <thead className="bg-slate-50 text-slate-500 text-xs"><tr>
+          <th className="px-4 py-2 w-8"><input type="checkbox" checked={todosSeleccionados} onChange={alternarTodos} /></th>
+          {columnas.map((c) => <th key={c.key} className="text-left px-4 py-2 font-medium">{c.label}</th>)}<th></th></tr></thead>
         <tbody>
           {creando && (
             <tr className="border-t border-slate-100 bg-indigo-50/40">
+              <td className="px-4 py-1.5"></td>
               {columnas.map((c) => <td key={c.key} className="px-4 py-1.5">{Campo(c)}</td>)}
               <td className="px-4 py-1.5 text-right whitespace-nowrap"><button onClick={guardar} disabled={primerCampoVacio} className="text-emerald-600 text-xs font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">Guardar</button><button onClick={cancelar} className="text-slate-400 text-xs">Cancelar</button></td>
             </tr>
           )}
           {datos.map((fila) => editId === fila.id ? (
             <tr key={fila.id} className="border-t border-slate-100 bg-indigo-50/40">
+              <td className="px-4 py-1.5"></td>
               {columnas.map((c) => <td key={c.key} className="px-4 py-1.5">{Campo(c)}</td>)}
               <td className="px-4 py-1.5 text-right whitespace-nowrap"><button onClick={guardar} disabled={primerCampoVacio} className="text-emerald-600 text-xs font-medium mr-2 disabled:opacity-40 disabled:cursor-not-allowed">Guardar</button><button onClick={cancelar} className="text-slate-400 text-xs">Cancelar</button></td>
             </tr>
           ) : (
-            <tr key={fila.id} className="border-t border-slate-100">
+            <tr key={fila.id} className={`border-t border-slate-100 ${seleccionados.includes(fila.id) ? "bg-indigo-50/30" : ""}`}>
+              <td className="px-4 py-2"><input type="checkbox" checked={seleccionados.includes(fila.id)} onChange={() => alternarUno(fila.id)} /></td>
               {columnas.map((c) => <td key={c.key} className="px-4 py-2 text-slate-600">{c.type === "select" ? (c.options.find((o) => o.value === fila[c.key])?.label || "—") : (fila[c.key] || "—")}</td>)}
               <td className="px-4 py-2 text-right whitespace-nowrap"><button onClick={() => iniciarEdicion(fila)} className="text-slate-400 hover:text-indigo-600 p-1"><Pencil size={13} /></button><button onClick={() => onEliminar(fila.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={13} /></button></td>
             </tr>
