@@ -962,9 +962,20 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
-            {parseFloat(it.precioEstimado) > 0 && (() => { const d = desgloseItem(it); return (
-              <div className="text-[11px] text-slate-500 pl-1">Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b></div>
-            ); })()}
+            {parseFloat(it.precioEstimado) > 0 && (() => {
+              const d = desgloseItem(it);
+              const inicial = parseFloat(it.precioEstimado) || 0;
+              const descuento = parseFloat(it.descuentoValor) || 0;
+              const conDescuento = descuento > 0 ? Math.max(0, it.descuentoTipo === "porcentaje" ? inicial * (1 - descuento / 100) : inicial - descuento) : inicial;
+              const ahorro = inicial - conDescuento;
+              const simbolo = it.moneda && it.moneda !== "COP" ? `${it.moneda} ` : "$";
+              return (
+                <div className="text-[11px] text-slate-500 pl-1 space-y-0.5">
+                  {ahorro > 0 && <div>Precio inicial: {simbolo}{inicial.toLocaleString("es-CO")} · Descuento: -{simbolo}{ahorro.toLocaleString("es-CO", { maximumFractionDigits: 2 })} · Precio con descuento: <b>{simbolo}{conDescuento.toLocaleString("es-CO", { maximumFractionDigits: 2 })}</b></div>}
+                  <div>Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b></div>
+                </div>
+              );
+            })()}
             {/* el solicitante puede adjuntar hasta 3 cotizaciones desde ya, opcional */}
             <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" />
           </div>
