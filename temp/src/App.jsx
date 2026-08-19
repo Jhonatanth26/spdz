@@ -1358,7 +1358,7 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, empresa, currentUser }) 
     let enviados = 0, sinCorreo = 0;
     for (const idx of seleccionadas) {
       const orden = ordenesFirmadas[idx];
-      const prov = proveedores.find((p) => p.id === orden.proveedorId) || proveedores.find((p) => p.nombre === orden.proveedorNombre);
+      const prov = buscarProveedorDeOrden(orden, proveedores);
       if (!prov?.email) { sinCorreo++; continue; }
       const url = await obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800);
       if (url) {
@@ -1385,7 +1385,7 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, empresa, currentUser }) 
           <input type="checkbox" checked={seleccionadas.includes(idx)} onChange={() => alternar(idx)} />
           {o.proveedorNombre}
           <span className="text-[11px] text-slate-400 ml-auto">
-            {proveedores.find((p) => p.id === o.proveedorId || p.nombre === o.proveedorNombre)?.email || "sin correo registrado"}
+            {buscarProveedorDeOrden(o, proveedores)?.email || "sin correo registrado"}
           </span>
         </label>
       ))}
@@ -1779,7 +1779,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       // envía la orden firmada por correo a cada proveedor que tenga correo registrado
       (solicitud.ocEnviada.ordenesProveedor || []).forEach((orden) => {
         if (!orden.archivoFirmadoUrl) return;
-        const prov = proveedores.find((p) => p.id === orden.proveedorId) || proveedores.find((p) => p.nombre === orden.proveedorNombre);
+        const prov = buscarProveedorDeOrden(orden, proveedores);
         if (!prov?.email) return;
         obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800).then((url) => {
           if (!url) return;
@@ -2004,6 +2004,20 @@ function mismoProveedor(a, b) {
   return a.proveedorNombre === b.proveedorNombre;
 }
 
+// busca el proveedor real de una orden: primero por ID, y si no hay o no aparece, por nombre
+// (sin distinguir mayúsculas/espacios) — cubre datos guardados antes de vincular por ID.
+function buscarProveedorDeOrden(orden, proveedores) {
+  if (orden.proveedorId) {
+    const porId = proveedores.find((p) => p.id === orden.proveedorId);
+    if (porId) return porId;
+  }
+  if (orden.proveedorNombre) {
+    const nombreNorm = orden.proveedorNombre.trim().toLowerCase();
+    return proveedores.find((p) => p.nombre.trim().toLowerCase() === nombreNorm);
+  }
+  return null;
+}
+
 // true si ya existe una orden firmada para cada proveedor adjudicado de la solicitud
 function todasOrdenesFirmadas(solicitud, proveedores) {
   const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
@@ -2144,7 +2158,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
     setEnviandoId(s.id);
     let enviados = 0, sinCorreo = 0;
     for (const orden of ordenesFirmadas) {
-      const prov = proveedores.find((p) => p.id === orden.proveedorId) || proveedores.find((p) => p.nombre === orden.proveedorNombre);
+      const prov = buscarProveedorDeOrden(orden, proveedores);
       if (!prov?.email) { sinCorreo++; continue; }
       const url = await obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800);
       if (url) {
