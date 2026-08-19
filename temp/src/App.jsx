@@ -736,8 +736,55 @@ function AutocompletarItem({ itemsCatalogo, valorTexto, catalogoId, onElegir, on
   );
 }
 
+// campo de búsqueda con autocompletado para elegir un proveedor del catálogo (o dejarlo libre si no coincide con nada)
+function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir, onEscribir, className }) {
+  const [abierto, setAbierto] = useState(false);
+  const contenedorRef = useRef(null);
 
-function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
+  useEffect(() => {
+    const cerrarSiClicFuera = (e) => { if (contenedorRef.current && !contenedorRef.current.contains(e.target)) setAbierto(false); };
+    document.addEventListener("mousedown", cerrarSiClicFuera);
+    return () => document.removeEventListener("mousedown", cerrarSiClicFuera);
+  }, []);
+
+  const coincidencias = valorTexto.trim()
+    ? proveedores.filter((p) => p.nombre.toLowerCase().includes(valorTexto.trim().toLowerCase())).slice(0, 20)
+    : proveedores.slice(0, 20);
+
+  return (
+    <div className={`relative ${className || ""}`} ref={contenedorRef}>
+      <input
+        value={valorTexto}
+        onChange={(e) => { onEscribir(e.target.value); setAbierto(true); }}
+        onFocus={() => setAbierto(true)}
+        placeholder="Proveedor — escribe para buscar o crear uno nuevo"
+        className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs"
+      />
+      {abierto && coincidencias.length > 0 && (
+        <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
+          {coincidencias.map((p) => (
+            <button
+              key={p.id}
+              type="button"
+              onClick={() => { onElegir(p); setAbierto(false); }}
+              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 ${proveedorId === p.id ? "bg-indigo-50 text-indigo-700 font-medium" : "text-slate-700"}`}
+            >
+              {p.nombre}
+            </button>
+          ))}
+        </div>
+      )}
+      {abierto && valorTexto.trim() && !coincidencias.some((p) => p.nombre.toLowerCase() === valorTexto.trim().toLowerCase()) && (
+        <div className="absolute z-20 mt-1 w-full bg-white border border-slate-200 rounded-md shadow-lg px-3 py-1.5 text-[11px] text-emerald-600">
+          + Se creará "{valorTexto.trim()}" como proveedor nuevo al guardar
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
   const [tipo, setTipo] = useState("compra");
   const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
   const [areaId, setAreaId] = useState(currentUser.areaId || areas[0].id);
@@ -879,7 +926,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               <div className="text-[11px] text-slate-500 pl-1">Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b></div>
             ); })()}
             {/* el solicitante puede adjuntar hasta 3 cotizaciones desde ya, opcional */}
-            <CotizacionForm item={it} proveedores={[]} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" />
+            <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" />
           </div>
         ))}
       </div>
@@ -904,7 +951,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 /* ---------------------------------------------------------
    COTIZACIONES Y COMPARATIVO
 --------------------------------------------------------- */
-function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo }) {
+function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo }) {
   const [abierto, setAbierto] = useState(!compacto);
   const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
   const [guardadoMsg, setGuardadoMsg] = useState(false);
@@ -921,7 +968,20 @@ function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
   const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: item.ivaEstimado ?? 19, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
-  const guardar = () => { onGuardar(item.id, cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario)); setGuardadoMsg(true); setTimeout(() => setGuardadoMsg(false), 2500); };
+  const guardar = () => {
+    const validas = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
+    // los proveedores escritos a mano (sin elegirlos del catálogo) también quedan guardados ahí
+    if (guardarProveedor) {
+      validas.forEach((c) => {
+        if (!c.proveedorId && c.proveedorNombre?.trim()) {
+          const yaExiste = proveedores.some((p) => p.nombre.trim().toLowerCase() === c.proveedorNombre.trim().toLowerCase());
+          if (!yaExiste) guardarProveedor({ nombre: c.proveedorNombre.trim(), nit: "", actividadEconomica: "", contacto: "", email: "" });
+        }
+      });
+    }
+    onGuardar(item.id, validas);
+    setGuardadoMsg(true); setTimeout(() => setGuardadoMsg(false), 2500);
+  };
 
   if (compacto && !abierto) return <button onClick={() => setAbierto(true)} className="text-[11px] text-indigo-600 font-medium flex items-center gap-1"><Paperclip size={11} /> {opcionalTitulo || "Adjuntar cotizaciones"}</button>;
 
@@ -932,11 +992,14 @@ function CotizacionForm({ item, proveedores, onGuardar, compacto, opcionalTitulo
         {cots.map((c, i) => { const d = desgloseCotizacion(c, item.cantidad); return (
           <div key={i} className="space-y-1 border-b border-slate-200 pb-2 last:border-0 last:pb-0">
             <div className="grid grid-cols-8 gap-1.5 items-center">
-              {proveedores.length > 0 ? (
-                <select value={c.proveedorId} onChange={(e) => update(i, "proveedorId", e.target.value)} className="col-span-2 border border-slate-200 rounded-md px-2 py-1.5 text-xs"><option value="">Proveedor...</option>{proveedores.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}</select>
-              ) : (
-                <input placeholder="Proveedor" value={c.proveedorNombre || ""} onChange={(e) => update(i, "proveedorNombre", e.target.value)} className="col-span-2 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-              )}
+              <AutocompletarProveedor
+                className="col-span-2"
+                proveedores={proveedores}
+                valorTexto={c.proveedorId ? (proveedores.find((p) => p.id === c.proveedorId)?.nombre || "") : (c.proveedorNombre || "")}
+                proveedorId={c.proveedorId}
+                onElegir={(p) => { update(i, "proveedorId", p.id); update(i, "proveedorNombre", ""); }}
+                onEscribir={(texto) => { update(i, "proveedorNombre", texto); update(i, "proveedorId", ""); }}
+              />
               <select value={c.unidadCotizada} onChange={(e) => update(i, "unidadCotizada", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
               <input type="number" placeholder="Factor" title={`¿A cuántas ${item.unidad} equivale 1 ${c.unidadCotizada}?`} value={c.factorConversion} onChange={(e) => update(i, "factorConversion", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
               <select value={c.moneda || "COP"} onChange={(e) => cambiarMoneda(i, e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
@@ -1533,7 +1596,7 @@ function accionLabel(solicitud, total) {
   }
 }
 
-function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onVolver }) {
+function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onVolver }) {
   const [observacion, setObservacion] = useState("");
   const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
   const area = areas.find((a) => a.id === solicitud.areaId);
@@ -1667,7 +1730,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       {solicitud.status === "cotizando" && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada") && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <div className="font-medium text-slate-700">Cargar hasta 3 cotizaciones por ítem (Compras)</div>
-          {solicitud.items.map((it) => <CotizacionForm key={it.id} item={it} proveedores={proveedores} onGuardar={guardarCotizaciones} />)}
+          {solicitud.items.map((it) => <CotizacionForm key={it.id} item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} />)}
         </div>
       )}
 
@@ -2179,11 +2242,11 @@ export default function App() {
 
       <main className="flex-1 p-6 overflow-auto">
         {creando ? (
-          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
         ) : solicitudAbierta ? (
-          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
+          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} />
         ) : tab === "misPendientes" && currentUser.rol !== "Solicitante" ? (
