@@ -1341,8 +1341,9 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
 }
 
 // permite a Compras reenviar por correo una orden ya firmada (ej. si el proveedor la perdió o no llegó)
-function ReenviarOrdenesPanel({ solicitud, proveedores, empresa, currentUser }) {
+function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empresa, currentUser }) {
   const [seleccionadas, setSeleccionadas] = useState([]);
+  const [correosManual, setCorreosManual] = useState({});
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState("");
   if (!puedeGestionarCotizaciones(currentUser)) return null;
@@ -1359,20 +1360,25 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, empresa, currentUser }) 
     for (const idx of seleccionadas) {
       const orden = ordenesFirmadas[idx];
       const prov = buscarProveedorDeOrden(orden, proveedores);
-      if (!prov?.email) { sinCorreo++; continue; }
+      const correo = prov?.email || (correosManual[idx] || "").trim();
+      if (!correo) { sinCorreo++; continue; }
       const url = await obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800);
       if (url) {
         await enviarCorreo(
-          prov.email,
+          correo,
           `Reenvío — Orden de compra/servicio ${solicitud.folio}`,
-          `<p>Hola ${prov.nombre},</p><p>Te reenviamos el enlace de la orden de compra/servicio <b>${solicitud.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
+          `<p>Hola ${prov?.nombre || orden.proveedorNombre},</p><p>Te reenviamos el enlace de la orden de compra/servicio <b>${solicitud.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
         );
         enviados++;
+        // si el correo se escribió a mano y el proveedor existe sin correo, lo guardamos para la próxima vez
+        if (!prov?.email && guardarProveedor && prov) {
+          await guardarProveedor({ ...prov, email: correo });
+        }
       }
     }
     setEnviando(false);
     setSeleccionadas([]);
-    setMensaje(`${enviados} correo(s) reenviado(s)${sinCorreo ? `. ${sinCorreo} proveedor(es) sin correo registrado.` : "."}`);
+    setMensaje(`${enviados} correo(s) reenviado(s)${sinCorreo ? `. ${sinCorreo} sin correo (escríbelo abajo para poder enviarlo).` : "."}`);
     setTimeout(() => setMensaje(""), 5000);
   };
 
@@ -1380,15 +1386,27 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, empresa, currentUser }) 
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
       <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Reenviar orden(es) firmada(s) al proveedor</div>
       <div className="text-xs text-slate-400">Solo visible para Compras. Útil si el proveedor no recibió el correo o lo perdió.</div>
-      {ordenesFirmadas.map((o, idx) => (
-        <label key={idx} className="flex items-center gap-2 text-sm text-slate-700 border border-slate-200 rounded-md px-3 py-2">
-          <input type="checkbox" checked={seleccionadas.includes(idx)} onChange={() => alternar(idx)} />
-          {o.proveedorNombre}
-          <span className="text-[11px] text-slate-400 ml-auto">
-            {buscarProveedorDeOrden(o, proveedores)?.email || "sin correo registrado"}
-          </span>
-        </label>
-      ))}
+      {ordenesFirmadas.map((o, idx) => {
+        const prov = buscarProveedorDeOrden(o, proveedores);
+        return (
+          <div key={idx} className="flex items-center gap-2 text-sm text-slate-700 border border-slate-200 rounded-md px-3 py-2">
+            <input type="checkbox" checked={seleccionadas.includes(idx)} onChange={() => alternar(idx)} />
+            <span>{o.proveedorNombre}</span>
+            {prov?.email ? (
+              <span className="text-[11px] text-slate-400 ml-auto">{prov.email}</span>
+            ) : (
+              <input
+                type="email"
+                placeholder="Correo del proveedor (escríbelo para poder enviar)"
+                value={correosManual[idx] || ""}
+                onChange={(e) => setCorreosManual((prev) => ({ ...prev, [idx]: e.target.value }))}
+                onClick={(e) => e.stopPropagation()}
+                className="ml-auto border border-slate-200 rounded-md px-2 py-1 text-xs w-64"
+              />
+            )}
+          </div>
+        );
+      })}
       <button onClick={reenviar} disabled={!seleccionadas.length || enviando} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40">{enviando ? "Enviando..." : `Reenviar (${seleccionadas.length})`}</button>
       {mensaje && <div className="text-[11px] text-emerald-600">{mensaje}</div>}
     </div>
@@ -1906,7 +1924,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
 
-      <ReenviarOrdenesPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} />
+      <ReenviarOrdenesPanel solicitud={solicitud} proveedores={proveedores} guardarProveedor={guardarProveedor} empresa={empresa} currentUser={currentUser} />
 
       {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} onGuardar={(r) => patch({ recepcion: r })} />}
 
