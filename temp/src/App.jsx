@@ -1786,7 +1786,17 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     else if (s === "aprobacion_gerencia") patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") });
     else if (s === "orden") {
       if (!todasOrdenesFirmadas(solicitud, proveedores)) return;
-      patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}) y a cada proveedor con correo registrado: la orden ${solicitud.folio} fue enviada.`) });
+      const ordenesConCorreo = [];
+      const ordenesSinCorreo = [];
+      (solicitud.ocEnviada.ordenesProveedor || []).forEach((orden) => {
+        if (!orden.archivoFirmadoUrl) return;
+        const prov = buscarProveedorDeOrden(orden, proveedores);
+        if (prov?.email) ordenesConCorreo.push({ orden, prov });
+        else ordenesSinCorreo.push(orden);
+      });
+      const detalleProveedores = ordenesConCorreo.length ? ` Se envió a: ${ordenesConCorreo.map((o) => `${o.prov.nombre} (${o.prov.email})`).join(", ")}.` : "";
+      const avisoSinCorreo = ordenesSinCorreo.length ? ` ⚠ Sin correo registrado, NO se envió a: ${ordenesSinCorreo.map((o) => o.proveedorNombre).join(", ")} — usa "Reenviar orden(es) firmada(s)" para escribirlo y enviarlo.` : "";
+      patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}).${detalleProveedores}${avisoSinCorreo}`) });
       if (solicitante?.email) {
         enviarCorreo(
           solicitante.email,
@@ -1794,11 +1804,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           `<p>Hola ${solicitante.nombre},</p><p>La orden <b>${solicitud.folio}</b> ya fue enviada al proveedor y quedó lista para recepción.</p>`
         );
       }
-      // envía la orden firmada por correo a cada proveedor que tenga correo registrado
-      (solicitud.ocEnviada.ordenesProveedor || []).forEach((orden) => {
-        if (!orden.archivoFirmadoUrl) return;
-        const prov = buscarProveedorDeOrden(orden, proveedores);
-        if (!prov?.email) return;
+      // envía la orden firmada por correo a cada proveedor que sí tenga correo registrado
+      ordenesConCorreo.forEach(({ orden, prov }) => {
         obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800).then((url) => {
           if (!url) return;
           enviarCorreo(
