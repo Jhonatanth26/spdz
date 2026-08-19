@@ -24,7 +24,7 @@ export async function firmarPDF(urlPdfOriginal, urlFirmaFoto, nombreFirmante, ca
     fecha,
   ].filter(Boolean)
 
-  paginas.forEach((pagina) => {
+  paginas.forEach((pagina, idx) => {
     const { width } = pagina.getSize()
 
     if (imagen) {
@@ -44,6 +44,14 @@ export async function firmarPDF(urlPdfOriginal, urlFirmaFoto, nombreFirmante, ca
         size: 8,
         color: rgb(0.35, 0.35, 0.35),
       })
+    })
+
+    // contador de páginas (ej. 1/15, 2/15...)
+    pagina.drawText(`${idx + 1}/${paginas.length}`, {
+      x: width - 45,
+      y: 20,
+      size: 8,
+      color: rgb(0.35, 0.35, 0.35),
     })
   })
 
