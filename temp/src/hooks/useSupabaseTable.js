@@ -31,20 +31,24 @@ export function useSupabaseTable(tabla, { desdeDb = (r) => r, haciaDb = (r) => r
   useEffect(() => { recargar() }, [recargar])
 
   // crea o actualiza un registro. Si trae un id que ya existe localmente, actualiza; si no, inserta.
+  // Devuelve el registro guardado (con su id real de la base de datos) o un error.
   const guardar = async (registro) => {
     const esNuevo = !datos.some((d) => d.id === registro.id)
     const payload = haciaDb(registro)
 
     if (esNuevo) {
       const { id, ...sinId } = payload // dejamos que Supabase genere el UUID
-      const { error } = await supabase.from(tabla).insert(sinId)
+      const { data, error } = await supabase.from(tabla).insert(sinId).select().single()
       if (error) { console.error(`Error creando en "${tabla}":`, error.message); return error }
+      await recargar()
+      return desdeDb(data)
     } else {
       const { id, ...cambios } = payload
-      const { error } = await supabase.from(tabla).update(cambios).eq('id', registro.id)
+      const { data, error } = await supabase.from(tabla).update(cambios).eq('id', registro.id).select().single()
       if (error) { console.error(`Error actualizando "${tabla}":`, error.message); return error }
+      await recargar()
+      return desdeDb(data)
     }
-    await recargar()
   }
 
   // importar varias filas de una vez (usado por "Importar CSV")

@@ -1019,17 +1019,29 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
   const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: item.ivaEstimado ?? 19, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
-  const guardar = () => {
-    const validas = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
-    // los proveedores escritos a mano (sin elegirlos del catálogo) también quedan guardados ahí
+  const guardar = async () => {
+    let listaCots = [...cots];
+    // los proveedores escritos a mano (sin elegirlos del catálogo) también quedan guardados ahí,
+    // y la cotización queda vinculada a su ID real (no solo al nombre) para que el envío de correo no falle
     if (guardarProveedor) {
-      validas.forEach((c) => {
-        if (!c.proveedorId && c.proveedorNombre?.trim()) {
-          const yaExiste = proveedores.some((p) => p.nombre.trim().toLowerCase() === c.proveedorNombre.trim().toLowerCase());
-          if (!yaExiste) guardarProveedor({ nombre: c.proveedorNombre.trim(), nit: "", actividadEconomica: "", contacto: "", email: (c.proveedorEmailNuevo || "").trim() });
+      for (let idx = 0; idx < listaCots.length; idx++) {
+        const c = listaCots[idx];
+        const esValida = (c.proveedorId || c.proveedorNombre) && c.precioUnitario;
+        if (!esValida || c.proveedorId || !c.proveedorNombre?.trim()) continue;
+        const nombreLimpio = c.proveedorNombre.trim();
+        const emailNuevo = (c.proveedorEmailNuevo || "").trim();
+        const existente = proveedores.find((p) => p.nombre.trim().toLowerCase() === nombreLimpio.toLowerCase());
+        if (!existente) {
+          const creado = await guardarProveedor({ nombre: nombreLimpio, nit: "", actividadEconomica: "", contacto: "", email: emailNuevo });
+          if (creado?.id) listaCots[idx] = { ...c, proveedorId: creado.id, proveedorNombre: "" };
+        } else {
+          if (emailNuevo && !existente.email) await guardarProveedor({ ...existente, email: emailNuevo });
+          listaCots[idx] = { ...c, proveedorId: existente.id, proveedorNombre: "" };
         }
-      });
+      }
     }
+    setCots(listaCots);
+    const validas = listaCots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
     onGuardar(item.id, validas);
     setGuardadoMsg(true); setTimeout(() => setGuardadoMsg(false), 2500);
   };
@@ -2022,7 +2034,7 @@ function requiereMiAccion(currentUser, s, proveedores) {
   }
 }
 
-function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, onAbrir, onExportar, titulo }) {
+function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, currentUser, onAbrir, onExportar, titulo }) {
   const [fArea, setFArea] = useState("todas");
   const [fEmpresa, setFEmpresa] = useState("todas");
   const [fEstado, setFEstado] = useState("todos");
@@ -2117,17 +2129,43 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
         {hayFiltros && <button onClick={limpiarFiltros} className="text-xs text-slate-500 underline mb-1.5">Limpiar filtros</button>}
         <div className="text-xs text-slate-400 ml-auto mb-1.5">{filtradas.length} de {solicitudes.length} solicitudes</div>
       </div>
-      <ListaSolicitudes solicitudes={filtradas} areas={areas} empresas={empresas} proveedores={proveedores} onAbrir={onAbrir} onExportar={onExportar} />
+      <ListaSolicitudes solicitudes={filtradas} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={onAbrir} onExportar={onExportar} />
     </div>
   );
 }
 
-function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, onAbrir, onExportar }) {
+function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUser, onAbrir, onExportar }) {
+  const [enviandoId, setEnviandoId] = useState(null);
+
+  const reenviarTodas = async (e, s, empresa) => {
+    e.stopPropagation();
+    const ordenesFirmadas = (s.ocEnviada?.ordenesProveedor || []).filter((o) => o.archivoFirmadoUrl);
+    if (!ordenesFirmadas.length) return;
+    setEnviandoId(s.id);
+    let enviados = 0, sinCorreo = 0;
+    for (const orden of ordenesFirmadas) {
+      const prov = proveedores.find((p) => p.id === orden.proveedorId) || proveedores.find((p) => p.nombre === orden.proveedorNombre);
+      if (!prov?.email) { sinCorreo++; continue; }
+      const url = await obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800);
+      if (url) {
+        await enviarCorreo(
+          prov.email,
+          `Reenvío — Orden de compra/servicio ${s.folio}`,
+          `<p>Hola ${prov.nombre},</p><p>Te reenviamos el enlace de la orden de compra/servicio <b>${s.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
+        );
+        enviados++;
+      }
+    }
+    setEnviandoId(null);
+    alert(`${enviados} correo(s) reenviado(s) al proveedor.${sinCorreo ? ` ${sinCorreo} proveedor(es) sin correo registrado — entra a la solicitud para revisarlo.` : ""}`);
+  };
+
   return (
     <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
       <table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
         <tbody>{solicitudes.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
+          const puedeReenviar = currentUser && puedeGestionarCotizaciones(currentUser) && (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl);
           return (<tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => onAbrir(s.id)}>
             <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
             <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
@@ -2139,6 +2177,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, onAbrir, 
             <td className="px-4 py-2.5 text-slate-600 max-w-[160px] truncate" title={proveedoresAdjudicados(s, proveedores)}>{proveedoresAdjudicados(s, proveedores)}</td>
             <td className="px-4 py-2.5 text-right text-slate-600">{fmt(totalSolicitud(s))}</td>
             <td className="px-4 py-2.5"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : "slate"}>{s.status === "rechazada" ? "Rechazada" : paso?.label}</Badge></td>
+            {puedeReenviar && <td className="px-4 py-2.5 text-right"><button title="Reenviar orden firmada al proveedor" disabled={enviandoId === s.id} onClick={(e) => reenviarTodas(e, s, empresa)} className="text-slate-400 hover:text-indigo-600 p-1 disabled:opacity-40"><Send size={15} /></button></td>}
             <td className="px-4 py-2.5 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
             <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
       </table>
@@ -2403,7 +2442,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mt-1">Solicitudes que están esperando una acción tuya en este momento, según tu rol.</p>
             </div>
             {solicitudesMisPendientes.length ? (
-              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} onAbrir={setAbierta} onExportar={setExportando} />
+              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} />
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No tienes solicitudes pendientes de tu acción en este momento.</div>
             )}
@@ -2415,7 +2454,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mt-1">Solicitudes en el paso "Orden generada" que tienen al menos una orden de proveedor pendiente de tu firma.</p>
             </div>
             {solicitudesPorFirmar.length ? (
-              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} onAbrir={setAbierta} onExportar={setExportando} />
+              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} />
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay órdenes pendientes de firma en este momento.</div>
             )}
@@ -2436,7 +2475,7 @@ export default function App() {
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
           />
         ) : (
-          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} onAbrir={setAbierta} onExportar={setExportando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
+          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         )}
       </main>
 
