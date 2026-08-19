@@ -697,7 +697,9 @@ function HistoricoCompras({ nombreItem, historico, setHistorico }) {
 // campo de búsqueda con autocompletado para elegir un ítem del catálogo (o dejarlo libre si no coincide con nada)
 function AutocompletarItem({ itemsCatalogo, valorTexto, catalogoId, onElegir, onEscribir }) {
   const [abierto, setAbierto] = useState(false);
+  const [indiceActivo, setIndiceActivo] = useState(0);
   const contenedorRef = useRef(null);
+  const listaRef = useRef(null);
 
   useEffect(() => {
     const cerrarSiClicFuera = (e) => { if (contenedorRef.current && !contenedorRef.current.contains(e.target)) setAbierto(false); };
@@ -709,23 +711,41 @@ function AutocompletarItem({ itemsCatalogo, valorTexto, catalogoId, onElegir, on
     ? itemsCatalogo.filter((c) => c.nombre.toLowerCase().includes(valorTexto.trim().toLowerCase())).slice(0, 30)
     : itemsCatalogo.slice(0, 30);
 
+  useEffect(() => { setIndiceActivo(0); }, [valorTexto, abierto]);
+  useEffect(() => {
+    if (abierto && listaRef.current) {
+      const activo = listaRef.current.children[indiceActivo];
+      if (activo) activo.scrollIntoView({ block: "nearest" });
+    }
+  }, [indiceActivo, abierto]);
+
+  const manejarTeclas = (e) => {
+    if (!abierto || !coincidencias.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setIndiceActivo((i) => Math.min(i + 1, coincidencias.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIndiceActivo((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); const elegido = coincidencias[indiceActivo]; if (elegido) { onElegir(elegido); setAbierto(false); } }
+    else if (e.key === "Escape") setAbierto(false);
+  };
+
   return (
     <div className="relative" ref={contenedorRef}>
       <input
         value={valorTexto}
         onChange={(e) => { onEscribir(e.target.value); setAbierto(true); }}
         onFocus={() => setAbierto(true)}
+        onKeyDown={manejarTeclas}
         placeholder="Descripción del ítem — escribe para buscar en el catálogo"
         className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm"
       />
       {abierto && coincidencias.length > 0 && (
-        <div className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
-          {coincidencias.map((c) => (
+        <div ref={listaRef} className="absolute z-20 mt-1 w-full max-h-56 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
+          {coincidencias.map((c, idx) => (
             <button
               key={c.id}
               type="button"
+              onMouseEnter={() => setIndiceActivo(idx)}
               onClick={() => { onElegir(c); setAbierto(false); }}
-              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 ${catalogoId === c.id ? "bg-indigo-50 text-indigo-700 font-medium" : "text-slate-700"}`}
+              className={`w-full text-left px-3 py-1.5 text-xs ${idx === indiceActivo ? "bg-indigo-50 text-indigo-700" : catalogoId === c.id ? "bg-indigo-50 text-indigo-700 font-medium" : "text-slate-700"}`}
             >
               {c.nombre} <span className="text-slate-400">({c.unidadDefault})</span>
             </button>
@@ -739,7 +759,9 @@ function AutocompletarItem({ itemsCatalogo, valorTexto, catalogoId, onElegir, on
 // campo de búsqueda con autocompletado para elegir un proveedor del catálogo (o dejarlo libre si no coincide con nada)
 function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir, onEscribir, className }) {
   const [abierto, setAbierto] = useState(false);
+  const [indiceActivo, setIndiceActivo] = useState(0);
   const contenedorRef = useRef(null);
+  const listaRef = useRef(null);
 
   useEffect(() => {
     const cerrarSiClicFuera = (e) => { if (contenedorRef.current && !contenedorRef.current.contains(e.target)) setAbierto(false); };
@@ -751,23 +773,41 @@ function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir
     ? proveedores.filter((p) => p.nombre.toLowerCase().includes(valorTexto.trim().toLowerCase())).slice(0, 20)
     : proveedores.slice(0, 20);
 
+  useEffect(() => { setIndiceActivo(0); }, [valorTexto, abierto]);
+  useEffect(() => {
+    if (abierto && listaRef.current) {
+      const activo = listaRef.current.children[indiceActivo];
+      if (activo) activo.scrollIntoView({ block: "nearest" });
+    }
+  }, [indiceActivo, abierto]);
+
+  const manejarTeclas = (e) => {
+    if (!abierto || !coincidencias.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setIndiceActivo((i) => Math.min(i + 1, coincidencias.length - 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setIndiceActivo((i) => Math.max(i - 1, 0)); }
+    else if (e.key === "Enter") { e.preventDefault(); const elegido = coincidencias[indiceActivo]; if (elegido) { onElegir(elegido); setAbierto(false); } }
+    else if (e.key === "Escape") setAbierto(false);
+  };
+
   return (
     <div className={`relative ${className || ""}`} ref={contenedorRef}>
       <input
         value={valorTexto}
         onChange={(e) => { onEscribir(e.target.value); setAbierto(true); }}
         onFocus={() => setAbierto(true)}
+        onKeyDown={manejarTeclas}
         placeholder="Proveedor — escribe para buscar o crear uno nuevo"
         className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs"
       />
       {abierto && coincidencias.length > 0 && (
-        <div className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
-          {coincidencias.map((p) => (
+        <div ref={listaRef} className="absolute z-20 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-slate-200 rounded-md shadow-lg">
+          {coincidencias.map((p, idx) => (
             <button
               key={p.id}
               type="button"
+              onMouseEnter={() => setIndiceActivo(idx)}
               onClick={() => { onElegir(p); setAbierto(false); }}
-              className={`w-full text-left px-3 py-1.5 text-xs hover:bg-indigo-50 ${proveedorId === p.id ? "bg-indigo-50 text-indigo-700 font-medium" : "text-slate-700"}`}
+              className={`w-full text-left px-3 py-1.5 text-xs ${idx === indiceActivo ? "bg-indigo-50 text-indigo-700" : proveedorId === p.id ? "bg-indigo-50 text-indigo-700 font-medium" : "text-slate-700"}`}
             >
               {p.nombre}
             </button>
