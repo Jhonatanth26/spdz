@@ -975,7 +975,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
       validas.forEach((c) => {
         if (!c.proveedorId && c.proveedorNombre?.trim()) {
           const yaExiste = proveedores.some((p) => p.nombre.trim().toLowerCase() === c.proveedorNombre.trim().toLowerCase());
-          if (!yaExiste) guardarProveedor({ nombre: c.proveedorNombre.trim(), nit: "", actividadEconomica: "", contacto: "", email: "" });
+          if (!yaExiste) guardarProveedor({ nombre: c.proveedorNombre.trim(), nit: "", actividadEconomica: "", contacto: "", email: (c.proveedorEmailNuevo || "").trim() });
         }
       });
     }
@@ -1008,6 +1008,9 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               <select value={c.ivaPct} onChange={(e) => update(i, "ivaPct", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
               <div className="flex gap-1"><input type="number" placeholder="Días" value={c.diasEntrega} onChange={(e) => update(i, "diasEntrega", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />{cots.length > 1 && <button onClick={() => removeCot(i)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>}</div>
             </div>
+            {!c.proveedorId && c.proveedorNombre?.trim() && (
+              <input type="email" placeholder="Correo del proveedor (opcional)" value={c.proveedorEmailNuevo || ""} onChange={(e) => update(i, "proveedorEmailNuevo", e.target.value)} className="w-full max-w-xs border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+            )}
             <div className="grid grid-cols-8 gap-1.5 items-center">
               {c.moneda && c.moneda !== "COP" && (
                 <div className="col-span-2 flex items-center gap-1">
@@ -1249,7 +1252,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
       <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Firma y envío de la orden al proveedor</div>
-      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud. Sube aquí la orden generada en el sistema contable de cada uno; se envía a <b>Dirección Financiera</b> para su firma digital — la orden ya firmada por Dirección Financiera es la que se envía al proveedor.</div>
+      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud. Sube aquí la orden generada en el sistema contable de cada uno; se envía a <b>Dirección Financiera</b> para su firma digital. Al marcar "OC enviada al proveedor", la orden ya firmada se envía automáticamente por correo a cada proveedor <b>que tenga correo registrado en el Catálogo</b> — si alguno no lo tiene, tendrás que enviársela tú manualmente.</div>
 
       {ordenes.map((o, i) => (
         <div key={i} className="border border-slate-200 rounded-lg p-3 space-y-2">
@@ -1646,7 +1649,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     else if (s === "aprobacion_gerencia") patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") });
     else if (s === "orden") {
       if (!todasOrdenesFirmadas(solicitud, proveedores)) return;
-      patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): la orden ${solicitud.folio} fue enviada al proveedor.`) });
+      patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}) y a cada proveedor con correo registrado: la orden ${solicitud.folio} fue enviada.`) });
       if (solicitante?.email) {
         enviarCorreo(
           solicitante.email,
@@ -1654,6 +1657,20 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           `<p>Hola ${solicitante.nombre},</p><p>La orden <b>${solicitud.folio}</b> ya fue enviada al proveedor y quedó lista para recepción.</p>`
         );
       }
+      // envía la orden firmada por correo a cada proveedor que tenga correo registrado
+      (solicitud.ocEnviada.ordenesProveedor || []).forEach((orden) => {
+        if (!orden.archivoFirmadoUrl) return;
+        const prov = proveedores.find((p) => p.id === orden.proveedorId) || proveedores.find((p) => p.nombre === orden.proveedorNombre);
+        if (!prov?.email) return;
+        obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800).then((url) => {
+          if (!url) return;
+          enviarCorreo(
+            prov.email,
+            `Orden de compra/servicio ${solicitud.folio}`,
+            `<p>Hola ${prov.nombre},</p><p>Adjuntamos el enlace de la orden de compra/servicio <b>${solicitud.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
+          );
+        });
+      });
     }
     else if (s === "oc_enviada") patch({ status: "recepcion", historialEstados: empujarHistorial("recepcion") });
     else if (s === "recepcion") {
