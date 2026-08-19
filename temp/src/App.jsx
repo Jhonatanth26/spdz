@@ -1050,46 +1050,98 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
 
   return (
     <div className="bg-slate-50 rounded-lg p-3 border border-slate-200">
-      <div className="flex items-center justify-between mb-2"><div className="text-sm font-medium text-slate-700">{item.nombre} <span className="text-slate-400 font-normal">({item.cantidad} {item.unidad})</span></div>{cots.length < 3 && <button onClick={addCot} className="text-xs text-indigo-600 flex items-center gap-1"><Plus size={12} /> Cotización</button>}</div>
-      <div className="space-y-2">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium text-slate-700">
+          {item.nombre} <span className="text-slate-400 font-normal">({item.cantidad} {item.unidad})</span>
+          {parseFloat(item.precioEstimado) > 0 && (
+            <span className="text-[11px] text-slate-400 font-normal ml-2">— precio solicitado: {item.moneda && item.moneda !== "COP" ? `${item.moneda} ${Number(item.precioEstimado).toLocaleString("es-CO")}` : fmt(item.precioEstimado)}{item.descuentoValor > 0 && ` (con ${item.descuentoTipo === "porcentaje" ? `${item.descuentoValor}% dcto.` : `dcto. de ${fmt(item.descuentoValor)}`})`}</span>
+          )}
+        </div>
+        {cots.length < 3 && <button onClick={addCot} className="text-xs text-indigo-600 flex items-center gap-1"><Plus size={12} /> Cotización</button>}
+      </div>
+      <div className="space-y-3">
         {cots.map((c, i) => { const d = desgloseCotizacion(c, item.cantidad); return (
-          <div key={i} className="space-y-1 border-b border-slate-200 pb-2 last:border-0 last:pb-0">
-            <div className="grid grid-cols-8 gap-1.5 items-center">
-              <AutocompletarProveedor
-                className="col-span-2"
-                proveedores={proveedores}
-                valorTexto={c.proveedorId ? (proveedores.find((p) => p.id === c.proveedorId)?.nombre || "") : (c.proveedorNombre || "")}
-                proveedorId={c.proveedorId}
-                onElegir={(p) => { update(i, "proveedorId", p.id); update(i, "proveedorNombre", ""); }}
-                onEscribir={(texto) => { update(i, "proveedorNombre", texto); update(i, "proveedorId", ""); }}
-              />
-              <select value={c.unidadCotizada} onChange={(e) => update(i, "unidadCotizada", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
-              <input type="number" placeholder="Factor" title={`¿A cuántas ${item.unidad} equivale 1 ${c.unidadCotizada}?`} value={c.factorConversion} onChange={(e) => update(i, "factorConversion", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-              <select value={c.moneda || "COP"} onChange={(e) => cambiarMoneda(i, e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
-              <input type="number" placeholder="Precio inicial" value={c.precioUnitario} onChange={(e) => update(i, "precioUnitario", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-              <input type="number" placeholder="Precio final neg." value={c.precioFinal} onChange={(e) => update(i, "precioFinal", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-              <select value={c.ivaPct} onChange={(e) => update(i, "ivaPct", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
-              <div className="flex gap-1"><input type="number" placeholder="Días" value={c.diasEntrega} onChange={(e) => update(i, "diasEntrega", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />{cots.length > 1 && <button onClick={() => removeCot(i)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>}</div>
+          <div key={i} className="space-y-2 border-b border-slate-200 pb-3 last:border-0 last:pb-0">
+            <div className="grid grid-cols-8 gap-1.5 items-end">
+              <div className="col-span-2 flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Proveedor</label>
+                <AutocompletarProveedor
+                  proveedores={proveedores}
+                  valorTexto={c.proveedorId ? (proveedores.find((p) => p.id === c.proveedorId)?.nombre || "") : (c.proveedorNombre || "")}
+                  proveedorId={c.proveedorId}
+                  onElegir={(p) => { update(i, "proveedorId", p.id); update(i, "proveedorNombre", ""); }}
+                  onEscribir={(texto) => { update(i, "proveedorNombre", texto); update(i, "proveedorId", ""); }}
+                />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Unidad cotizada</label>
+                <select value={c.unidadCotizada} onChange={(e) => update(i, "unidadCotizada", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400" title={`¿A cuántas ${item.unidad} equivale 1 ${c.unidadCotizada}?`}>Factor conv.</label>
+                <input type="number" title={`¿A cuántas ${item.unidad} equivale 1 ${c.unidadCotizada}?`} value={c.factorConversion} onChange={(e) => update(i, "factorConversion", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Moneda</label>
+                <select value={c.moneda || "COP"} onChange={(e) => cambiarMoneda(i, e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Precio inicial</label>
+                <input type="number" value={c.precioUnitario} onChange={(e) => update(i, "precioUnitario", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Precio final neg.</label>
+                <input type="number" value={c.precioFinal} onChange={(e) => update(i, "precioFinal", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">IVA</label>
+                <select value={c.ivaPct} onChange={(e) => update(i, "ivaPct", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Días entrega</label>
+                <div className="flex gap-1"><input type="number" value={c.diasEntrega} onChange={(e) => update(i, "diasEntrega", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />{cots.length > 1 && <button onClick={() => removeCot(i)} className="text-slate-400 hover:text-rose-500 shrink-0"><Trash2 size={13} /></button>}</div>
+              </div>
             </div>
+
             {!c.proveedorId && c.proveedorNombre?.trim() && (
-              <input type="email" placeholder="Correo del proveedor (opcional)" value={c.proveedorEmailNuevo || ""} onChange={(e) => update(i, "proveedorEmailNuevo", e.target.value)} className="w-full max-w-xs border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              <div className="flex flex-col gap-0.5 max-w-xs">
+                <label className="text-[10px] text-slate-400">Correo del proveedor (opcional)</label>
+                <input type="email" value={c.proveedorEmailNuevo || ""} onChange={(e) => update(i, "proveedorEmailNuevo", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              </div>
             )}
-            <div className="grid grid-cols-8 gap-1.5 items-center">
+
+            <div className="grid grid-cols-8 gap-1.5 items-end">
               {c.moneda && c.moneda !== "COP" && (
-                <div className="col-span-2 flex items-center gap-1">
-                  <input type="number" placeholder={`Tasa ${c.moneda}→COP`} title={`¿Cuántos COP equivalen a 1 ${c.moneda}?`} value={c.tasaCambio} onChange={(e) => update(i, "tasaCambio", e.target.value)} className="flex-1 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-                  <button type="button" onClick={() => actualizarTasaAutomatica(i, c.moneda)} disabled={cargandoTasa === i} title="Actualizar tasa del día" className="text-slate-400 hover:text-indigo-600 disabled:opacity-50 shrink-0">{cargandoTasa === i ? "..." : "↻"}</button>
+                <div className="col-span-2 flex flex-col gap-0.5">
+                  <label className="text-[10px] text-slate-400" title={`¿Cuántos COP equivalen a 1 ${c.moneda}?`}>Tasa {c.moneda}→COP</label>
+                  <div className="flex items-center gap-1">
+                    <input type="number" value={c.tasaCambio} onChange={(e) => update(i, "tasaCambio", e.target.value)} className="flex-1 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                    <button type="button" onClick={() => actualizarTasaAutomatica(i, c.moneda)} disabled={cargandoTasa === i} title="Actualizar tasa del día" className="text-slate-400 hover:text-indigo-600 disabled:opacity-50 shrink-0">{cargandoTasa === i ? "..." : "↻"}</button>
+                  </div>
                 </div>
               )}
-              <select value={c.descuentoTipo || "porcentaje"} onChange={(e) => update(i, "descuentoTipo", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">
-                <option value="porcentaje">Desc. %</option>
-                <option value="valor">Desc. $</option>
-              </select>
-              <input type="number" placeholder={c.descuentoTipo === "valor" ? "Descuento en $" : "Descuento en %"} value={c.descuentoValor} onChange={(e) => update(i, "descuentoValor", e.target.value)} className="col-span-2 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Tipo descuento</label>
+                <select value={c.descuentoTipo || "porcentaje"} onChange={(e) => update(i, "descuentoTipo", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">
+                  <option value="porcentaje">Desc. %</option>
+                  <option value="valor">Desc. $</option>
+                </select>
+              </div>
+              <div className="col-span-2 flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">{c.descuentoTipo === "valor" ? "Descuento en $" : "Descuento en %"}</label>
+                <input type="number" value={c.descuentoValor} onChange={(e) => update(i, "descuentoValor", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              </div>
             </div>
-            <div className="flex items-center justify-between">
+
+            <div className="flex items-center justify-between gap-3 flex-wrap">
               <AdjuntarArchivo small nombre={c.archivoNombre} label="Adjuntar cotización (PDF/foto)" onSeleccionar={(n) => update(i, "archivoNombre", n)} />
-              {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && <div className="text-[11px] text-slate-500">Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b>{c.moneda && c.moneda !== "COP" && <> · ({c.moneda} {precioFinalEfectivo(c).toLocaleString("es-CO")} × tasa)</>}</div>}
+              {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (
+                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 text-xs text-slate-600">
+                  {item.cantidad} {item.unidad} × {c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}
+                  {c.moneda && c.moneda !== "COP" && <span className="text-slate-400"> (× tasa)</span>}
+                  {" "}· Subtotal: <b>{fmt(d.subtotal)}</b> · IVA: <b>{fmt(d.iva)}</b> · <span className="text-emerald-700 font-semibold text-sm">Total: {fmt(d.total)}</span>
+                </div>
+              )}
             </div>
           </div>
         );})}
