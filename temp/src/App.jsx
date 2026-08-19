@@ -1078,8 +1078,11 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                 <select value={c.unidadCotizada} onChange={(e) => update(i, "unidadCotizada", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
               </div>
               <div className="flex flex-col gap-0.5">
-                <label className="text-[10px] text-slate-400" title={`¿A cuántas ${item.unidad} equivale 1 ${c.unidadCotizada}?`}>Factor conv.</label>
-                <input type="number" title={`¿A cuántas ${item.unidad} equivale 1 ${c.unidadCotizada}?`} value={c.factorConversion} onChange={(e) => update(i, "factorConversion", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                <label className="text-[10px] text-slate-400">1 {c.unidadCotizada} equivale a</label>
+                <div className="flex items-center gap-1">
+                  <input type="number" value={c.factorConversion} onChange={(e) => update(i, "factorConversion", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                  <span className="text-[10px] text-slate-400 whitespace-nowrap">{item.unidad}</span>
+                </div>
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Moneda</label>
@@ -1133,15 +1136,20 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-start justify-between gap-3 flex-wrap">
               <AdjuntarArchivo small nombre={c.archivoNombre} label="Adjuntar cotización (PDF/foto)" onSeleccionar={(n) => update(i, "archivoNombre", n)} />
-              {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (
-                <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-1.5 text-xs text-slate-600">
-                  {item.cantidad} {item.unidad} × {c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}
-                  {c.moneda && c.moneda !== "COP" && <span className="text-slate-400"> (× tasa)</span>}
-                  {" "}· Subtotal: <b>{fmt(d.subtotal)}</b> · IVA: <b>{fmt(d.iva)}</b> · <span className="text-emerald-700 font-semibold text-sm">Total: {fmt(d.total)}</span>
-                </div>
-              )}
+              {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (() => {
+                const factor = parseFloat(c.factorConversion) || 1;
+                const precioPorUnidad = precioEquivalente(c);
+                return (
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-slate-600 space-y-0.5">
+                    {factor !== 1 && <div>1 {c.unidadCotizada} = {factor} {item.unidad} → {fmt(precioFinalEfectivo(c) * (c.moneda && c.moneda !== "COP" ? (parseFloat(c.tasaCambio) || 1) : 1))} ÷ {factor} = <b>{fmt(precioPorUnidad)}</b> por {item.unidad}</div>}
+                    <div>{item.cantidad} {item.unidad} × {fmt(precioPorUnidad)} = Subtotal <b>{fmt(d.subtotal)}</b></div>
+                    <div>+ IVA {c.ivaPct}%: <b>{fmt(d.iva)}</b></div>
+                    <div className="text-emerald-700 font-semibold text-sm pt-0.5 border-t border-emerald-200 mt-1">= Total: {fmt(d.total)}</div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         );})}
