@@ -594,7 +594,7 @@ function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
     if (!it.cotizaciones.length) return;
     const idx = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad);
     const cot = it.cotizaciones[idx]; if (!cot) return;
-    const prov = proveedores.find((p) => p.id === cot.proveedorId)?.nombre || "—";
+    const prov = proveedores.find((p) => p.id === cot.proveedorId)?.nombre || cot.proveedorNombre || "—";
     proveedorMonto[prov] = (proveedorMonto[prov] || 0) + desgloseCotizacion(cot, it.cantidad).total;
   }));
   const porProveedor = Object.entries(proveedorMonto).map(([nombre, monto]) => ({ nombre, monto })).sort((a, b) => b.monto - a.monto);
