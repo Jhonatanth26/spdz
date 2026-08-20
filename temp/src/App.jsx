@@ -1563,9 +1563,13 @@ function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
   const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
+
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><PackageCheck size={16} /> Recepción</div>
+      <div className="font-medium text-slate-700 flex items-center gap-2">
+        <PackageCheck size={16} /> Recepción
+        {r.recibidoSatisfaccion ? <Badge tone="green">Recibida</Badge> : <Badge tone="amber">Pendiente de recepción</Badge>}
+      </div>
       <div>
         <label className="text-xs font-medium text-slate-500 mb-1 block">Soportes de recepción (puedes adjuntar varios)</label>
         <div className="space-y-1.5">
@@ -1580,7 +1584,8 @@ function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
       </div>
       <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Comentarios (opcional)</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
       <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={r.recibidoSatisfaccion} onChange={(e) => set({ recibidoSatisfaccion: e.target.checked })} /> Recibo a satisfacción</label>
-      {!r.recibidoSatisfaccion && <div className="text-[11px] text-amber-600">Marca "Recibo a satisfacción" para poder completar la solicitud.</div>}
+      {!r.recibidoSatisfaccion && <div className="text-[11px] text-amber-600">Marca "Recibo a satisfacción" para que Compras pueda hacer la evaluación y finalizar la solicitud.</div>}
+      {r.recibidoSatisfaccion && <div className="text-[11px] text-emerald-600">✓ Recibida — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
     </div>
   );
 }
@@ -1945,7 +1950,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <ImagenPrivada path={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
-            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
+            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone="green">Recibida</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
           </div>
           <div className="text-right">
