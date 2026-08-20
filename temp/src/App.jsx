@@ -364,7 +364,7 @@ function ImagenPrivada({ path, alt, className }) {
 }
 
 // enlace que resuelve la URL temporal justo al hacer clic (no queda expuesta en el HTML)
-function EnlacePrivado({ path, children, className }) {
+function EnlacePrivado({ path, children, className, title }) {
   const [cargando, setCargando] = useState(false);
   const abrir = async () => {
     if (!path) return;
@@ -374,7 +374,7 @@ function EnlacePrivado({ path, children, className }) {
     if (url) window.open(url, "_blank", "noopener,noreferrer");
     else alert("No se pudo abrir el archivo.");
   };
-  return <button type="button" onClick={abrir} disabled={cargando} className={className}>{cargando ? "Abriendo..." : children}</button>;
+  return <button type="button" onClick={abrir} disabled={cargando} title={title} className={className}>{cargando ? "..." : children}</button>;
 }
 
 function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta }) {
@@ -757,6 +757,22 @@ function AutocompletarItem({ itemsCatalogo, valorTexto, catalogoId, onElegir, on
 }
 
 // campo de búsqueda con autocompletado para elegir un proveedor del catálogo (o dejarlo libre si no coincide con nada)
+// input numérico que muestra separador de miles mientras se escribe (ej. 150.000),
+// pero por dentro sigue guardando solo el número plano para los cálculos.
+function InputMiles({ value, onChange, className, placeholder }) {
+  const formatear = (v) => (v || v === 0) && v !== "" ? Number(v).toLocaleString("es-CO") : "";
+  const [texto, setTexto] = useState(formatear(value));
+  useEffect(() => { setTexto(formatear(value)); }, [value]); // eslint-disable-line
+
+  const manejarCambio = (e) => {
+    const crudo = e.target.value.replace(/[^\d]/g, "");
+    setTexto(crudo ? Number(crudo).toLocaleString("es-CO") : "");
+    onChange(crudo);
+  };
+
+  return <input type="text" inputMode="numeric" value={texto} onChange={manejarCambio} placeholder={placeholder} className={className} />;
+}
+
 function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir, onEscribir, className }) {
   const [abierto, setAbierto] = useState(false);
   const [indiceActivo, setIndiceActivo] = useState(0);
@@ -946,7 +962,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             <div className="flex gap-2 items-start flex-wrap">
               <input type="number" min="0" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.unidad} onChange={(e) => updateItem(it.id, "unidad", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
-              <input type="number" min="0" placeholder="Precio est." value={it.precioEstimado} onChange={(e) => updateItem(it.id, "precioEstimado", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+              <InputMiles placeholder="Precio est." value={it.precioEstimado} onChange={(v) => updateItem(it.id, "precioEstimado", v)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.moneda} onChange={(e) => cambiarMonedaItem(it.id, e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
               {it.moneda !== "COP" && (
                 <div className="flex items-center gap-1">
@@ -958,7 +974,11 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
                 <option value="porcentaje">Desc. %</option>
                 <option value="valor">Desc. $</option>
               </select>
-              <input type="number" min="0" placeholder={it.descuentoTipo === "valor" ? "Descuento en $" : "Descuento en %"} value={it.descuentoValor} onChange={(e) => updateItem(it.id, "descuentoValor", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+              {it.descuentoTipo === "valor" ? (
+                <InputMiles placeholder="Descuento en $" value={it.descuentoValor} onChange={(v) => updateItem(it.id, "descuentoValor", v)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+              ) : (
+                <input type="number" min="0" placeholder="Descuento en %" value={it.descuentoValor} onChange={(e) => updateItem(it.id, "descuentoValor", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+              )}
               <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
@@ -1090,11 +1110,11 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Precio inicial</label>
-                <input type="number" value={c.precioUnitario} onChange={(e) => update(i, "precioUnitario", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                <InputMiles value={c.precioUnitario} onChange={(v) => update(i, "precioUnitario", v)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Precio final neg.</label>
-                <input type="number" value={c.precioFinal} onChange={(e) => update(i, "precioFinal", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                <InputMiles value={c.precioFinal} onChange={(v) => update(i, "precioFinal", v)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">IVA</label>
@@ -1132,7 +1152,11 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
               <div className="col-span-2 flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">{c.descuentoTipo === "valor" ? "Descuento en $" : "Descuento en %"}</label>
-                <input type="number" value={c.descuentoValor} onChange={(e) => update(i, "descuentoValor", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                {c.descuentoTipo === "valor" ? (
+                  <InputMiles value={c.descuentoValor} onChange={(v) => update(i, "descuentoValor", v)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                ) : (
+                  <input type="number" value={c.descuentoValor} onChange={(e) => update(i, "descuentoValor", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                )}
               </div>
             </div>
 
@@ -1190,7 +1214,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
         <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">Total (COP)</th><th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
         <tbody>{scored.map((c, i) => (
           <tr key={i} className={`border-t border-slate-100 ${i === bestIdx ? "bg-emerald-50/60" : ""}`}>
-            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.archivoNombre && <Paperclip size={11} className="text-slate-400" />}</td>
+            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
             <td className="px-3 py-2 text-right">{c.precioUnitario ? `${c.moneda && c.moneda !== "COP" ? c.moneda + " " : ""}${Number(c.precioUnitario).toLocaleString("es-CO")}` : "—"}</td>
             <td className="px-3 py-2 text-right">{c.descuentoValor ? (c.descuentoTipo === "valor" ? `-${Number(c.descuentoValor).toLocaleString("es-CO")}` : `-${c.descuentoValor}%`) : "—"}</td>
             <td className="px-3 py-2 text-right">{c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}</td>
@@ -1420,19 +1444,19 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
     for (const idx of seleccionadas) {
       const orden = ordenesFirmadas[idx];
       const prov = buscarProveedorDeOrden(orden, proveedores);
-      const correo = prov?.email || (correosManual[idx] || "").trim();
-      if (!correo) { sinCorreo++; continue; }
+      const correos = correosDe(prov).length ? correosDe(prov) : ((correosManual[idx] || "").trim() ? [(correosManual[idx] || "").trim()] : []);
+      if (!correos.length) { sinCorreo++; continue; }
       const url = await obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800);
       if (url) {
         await enviarCorreo(
-          correo,
+          correos,
           `Reenvío — Orden de compra/servicio ${solicitud.folio}`,
           `<p>Hola ${prov?.nombre || orden.proveedorNombre},</p><p>Te reenviamos el enlace de la orden de compra/servicio <b>${solicitud.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
         );
         enviados++;
         // si el correo se escribió a mano y el proveedor existe sin correo, lo guardamos para la próxima vez
-        if (!prov?.email && guardarProveedor && prov) {
-          await guardarProveedor({ ...prov, email: correo });
+        if (!correosDe(prov).length && guardarProveedor && prov) {
+          await guardarProveedor({ ...prov, email: correos[0] });
         }
       }
     }
@@ -1452,8 +1476,8 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
           <div key={idx} className="flex items-center gap-2 text-sm text-slate-700 border border-slate-200 rounded-md px-3 py-2">
             <input type="checkbox" checked={seleccionadas.includes(idx)} onChange={() => alternar(idx)} />
             <span>{o.proveedorNombre}</span>
-            {prov?.email ? (
-              <span className="text-[11px] text-slate-400 ml-auto">{prov.email}</span>
+            {correosDe(prov).length ? (
+              <span className="text-[11px] text-slate-400 ml-auto">{correosDe(prov).join(" · ")}</span>
             ) : (
               <input
                 type="email"
@@ -1488,42 +1512,31 @@ function CalificacionSelect({ value, onChange, disabled }) {
   );
 }
 
-function EvaluacionPanel({ solicitud, currentUser, onGuardar, onEnviarACompras }) {
+function EvaluacionPanel({ solicitud, currentUser, onGuardar }) {
   const e = solicitud.evaluacion || { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } };
-  // cada rol edita solo su bloque; el resto puede verlo (solo lectura) para tener el contexto completo
-  const puedeSolicitante = currentUser.rol === "Solicitante" || currentUser.rol === "Administrador";
-  const puedeCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
+  const esCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
   const yaFinalizada = solicitud.status !== "recepcion";
-  const parteSolicitanteLista = !!e.solicitante.calidad && !!e.solicitante.entregaOportuna;
+
+  // la evaluación es responsabilidad exclusiva de Compras — el Solicitante no la ve
+  if (currentUser.rol === "Solicitante") return null;
 
   const setSolicitante = (campo, val) => onGuardar({ ...e, solicitante: { ...e.solicitante, [campo]: val } });
   const setCompras = (campo, val) => onGuardar({ ...e, compras: { ...e.compras, [campo]: val } });
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><Award size={16} /> Evaluación de recepción {!yaFinalizada && <span className="text-[11px] text-amber-600 font-normal">(obligatoria para completar)</span>}</div>
+      <div className="font-medium text-slate-700 flex items-center gap-2"><Award size={16} /> Evaluación de recepción {!yaFinalizada && <span className="text-[11px] text-amber-600 font-normal">(obligatoria para completar — la hace Compras)</span>}</div>
 
       <div className="border border-slate-200 rounded-lg p-3">
-        <div className="text-sm font-medium text-slate-700 mb-2">Solicitante {!puedeSolicitante && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
+        <div className="text-sm font-medium text-slate-700 mb-2">Calificación del proveedor {!esCompras && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
         <div className="grid grid-cols-2 gap-3 mb-2">
-          <div><label className="text-xs text-slate-500 block mb-1">Calidad (1-10)</label><CalificacionSelect value={e.solicitante.calidad} onChange={(v) => setSolicitante("calidad", v)} disabled={!puedeSolicitante || yaFinalizada} /></div>
-          <div><label className="text-xs text-slate-500 block mb-1">Entrega oportuna (1-10)</label><CalificacionSelect value={e.solicitante.entregaOportuna} onChange={(v) => setSolicitante("entregaOportuna", v)} disabled={!puedeSolicitante || yaFinalizada} /></div>
+          <div><label className="text-xs text-slate-500 block mb-1">Calidad (1-10)</label><CalificacionSelect value={e.solicitante.calidad} onChange={(v) => setSolicitante("calidad", v)} disabled={!esCompras || yaFinalizada} /></div>
+          <div><label className="text-xs text-slate-500 block mb-1">Entrega oportuna (1-10)</label><CalificacionSelect value={e.solicitante.entregaOportuna} onChange={(v) => setSolicitante("entregaOportuna", v)} disabled={!esCompras || yaFinalizada} /></div>
+          <div><label className="text-xs text-slate-500 block mb-1">Precio (1-10)</label><CalificacionSelect value={e.compras.precio} onChange={(v) => setCompras("precio", v)} disabled={!esCompras || yaFinalizada} /></div>
+          <div><label className="text-xs text-slate-500 block mb-1">Servicio al cliente (1-10)</label><CalificacionSelect value={e.compras.servicioCliente} onChange={(v) => setCompras("servicioCliente", v)} disabled={!esCompras || yaFinalizada} /></div>
         </div>
         <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
-        <textarea value={e.solicitante.observaciones} onChange={(ev) => setSolicitante("observaciones", ev.target.value)} disabled={!puedeSolicitante || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
-        {puedeSolicitante && !yaFinalizada && parteSolicitanteLista && (
-          <button onClick={onEnviarACompras} className="mt-2 text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Send size={12} /> Enviar encuesta a Compras para el cierre final</button>
-        )}
-      </div>
-
-      <div className="border border-slate-200 rounded-lg p-3">
-        <div className="text-sm font-medium text-slate-700 mb-2">Compras {!puedeCompras && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
-        <div className="grid grid-cols-2 gap-3 mb-2">
-          <div><label className="text-xs text-slate-500 block mb-1">Precio (1-10)</label><CalificacionSelect value={e.compras.precio} onChange={(v) => setCompras("precio", v)} disabled={!puedeCompras || yaFinalizada} /></div>
-          <div><label className="text-xs text-slate-500 block mb-1">Servicio al cliente (1-10)</label><CalificacionSelect value={e.compras.servicioCliente} onChange={(v) => setCompras("servicioCliente", v)} disabled={!puedeCompras || yaFinalizada} /></div>
-        </div>
-        <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
-        <textarea value={e.compras.observaciones} onChange={(ev) => setCompras("observaciones", ev.target.value)} disabled={!puedeCompras || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
+        <textarea value={e.compras.observaciones} onChange={(ev) => setCompras("observaciones", ev.target.value)} disabled={!esCompras || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
       </div>
 
       {!yaFinalizada && !evaluacionCompleta(solicitud) && <div className="text-[11px] text-amber-600">Faltan calificaciones obligatorias (calidad, entrega oportuna, precio y servicio al cliente) para poder completar la solicitud.</div>}
@@ -1851,10 +1864,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       (solicitud.ocEnviada.ordenesProveedor || []).forEach((orden) => {
         if (!orden.archivoFirmadoUrl) return;
         const prov = buscarProveedorDeOrden(orden, proveedores);
-        if (prov?.email) ordenesConCorreo.push({ orden, prov });
+        if (correosDe(prov).length) ordenesConCorreo.push({ orden, prov });
         else ordenesSinCorreo.push(orden);
       });
-      const detalleProveedores = ordenesConCorreo.length ? ` Se envió a: ${ordenesConCorreo.map((o) => `${o.prov.nombre} (${o.prov.email})`).join(", ")}.` : "";
+      const detalleProveedores = ordenesConCorreo.length ? ` Se envió a: ${ordenesConCorreo.map((o) => `${o.prov.nombre} (${correosDe(o.prov).join(", ")})`).join(", ")}.` : "";
       const avisoSinCorreo = ordenesSinCorreo.length ? ` ⚠ Sin correo registrado, NO se envió a: ${ordenesSinCorreo.map((o) => o.proveedorNombre).join(", ")} — usa "Reenviar orden(es) firmada(s)" para escribirlo y enviarlo.` : "";
       patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}).${detalleProveedores}${avisoSinCorreo}`) });
       if (solicitante?.email) {
@@ -1864,12 +1877,12 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           `<p>Hola ${solicitante.nombre},</p><p>La orden <b>${solicitud.folio}</b> ya fue enviada al proveedor y quedó lista para recepción.</p>`
         );
       }
-      // envía la orden firmada por correo a cada proveedor que sí tenga correo registrado
+      // envía la orden firmada por correo a cada proveedor que sí tenga correo registrado (hasta 2 correos por proveedor)
       ordenesConCorreo.forEach(({ orden, prov }) => {
         obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800).then((url) => {
           if (!url) return;
           enviarCorreo(
-            prov.email,
+            correosDe(prov),
             `Orden de compra/servicio ${solicitud.folio}`,
             `<p>Hola ${prov.nombre},</p><p>Adjuntamos el enlace de la orden de compra/servicio <b>${solicitud.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
           );
@@ -1969,9 +1982,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Pendiente de revisión por el área de Compras antes de continuar con las cotizaciones.</div>
       )}
 
-      {solicitud.status === "cotizando" && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada") && (
+      {!comparativoBloqueado && ["cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status) && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada") && puedeGestionarCotizaciones(currentUser) && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <div className="font-medium text-slate-700">Cargar hasta 3 cotizaciones por ítem (Compras)</div>
+          <div className="text-[11px] text-slate-400">Si por error solo guardaste 1 o 2, puedes seguir agregando hasta 3 aquí mismo, incluso después de generar el cuadro comparativo — hasta que se cree la orden.</div>
           {solicitud.items.map((it) => <CotizacionForm key={it.id} item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} />)}
         </div>
       )}
@@ -2000,11 +2014,6 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           solicitud={solicitud}
           currentUser={currentUser}
           onGuardar={(ev) => patch({ evaluacion: ev })}
-          onEnviarACompras={() => {
-            const equipoCompras = usuarios.filter((u) => u.rol === "Compras" && u.email);
-            equipoCompras.forEach((u) => enviarCorreo(u.email, `Encuesta lista para cierre: ${solicitud.folio}`, `<p>Hola ${u.nombre},</p><p>${solicitante?.nombre} completó su parte de la evaluación de recepción de la solicitud <b>${solicitud.folio}</b>. Ya puedes completar tu calificación y hacer el cierre final.</p>`));
-            patch({ notificaciones: notificar(equipoCompras.length ? `Encuesta enviada al área de Compras (${equipoCompras.map((u) => u.nombre).join(", ")}) para el cierre final.` : "Se intentó enviar la encuesta a Compras, pero no hay usuarios de Compras con correo configurado.") });
-          }}
         />
       )}
 
@@ -2101,6 +2110,11 @@ function buscarProveedorDeOrden(orden, proveedores) {
     return proveedores.find((p) => p.nombre.trim().toLowerCase() === nombreNorm);
   }
   return null;
+}
+
+// junta los hasta 2 correos registrados de un proveedor (email principal + adicional)
+function correosDe(prov) {
+  return [prov?.email, prov?.email2].map((e) => (e || "").trim()).filter(Boolean);
 }
 
 // true si ya existe una orden firmada para cada proveedor adjudicado de la solicitud
@@ -2244,11 +2258,11 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
     let enviados = 0, sinCorreo = 0;
     for (const orden of ordenesFirmadas) {
       const prov = buscarProveedorDeOrden(orden, proveedores);
-      if (!prov?.email) { sinCorreo++; continue; }
+      if (!correosDe(prov).length) { sinCorreo++; continue; }
       const url = await obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800);
       if (url) {
         await enviarCorreo(
-          prov.email,
+          correosDe(prov),
           `Reenvío — Orden de compra/servicio ${s.folio}`,
           `<p>Hola ${prov.nombre},</p><p>Te reenviamos el enlace de la orden de compra/servicio <b>${s.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
         );
@@ -2369,7 +2383,7 @@ function Catalogos({
           columnas={[{ key: "nombre", label: "Nombre" }]}
           datos={departamentos} onGuardar={guardarDepartamento} onEliminar={eliminarDepartamento} plantilla={{ nombre: "" }} />
       )}
-      {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }, { key: "actividadEconomica", label: "Actividad económica" }, { key: "contacto", label: "Contacto" }, { key: "email", label: "Correo electrónico" }]} datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro} plantilla={{ nombre: "", nit: "", actividadEconomica: "", contacto: "", email: "" }} />}
+      {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }, { key: "actividadEconomica", label: "Actividad económica" }, { key: "contacto", label: "Contacto" }, { key: "email", label: "Correo electrónico" }, { key: "email2", label: "Correo adicional" }]} datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro} plantilla={{ nombre: "", nit: "", actividadEconomica: "", contacto: "", email: "", email2: "" }} />}
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
@@ -2409,8 +2423,8 @@ export default function App() {
     orderBy: 'nombre',
   });
   const { datos: proveedores, cargando: cargandoProveedores, guardar: guardarProveedor, eliminar: eliminarProveedor, guardarVarios: importarProveedores } = useSupabaseTable('proveedores', {
-    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, nit: r.nit, actividadEconomica: r.actividad_economica, contacto: r.contacto, email: r.email }),
-    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, nit: r.nit, actividad_economica: r.actividadEconomica, contacto: r.contacto, email: r.email }),
+    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, nit: r.nit, actividadEconomica: r.actividad_economica, contacto: r.contacto, email: r.email, email2: r.email2 }),
+    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, nit: r.nit, actividad_economica: r.actividadEconomica, contacto: r.contacto, email: r.email, email2: r.email2 }),
     orderBy: 'nombre',
   });
   const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios } = useSupabaseTable('usuarios', {
