@@ -587,7 +587,11 @@ function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
 
   const porArea = areas.map((a) => ({ nombre: a.nombre, monto: base.filter((s) => s.areaId === a.id && !["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0) }));
   const porTipo = [{ nombre: "Compra", value: base.filter((s) => s.tipo === "compra").length }, { nombre: "Servicio", value: base.filter((s) => s.tipo === "servicio").length }];
-  const porEstado = PASOS.map((p) => ({ nombre: p.label, value: base.filter((s) => s.status === p.key).length })).filter((e) => e.value > 0);
+  const porEstado = [
+    ...PASOS.filter((p) => p.key !== "recepcion").map((p) => ({ nombre: p.label, value: base.filter((s) => s.status === p.key).length })),
+    { nombre: "Recepción / Ejecución (pendiente)", value: base.filter((s) => s.status === "recepcion" && !s.recepcion?.recibidoSatisfaccion).length },
+    { nombre: "Recibida (falta evaluación)", value: base.filter((s) => s.status === "recepcion" && s.recepcion?.recibidoSatisfaccion).length },
+  ].filter((e) => e.value > 0);
   const porEmpresaComparativo = empresas.map((e) => ({ nombre: e.nombre, monto: solicitudes.filter((s) => s.empresaId === e.id && !["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0) }));
   const proveedorMonto = {};
   base.forEach((s) => s.items.forEach((it) => {
@@ -2136,6 +2140,13 @@ function correosDe(prov) {
 }
 
 // true si ya existe una orden firmada para cada proveedor adjudicado de la solicitud
+// etiqueta de estado a mostrar en listados: distingue "Recibida" dentro del paso de Recepción/Ejecución
+function estadoMostrado(s) {
+  if (s.status === "rechazada") return "Rechazada";
+  if (s.status === "recepcion" && s.recepcion?.recibidoSatisfaccion) return "Recibida";
+  return PASOS.find((p) => p.key === s.status)?.label || s.status;
+}
+
 function todasOrdenesFirmadas(solicitud, proveedores) {
   const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
   const ordenes = solicitud.ocEnviada.ordenesProveedor || [];
@@ -2307,7 +2318,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
             <td className="px-4 py-2.5 text-slate-600 max-w-[220px] truncate" title={s.objetivo}>{s.objetivo}</td>
             <td className="px-4 py-2.5 text-slate-600 max-w-[160px] truncate" title={proveedoresAdjudicados(s, proveedores)}>{proveedoresAdjudicados(s, proveedores)}</td>
             <td className="px-4 py-2.5 text-right text-slate-600">{fmt(totalSolicitud(s))}</td>
-            <td className="px-4 py-2.5"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : "slate"}>{s.status === "rechazada" ? "Rechazada" : paso?.label}</Badge></td>
+            <td className="px-4 py-2.5"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : (s.status === "recepcion" && s.recepcion?.recibidoSatisfaccion) ? "blue" : "slate"}>{estadoMostrado(s)}</Badge></td>
             {puedeReenviar && <td className="px-4 py-2.5 text-right"><button title="Reenviar orden firmada al proveedor" disabled={enviandoId === s.id} onClick={(e) => reenviarTodas(e, s, empresa)} className="text-slate-400 hover:text-indigo-600 p-1 disabled:opacity-40"><Send size={15} /></button></td>}
             <td className="px-4 py-2.5 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
             <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
