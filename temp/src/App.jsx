@@ -4,7 +4,7 @@ import * as XLSX from "xlsx";
 import { useAuth } from "./hooks/useAuth";
 import { useSupabaseTable } from "./hooks/useSupabaseTable";
 import { useSolicitudes } from "./hooks/useSolicitudes";
-import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_MB } from "./lib/storage";
+import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_MB, subirArchivoPublico } from "./lib/storage";
 import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
 import { enviarCorreo } from "./lib/correo";
@@ -1621,7 +1621,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       {/* ENCABEZADO */}
       <div className="flex justify-between items-start border-b border-slate-200 pb-3">
         <div className="flex items-center gap-3">
-          {empresa?.logoUrl && <ImagenPrivada path={empresa.logoUrl} alt={empresa.nombre} className="h-12 max-w-[120px] object-contain" />}
+          {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-12 max-w-[120px] object-contain" />}
           <div>
             <div className="text-base font-semibold text-slate-800">{solicitud.tipo === "compra" ? "Solicitud de Compra" : "Orden de servicio/trabajo"}</div>
             <div className="text-xs text-slate-400">{solicitud.folio} · {empresa?.nombre}</div>
@@ -1952,7 +1952,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="flex items-start justify-between flex-wrap gap-3">
-          {empresa?.logoUrl && <ImagenPrivada path={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
+          {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
             <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone="green">Recibida</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
@@ -2333,8 +2333,8 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
 function EmpresasLogos({ empresas, onGuardar }) {
   const cargarLogo = async (empresa, file) => {
     if (!archivoDentroDelLimite(file)) { alert(`El archivo pesa más de ${TAMANO_MAXIMO_MB} MB. Sube uno más liviano.`); return; }
-    const ruta = await subirArchivo(file, "logos");
-    if (ruta) onGuardar({ ...empresa, logoUrl: ruta });
+    const url = await subirArchivoPublico(file, "logos");
+    if (url) onGuardar({ ...empresa, logoUrl: url });
   };
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -2344,7 +2344,7 @@ function EmpresasLogos({ empresas, onGuardar }) {
         {empresas.map((e) => (
           <div key={e.id} className="border border-slate-200 rounded-lg p-3 flex items-center gap-3">
             <div className="w-16 h-16 border border-dashed border-slate-300 rounded-lg flex items-center justify-center overflow-hidden bg-slate-50 shrink-0">
-              {e.logoUrl ? <ImagenPrivada path={e.logoUrl} alt={e.nombre} className="max-w-full max-h-full object-contain" /> : <Building2 size={20} className="text-slate-300" />}
+              {e.logoUrl ? <img src={e.logoUrl} alt={e.nombre} className="max-w-full max-h-full object-contain" /> : <Building2 size={20} className="text-slate-300" />}
             </div>
             <div className="flex-1">
               <div className="text-sm font-medium text-slate-700">{e.nombre}</div>

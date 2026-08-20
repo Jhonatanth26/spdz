@@ -1,11 +1,21 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Lock } from "lucide-react";
+import { supabase } from "./lib/supabaseClient";
 
 function LoginReal({ onIniciarSesion }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [cargando, setCargando] = useState(false);
+  const [empresas, setEmpresas] = useState([]);
+
+  useEffect(() => {
+    // los logos son públicos y la tabla "empresas" se puede leer sin sesión iniciada,
+    // así que se pueden mostrar aquí mismo antes de ingresar
+    supabase.from("empresas").select("nombre, logo_url").then(({ data, error }) => {
+      if (!error && data) setEmpresas(data.filter((e) => e.logo_url));
+    });
+  }, []);
 
   const submit = async () => {
     setError(""); setCargando(true);
@@ -46,6 +56,17 @@ function LoginReal({ onIniciarSesion }) {
         >
           <Lock size={14} /> {cargando ? "Ingresando..." : "Ingresar"}
         </button>
+
+        {empresas.length > 0 && (
+          <div className="mt-6 pt-5 border-t border-slate-100">
+            <div className="text-[10px] text-slate-400 text-center mb-2 uppercase tracking-wide">Empresas del grupo</div>
+            <div className="flex items-center justify-center gap-4 flex-wrap">
+              {empresas.map((e, i) => (
+                <img key={i} src={e.logo_url} alt={e.nombre} title={e.nombre} className="h-8 max-w-[90px] object-contain opacity-80" />
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

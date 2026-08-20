@@ -32,3 +32,19 @@ export const TAMANO_MAXIMO_MB = 10
 export function archivoDentroDelLimite(file) {
   return file.size <= TAMANO_MAXIMO_MB * 1024 * 1024
 }
+
+// Sube un archivo al bucket PÚBLICO "logos-publicos" (solo para logos de empresa)
+// y devuelve directamente la URL pública — se puede usar en <img src> sin sesión iniciada.
+export async function subirArchivoPublico(file, carpeta = 'logos') {
+  if (!archivoDentroDelLimite(file)) return null
+  const nombreLimpio = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const ruta = `${carpeta}/${Date.now()}_${nombreLimpio}`
+
+  const { error } = await supabase.storage.from('logos-publicos').upload(ruta, file, { upsert: false })
+  if (error) {
+    console.error('Error subiendo logo a Storage:', error.message)
+    return null
+  }
+  const { data } = supabase.storage.from('logos-publicos').getPublicUrl(ruta)
+  return data.publicUrl
+}
