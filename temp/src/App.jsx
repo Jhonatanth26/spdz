@@ -1534,8 +1534,8 @@ function EvaluacionPanel({ solicitud, currentUser, onGuardar }) {
   const esCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
   const yaFinalizada = solicitud.status !== "recepcion";
 
-  // la evaluación es responsabilidad exclusiva de Compras — el Solicitante no la ve
-  if (currentUser.rol === "Solicitante") return null;
+  // la evaluación es responsabilidad exclusiva de Compras — nadie más la ve, ni en solo lectura
+  if (!esCompras) return null;
 
   const setSolicitante = (campo, val) => onGuardar({ ...e, solicitante: { ...e.solicitante, [campo]: val } });
   const setCompras = (campo, val) => onGuardar({ ...e, compras: { ...e.compras, [campo]: val } });
