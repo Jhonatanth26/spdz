@@ -1,7 +1,7 @@
 import { PDFDocument, rgb } from 'pdf-lib'
 
 // Toma el PDF original (por su URL en Storage) y estampa la firma en TODAS sus páginas
-// (foto de firma + nombre, cargo y empresa de quien firma), devolviendo un PDF nuevo (Blob).
+// (foto de firma arriba, y debajo el texto "Firmado digitalmente por..."), devolviendo un PDF nuevo (Blob).
 export async function firmarPDF(urlPdfOriginal, urlFirmaFoto, nombreFirmante, cargoFirmante, empresaNombre) {
   const pdfBytes = await fetch(urlPdfOriginal).then((r) => r.arrayBuffer())
   const pdfDoc = await PDFDocument.load(pdfBytes)
@@ -26,21 +26,26 @@ export async function firmarPDF(urlPdfOriginal, urlFirmaFoto, nombreFirmante, ca
 
   paginas.forEach((pagina, idx) => {
     const { width } = pagina.getSize()
+    const columnaX = width - 210 // misma columna para la imagen y el texto, alineados a la derecha
+
+    let yTexto = 68 // arranca justo aquí; si hay imagen, se recalcula más abajo de ella
 
     if (imagen) {
       const dims = imagen.scale(0.18)
+      const yImagen = 68
       pagina.drawImage(imagen, {
-        x: width - dims.width - 50,
-        y: 78,
+        x: columnaX,
+        y: yImagen,
         width: dims.width,
         height: dims.height,
       })
+      yTexto = yImagen - 12 // el texto queda justo debajo de la imagen
     }
 
     lineas.forEach((linea, i) => {
       pagina.drawText(linea, {
-        x: 40,
-        y: 42 - i * 11,
+        x: columnaX,
+        y: yTexto - i * 11,
         size: 8,
         color: rgb(0.35, 0.35, 0.35),
       })
