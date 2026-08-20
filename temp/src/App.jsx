@@ -1427,7 +1427,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
 // permite a Compras reenviar por correo una orden ya firmada (ej. si el proveedor la perdió o no llegó)
 function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empresa, currentUser }) {
   const [seleccionadas, setSeleccionadas] = useState([]);
-  const [correosManual, setCorreosManual] = useState({});
+  const [correosManual, setCorreosManual] = useState({}); // { idx: { c1: "", c2: "" } }
   const [enviando, setEnviando] = useState(false);
   const [mensaje, setMensaje] = useState("");
   if (!puedeGestionarCotizaciones(currentUser)) return null;
@@ -1437,6 +1437,7 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
   if (!ordenesFirmadas.length) return null;
 
   const alternar = (idx) => setSeleccionadas((prev) => prev.includes(idx) ? prev.filter((x) => x !== idx) : [...prev, idx]);
+  const setManual = (idx, campo, val) => setCorreosManual((prev) => ({ ...prev, [idx]: { ...prev[idx], [campo]: val } }));
 
   const reenviar = async () => {
     setEnviando(true);
@@ -1444,7 +1445,9 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
     for (const idx of seleccionadas) {
       const orden = ordenesFirmadas[idx];
       const prov = buscarProveedorDeOrden(orden, proveedores);
-      const correos = correosDe(prov).length ? correosDe(prov) : ((correosManual[idx] || "").trim() ? [(correosManual[idx] || "").trim()] : []);
+      const manual1 = (correosManual[idx]?.c1 || "").trim();
+      const manual2 = (correosManual[idx]?.c2 || "").trim();
+      const correos = correosDe(prov).length ? correosDe(prov) : [manual1, manual2].filter(Boolean);
       if (!correos.length) { sinCorreo++; continue; }
       const url = await obtenerUrlFirmada(orden.archivoFirmadoUrl, 604800);
       if (url) {
@@ -1454,9 +1457,9 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
           `<p>Hola ${prov?.nombre || orden.proveedorNombre},</p><p>Te reenviamos el enlace de la orden de compra/servicio <b>${solicitud.folio}</b> a nombre de ${empresa?.nombre || ""}.</p><p><a href="${url}">Ver / descargar la orden firmada</a></p><p>Este enlace estará disponible por 7 días.</p>`
         );
         enviados++;
-        // si el correo se escribió a mano y el proveedor existe sin correo, lo guardamos para la próxima vez
+        // si los correos se escribieron a mano y el proveedor existe sin correo, los guardamos para la próxima vez
         if (!correosDe(prov).length && guardarProveedor && prov) {
-          await guardarProveedor({ ...prov, email: correos[0] });
+          await guardarProveedor({ ...prov, email: manual1, email2: manual2 });
         }
       }
     }
@@ -1479,14 +1482,24 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
             {correosDe(prov).length ? (
               <span className="text-[11px] text-slate-400 ml-auto">{correosDe(prov).join(" · ")}</span>
             ) : (
-              <input
-                type="email"
-                placeholder="Correo del proveedor (escríbelo para poder enviar)"
-                value={correosManual[idx] || ""}
-                onChange={(e) => setCorreosManual((prev) => ({ ...prev, [idx]: e.target.value }))}
-                onClick={(e) => e.stopPropagation()}
-                className="ml-auto border border-slate-200 rounded-md px-2 py-1 text-xs w-64"
-              />
+              <div className="ml-auto flex gap-1.5">
+                <input
+                  type="email"
+                  placeholder="Correo del proveedor"
+                  value={correosManual[idx]?.c1 || ""}
+                  onChange={(e) => setManual(idx, "c1", e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="border border-slate-200 rounded-md px-2 py-1 text-xs w-48"
+                />
+                <input
+                  type="email"
+                  placeholder="Correo adicional (opcional)"
+                  value={correosManual[idx]?.c2 || ""}
+                  onChange={(e) => setManual(idx, "c2", e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  className="border border-slate-200 rounded-md px-2 py-1 text-xs w-48"
+                />
+              </div>
             )}
           </div>
         );
