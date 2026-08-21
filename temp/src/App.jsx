@@ -217,6 +217,16 @@ const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (u.rol === "
 const puedeGestionarCotizaciones = (u) => u.rol === "Administrador" || u.rol === "Compras";
 const puedeAprobarFinanciera = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
 const puedeAprobarGerencia = (u) => u.rol === "Administrador" || u.rol === "Gerencia";
+const puedeReabrir = (u) => ["Administrador", "Compras", "Dirección Financiera"].includes(u.rol);
+// determina en qué paso quedó marcada como rechazada, para poder reabrirla justo ahí
+function pasoDelRechazo(solicitud) {
+  if (solicitud.firmas?.gerencia?.aprobado === false) return { status: "aprobacion_gerencia", campo: "gerencia" };
+  if (solicitud.firmas?.financiera?.aprobado === false) return { status: "aprobacion_financiera", campo: "financiera" };
+  if (solicitud.firmas?.director?.aprobado === false) return { status: "aprobacion_director", campo: "director" };
+  if (solicitud.firmas?.jefe?.aprobado === false) return { status: "aprobacion_jefe", campo: "jefe" };
+  if (solicitud.revisionCompras?.estado === "rechazada") return { status: "cotizando", campo: null, revision: true };
+  return { status: "aprobacion_jefe", campo: null };
+}
 const puedeVerCatalogos = (u) => u.rol === "Administrador" || ["Compras", "Dirección Financiera", "Gerencia"].includes(u.rol);
 const puedeVerTodasSolicitudes = (u) => u.rol === "Administrador" || u.rol !== "Solicitante";
 const puedeEditarPagos = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
@@ -763,6 +773,16 @@ function AutocompletarItem({ itemsCatalogo, valorTexto, catalogoId, onElegir, on
 // campo de búsqueda con autocompletado para elegir un proveedor del catálogo (o dejarlo libre si no coincide con nada)
 // input numérico que muestra separador de miles mientras se escribe (ej. 150.000),
 // pero por dentro sigue guardando solo el número plano para los cálculos.
+// campo de fecha que no permite elegir (ni escribir) una fecha anterior a hoy
+function InputFecha({ value, onChange, disabled, className }) {
+  const manejarCambio = (e) => {
+    const val = e.target.value;
+    if (val && val < hoy()) { alert("No se puede seleccionar una fecha anterior a hoy."); return; }
+    onChange(val);
+  };
+  return <input type="date" min={hoy()} disabled={disabled} value={value} onChange={manejarCambio} className={className} />;
+}
+
 function InputMiles({ value, onChange, className, placeholder }) {
   const formatear = (v) => (v || v === 0) && v !== "" ? Number(v).toLocaleString("es-CO") : "";
   const [texto, setTexto] = useState(formatear(value));
@@ -947,7 +967,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div><label className="text-xs font-medium text-slate-500">Solicitante</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500">{currentUser.nombre} (firma automática)</div></div>
         <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Layers size={12} /> Centro de costo</label><select value={centroCostoId} onChange={(e) => setCentroCostoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{centrosCosto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Concepto de gasto</label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{conceptosGasto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
-        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><input type="date" value={fechaEstimada} onChange={(e) => setFechaEstimada(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
+        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
       </div>
@@ -1009,9 +1029,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       <div className="mb-5 bg-slate-50 rounded-lg p-3 border border-slate-200">
         <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><CalendarClock size={13} /> Plan de pagos sugerido (opcional — Dirección Financiera lo confirmará o ajustará)</div>
         <div className="grid grid-cols-3 gap-2">
-          <div><input type="number" placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: e.target.value } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1" /><input type="date" value={pagosSugeridos.anticipo.fecha} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, fecha: e.target.value } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" /></div>
-          <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" checked={pagosSugeridos.intermedio.activo} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, activo: e.target.checked } })} /> Intermedio</label><input type="number" placeholder="Valor" disabled={!pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.valor} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, valor: e.target.value } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><input type="date" disabled={!pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.fecha} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, fecha: e.target.value } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
-          <div><input type="number" placeholder="Pago final" value={pagosSugeridos.final.valor} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, valor: e.target.value } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1" /><input type="date" value={pagosSugeridos.final.fecha} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, fecha: e.target.value } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" /></div>
+          <div><InputMiles placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1" /><InputFecha value={pagosSugeridos.anticipo.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" /></div>
+          <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" checked={pagosSugeridos.intermedio.activo} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, activo: e.target.checked } })} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+          <div><InputMiles placeholder="Pago final" value={pagosSugeridos.final.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1" /><InputFecha value={pagosSugeridos.final.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" /></div>
         </div>
       </div>
 
@@ -1319,6 +1339,18 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
   const set = (campo, sub, val) => { const copy = { ...pagos, [campo]: { ...pagos[campo], [sub]: val } }; setPagos(copy); onProgramar(copy); };
   const usarSugerencia = () => { setPagos(sug); onProgramar(sug); };
 
+  const confirmar = () => {
+    if (Math.abs(restante) > 0.5) {
+      alert(restante > 0 ? `El plan de pagos no cubre el total: faltan ${fmt(restante)} por programar.` : `El plan de pagos supera el total en ${fmt(-restante)}. Ajusta los valores antes de confirmar.`);
+      return;
+    }
+    if (!pagos.anticipo.fecha || !pagos.final.fecha || (pagos.intermedio.activo && !pagos.intermedio.fecha)) {
+      alert("Falta poner la fecha de uno o más pagos antes de confirmar.");
+      return;
+    }
+    onConfirmar();
+  };
+
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
       <div className="flex items-center justify-between mb-1">
@@ -1335,26 +1367,27 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
         <div className="border border-slate-200 rounded-lg p-3">
           <div className="text-xs font-medium text-slate-500 mb-2">Anticipo</div>
-          <input disabled={!editable} type="number" placeholder="Valor anticipo" value={pagos.anticipo.valor} onChange={(e) => set("anticipo", "valor", e.target.value)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
-          <input disabled={!editable} type="date" value={pagos.anticipo.fecha} onChange={(e) => set("anticipo", "fecha", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <InputMiles disabled={!editable} placeholder="Valor anticipo" value={pagos.anticipo.valor} onChange={(v) => set("anticipo", "valor", v)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <InputFecha disabled={!editable} value={pagos.anticipo.fecha} onChange={(v) => set("anticipo", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
           <div className="text-[11px] text-slate-400 mt-1">Fecha primer pago</div>
         </div>
         <div className="border border-slate-200 rounded-lg p-3">
           <label className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1.5"><input disabled={!editable} type="checkbox" checked={pagos.intermedio.activo} onChange={(e) => set("intermedio", "activo", e.target.checked)} /> Pago intermedio (opcional)</label>
-          <input disabled={!editable || !pagos.intermedio.activo} type="number" placeholder="Valor intermedio" value={pagos.intermedio.valor} onChange={(e) => set("intermedio", "valor", e.target.value)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
-          <input disabled={!editable || !pagos.intermedio.activo} type="date" value={pagos.intermedio.fecha} onChange={(e) => set("intermedio", "fecha", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <InputMiles disabled={!editable || !pagos.intermedio.activo} placeholder="Valor intermedio" value={pagos.intermedio.valor} onChange={(v) => set("intermedio", "valor", v)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <InputFecha disabled={!editable || !pagos.intermedio.activo} value={pagos.intermedio.fecha} onChange={(v) => set("intermedio", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
         </div>
         <div className="border border-slate-200 rounded-lg p-3">
           <div className="text-xs font-medium text-slate-500 mb-2">Pago final</div>
-          <input disabled={!editable} type="number" placeholder="Valor pago final" value={pagos.final.valor} onChange={(e) => set("final", "valor", e.target.value)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
-          <input disabled={!editable} type="date" value={pagos.final.fecha} onChange={(e) => set("final", "fecha", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <InputMiles disabled={!editable} placeholder="Valor pago final" value={pagos.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <InputFecha disabled={!editable} value={pagos.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
           <div className="text-[11px] text-slate-400 mt-1">Fecha pago final</div>
         </div>
       </div>
       <div className="flex items-center justify-between mt-3">
         <div className="text-sm text-slate-500">Total orden: <b className="text-slate-700">{fmt(total)}</b> · Programado: <b className="text-slate-700">{fmt(pagado)}</b> · Restante: <b className={restante > 0.5 ? "text-amber-600" : restante < -0.5 ? "text-rose-600" : "text-emerald-600"}>{fmt(restante)}</b></div>
-        {editable && <button onClick={onConfirmar} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar plan de pagos</button>}
+        {editable && <button onClick={confirmar} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar plan de pagos</button>}
       </div>
+      {editable && Math.abs(restante) > 0.5 && <div className="text-[11px] text-amber-600 mt-1">El plan debe cubrir exactamente el total de la orden para poder confirmarse.</div>}
     </div>
   );
 }
@@ -1842,6 +1875,18 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const todasCotizadas = solicitud.items.every((i) => i.cotizaciones.length > 0);
   const comparativoBloqueado = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
   const patch = (fields) => onUpdate({ ...solicitud, ...fields });
+
+  const reabrirSolicitud = () => {
+    const { status: destino, campo, revision } = pasoDelRechazo(solicitud);
+    const cambios = {
+      status: destino,
+      historialEstados: empujarHistorial(destino),
+      notificaciones: notificar(`Solicitud reabierta por ${currentUser.nombre} (${currentUser.rol}) para corregir y volver a enviar.`),
+    };
+    if (campo) cambios.firmas = { ...solicitud.firmas, [campo]: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null } };
+    if (revision) cambios.revisionCompras = { estado: "pendiente", observacion: "", usuario: "", fecha: "" };
+    patch(cambios);
+  };
   const empujarHistorial = (status) => [...solicitud.historialEstados, { status, fecha: ahoraISO() }];
   const notificar = (mensaje) => [...solicitud.notificaciones, { fecha: ahoraISO(), mensaje }];
 
@@ -1877,7 +1922,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     else if (s === "aprobacion_director") patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) });
     else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
     else if (s === "comparativo") { const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) }); }
-    else if (s === "aprobacion_financiera") { const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) }); }
+    else if (s === "aprobacion_financiera") {
+      if (solicitud.tipo === "servicio" && !solicitud.pagosConfirmados) { alert("Falta confirmar el plan de pagos antes de aprobar y continuar."); return; }
+      const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
+      patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) });
+    }
     else if (s === "aprobacion_gerencia") patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") });
     else if (s === "orden") {
       if (!todasOrdenesFirmadas(solicitud, proveedores)) return;
@@ -1970,6 +2019,13 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         </div>
         <div className="mt-4 pt-4 border-t border-slate-100"><Stepper status={solicitud.status} /></div>
       </div>
+
+      {solicitud.status === "rechazada" && puedeReabrir(currentUser) && (
+        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-sm text-rose-700">Esta solicitud fue rechazada. Si el motivo fue un error que ya se corrigió (ej. en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada.</div>
+          <button onClick={reabrirSolicitud} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium shrink-0">Reabrir para corregir</button>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="font-medium text-slate-700 mb-3">Ítems solicitados</div>
@@ -2074,9 +2130,25 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             </div>
           )}
           {mostrarObservacion && (<div><label className="text-xs font-medium text-slate-500">Observación de aprobación (opcional)</label><textarea value={observacion} onChange={(e) => setObservacion(e.target.value)} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" placeholder="Comentarios sobre esta aprobación..." /></div>)}
+          {(() => {
+            const motivos = [];
+            if (solicitud.status === "cotizando" && !todasCotizadas) motivos.push("Falta cargar al menos una cotización para cada ítem.");
+            if (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !solicitud.pagosConfirmados) motivos.push("Falta confirmar el plan de pagos.");
+            if (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) motivos.push("Falta que Dirección Financiera firme la orden de uno o más proveedores.");
+            if (solicitud.status === "recepcion") {
+              if (!solicitud.recepcion.recibidoSatisfaccion) motivos.push("Falta marcar \"Recibo a satisfacción\" en el panel de Recepción.");
+              if (!evaluacionCompleta(solicitud)) motivos.push("Falta completar la evaluación de recepción (calidad, entrega oportuna, precio, servicio al cliente).");
+            }
+            return motivos.length > 0 && (
+              <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
+                <div className="font-medium">Falta esto para poder continuar:</div>
+                {motivos.map((m, i) => <div key={i}>• {m}</div>)}
+              </div>
+            );
+          })()}
           <div className="flex gap-2 justify-end">
             <button onClick={rechazar} className="px-4 py-2 rounded-lg text-sm text-rose-600 border border-rose-200 flex items-center gap-1"><XCircle size={15} /> Rechazar</button>
-            <button onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
+            <button onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !solicitud.pagosConfirmados) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
           </div>
         </div>
       )}
