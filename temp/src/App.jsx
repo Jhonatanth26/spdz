@@ -722,6 +722,21 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
         <p className="text-xs text-slate-400 mt-1">Promedio de resultados de un proveedor en un rango de fechas — útil para auditorías ISO 9001.</p>
       </div>
 
+      {/* 1. FILTRO POR PERIODO */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
+        <div>
+          <label className="text-[11px] font-medium text-slate-500">Proveedor</label>
+          <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[200px]">
+            <option value="">Todos los evaluados</option>
+            {opciones.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+        </div>
+        <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+        <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+        <button onClick={descargarReporte} disabled={!evaluaciones.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel (resumen)</button>
+      </div>
+
+      {/* 2. PENDIENTES DE EVALUACIÓN */}
       {pendientes.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><Clock size={15} /> Pendientes de evaluación ({pendientes.length})</div>
@@ -738,23 +753,11 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
-        <div>
-          <label className="text-[11px] font-medium text-slate-500">Proveedor</label>
-          <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[200px]">
-            <option value="">Todos los evaluados</option>
-            {opciones.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
-        </div>
-        <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
-        <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
-        <button onClick={descargarReporte} disabled={!evaluaciones.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel (resumen)</button>
-      </div>
-
       {evaluaciones.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay evaluaciones completas que coincidan con estos filtros.</div>
       ) : (
         <>
+          {/* 3. PROMEDIO GENERAL + GRÁFICO POR CRITERIO */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 flex items-center justify-between flex-wrap gap-3">
             <div>
               <div className="text-xs text-slate-400">Resultado promedio ({evaluaciones.length} evaluación{evaluaciones.length > 1 ? "es" : ""})</div>
@@ -765,18 +768,20 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
 
           <div className="bg-white rounded-xl border border-slate-200 p-5">
             <div className="font-medium text-slate-700 mb-3">Promedio por criterio</div>
-            <table className="w-full text-xs"><tbody>
-              {promediosPorCriterio.map((c) => (
-                <tr key={c.key} className="border-t border-slate-100">
-                  <td className="py-1.5 text-slate-600">{c.texto}</td>
-                  <td className="py-1.5 text-right font-medium text-slate-700 w-16">{c.promedio !== null ? c.promedio.toFixed(1) : "—"}</td>
-                </tr>
-              ))}
-            </tbody></table>
+            <ResponsiveContainer width="100%" height={420}>
+              <BarChart data={promediosPorCriterio.map((c) => ({ nombre: c.texto.length > 42 ? c.texto.slice(0, 40) + "…" : c.texto, textoCompleto: c.texto, valor: c.promedio || 0 }))} layout="vertical" margin={{ left: 10, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                <XAxis type="number" domain={[0, 10]} />
+                <YAxis type="category" dataKey="nombre" width={260} tick={{ fontSize: 10 }} />
+                <Tooltip formatter={(v) => v.toFixed(1)} labelFormatter={(_, p) => p?.[0]?.payload?.textoCompleto || ""} />
+                <Bar dataKey="valor" fill="#4f46e5" radius={[0, 4, 4, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
 
+          {/* 4. EVALUACIONES YA REALIZADAS */}
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="font-medium text-slate-700 mb-3">Evaluaciones incluidas — clic en una fila para ver el detalle completo</div>
+            <div className="font-medium text-slate-700 mb-3">Evaluaciones ya realizadas — clic en una fila para ver el detalle completo</div>
             <table className="w-full text-sm">
               <thead className="text-slate-400 text-xs border-b border-slate-100"><tr><th className="text-left py-1">Consecutivo</th><th className="text-left py-1">Proveedor</th><th className="text-left py-1">Fecha evaluación</th><th className="text-right py-1">Resultado</th><th className="text-right py-1">Clasificación</th><th></th></tr></thead>
               <tbody>{evaluaciones.map((s) => { const pct = puntajeEvaluacion(s.evaluacionProveedor.criterios) * 100; const c = clasificacionConfianza(pct); return (
