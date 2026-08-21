@@ -1328,13 +1328,14 @@ function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGu
 /* ---------------------------------------------------------
    PAGOS: sugeridos por solicitante + confirmados por Dirección Financiera
 --------------------------------------------------------- */
-function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConfirmar }) {
+function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConfirmar, onEditarDeNuevo }) {
   const [pagos, setPagos] = useState(solicitud.pagos);
   const editable = puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados;
   const pagado = totalPagado(pagos);
   const restante = total - pagado;
   const sug = solicitud.pagosSugeridos;
   const hasSugerencia = parseFloat(sug?.anticipo?.valor) > 0 || parseFloat(sug?.final?.valor) > 0;
+  const descuadrado = solicitud.pagosConfirmados && Math.abs(restante) > 0.5;
 
   const set = (campo, sub, val) => { const copy = { ...pagos, [campo]: { ...pagos[campo], [sub]: val } }; setPagos(copy); onProgramar(copy); };
   const usarSugerencia = () => { setPagos(sug); onProgramar(sug); };
@@ -1355,8 +1356,16 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
     <div className="bg-white rounded-xl border border-slate-200 p-5">
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2 text-slate-700 font-medium"><CalendarClock size={16} /> Plan de pagos (máx. 3)</div>
-        {solicitud.pagosConfirmados ? <Badge tone="green">Confirmado por Dirección Financiera</Badge> : <Badge tone="amber">Pendiente de confirmación</Badge>}
+        <div className="flex items-center gap-2">
+          {solicitud.pagosConfirmados ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado por Dirección Financiera</Badge> : <Badge tone="amber">Pendiente de confirmación</Badge>}
+          {solicitud.pagosConfirmados && puedeEditarPagos(currentUser) && <button onClick={onEditarDeNuevo} className="text-[11px] text-indigo-600 underline">Editar de nuevo</button>}
+        </div>
       </div>
+      {descuadrado && (
+        <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2 mb-2">
+          ⚠ Este plan quedó confirmado con un descuadre de <b>{fmt(Math.abs(restante))}</b> ({restante > 0 ? "falta programar" : "programado de más"}) — probablemente de antes de esta validación. Usa "Editar de nuevo" para corregirlo.
+        </div>
+      )}
       {hasSugerencia && !solicitud.pagosConfirmados && (
         <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 mb-2 flex items-center justify-between">
           <span>El solicitante sugirió: anticipo {fmt(sug.anticipo.valor)} ({sug.anticipo.fecha || "sin fecha"}){sug.intermedio.activo ? `, intermedio ${fmt(sug.intermedio.valor)}` : ""}, final {fmt(sug.final.valor)} ({sug.final.fecha || "sin fecha"})</span>
@@ -2078,7 +2087,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       {["comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && <ResumenTotales solicitud={solicitud} />}
 
       {solicitud.tipo === "servicio" && ["aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
-        <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true })} />
+        <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
       )}
 
       <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
