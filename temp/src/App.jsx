@@ -478,7 +478,7 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   const [seleccionados, setSeleccionados] = useState([]);
   const iniciarEdicion = (fila) => { setEditId(fila.id); setForm(fila); setCreando(false); };
   const iniciarCreacion = () => { setEditId(null); setForm(plantilla); setCreando(true); };
-  const primerCampoVacio = !String(form[columnas[0]?.key] || "").trim();
+  const primerCampoVacio = !String(form[columnas[0]?.key] || "").trim() || columnas.some((c) => c.requerido && !String(form[c.key] || "").trim());
   const guardar = () => { if (primerCampoVacio) return; onGuardar(editId ? { ...form, id: editId } : { ...form, id: nextId() }); setEditId(null); setCreando(false); setForm(plantilla); };
   const cancelar = () => { setEditId(null); setCreando(false); setForm(plantilla); };
   const Campo = (c) => {
@@ -1805,15 +1805,30 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
   // la evaluación es responsabilidad exclusiva de Compras — nadie más la ve, ni en solo lectura
   if (!esCompras) return null;
 
-  // primera vez que se abre: se pre-llena con los datos del proveedor adjudicado y de la solicitud
+  // primera vez que se abre: se pre-llena automáticamente con los datos del proveedor adjudicado y de la solicitud
   const proveedorSugerido = proveedores.find((p) => p.id === ev.proveedorId) || proveedores.find((p) => proveedoresAdjudicadosDetalle(solicitud, proveedores).some((n) => mismoProveedor({ proveedorId: p.id }, n)));
   const set = (campo, val) => onGuardar({ ...ev, [campo]: val });
   const setDoc = (key, val) => onGuardar({ ...ev, documentos: { ...ev.documentos, [key]: val } });
   const setCriterio = (key, val) => onGuardar({ ...ev, criterios: { ...ev.criterios, [key]: val } });
-  const usarProveedorAdjudicado = () => {
-    if (!proveedorSugerido) return;
-    onGuardar({ ...ev, proveedorId: proveedorSugerido.id, proveedorNombre: proveedorSugerido.nombre, nit: proveedorSugerido.nit || "", email: proveedorSugerido.email || "", tipoProveedor: solicitud.tipo, fechaEvaluacion: ev.fechaEvaluacion || hoy() });
-  };
+
+  useEffect(() => {
+    if (!ev.completada && !ev.proveedorId && proveedorSugerido) {
+      onGuardar({
+        ...ev,
+        proveedorId: proveedorSugerido.id,
+        proveedorNombre: proveedorSugerido.nombre,
+        tipoProveedor: proveedorSugerido.tipoProveedor || solicitud.tipo,
+        nit: proveedorSugerido.nit || "",
+        ciudad: proveedorSugerido.ciudad || "",
+        direccion: proveedorSugerido.direccion || "",
+        telefono: proveedorSugerido.telefono || "",
+        representanteLegal: proveedorSugerido.representanteLegal || "",
+        email: proveedorSugerido.email || "",
+        fechaEvaluacion: ev.fechaEvaluacion || hoy(),
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proveedorSugerido?.id]);
 
   const pct = puntajeEvaluacion(ev.criterios) * 100;
   const clas = clasificacionConfianza(pct);
@@ -1855,13 +1870,6 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
       {esRegistroViejoVacio && !reevaluando && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           Esta solicitud se completó antes de este formato de evaluación, así que quedó sin diligenciar. Usa "Diligenciar ahora" para llenarla con la información disponible.
-        </div>
-      )}
-
-      {!ev.proveedorId && proveedorSugerido && !disabled && (
-        <div className="text-xs bg-slate-50 border border-slate-200 rounded-md px-3 py-2 flex items-center justify-between">
-          <span>Proveedor adjudicado detectado: <b>{proveedorSugerido.nombre}</b></span>
-          <button onClick={usarProveedorAdjudicado} className="text-indigo-600 font-medium ml-2 shrink-0">Usar estos datos</button>
         </div>
       )}
 
@@ -2836,7 +2844,20 @@ function Catalogos({
           columnas={[{ key: "nombre", label: "Nombre" }]}
           datos={departamentos} onGuardar={guardarDepartamento} onEliminar={eliminarDepartamento} plantilla={{ nombre: "" }} />
       )}
-      {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck} columnas={[{ key: "nombre", label: "Nombre" }, { key: "nit", label: "NIT" }, { key: "actividadEconomica", label: "Actividad económica" }, { key: "contacto", label: "Contacto" }, { key: "email", label: "Correo electrónico" }, { key: "email2", label: "Correo adicional" }]} datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro} plantilla={{ nombre: "", nit: "", actividadEconomica: "", contacto: "", email: "", email2: "" }} />}
+      {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck}
+        columnas={[
+          { key: "nombre", label: "Razón social" },
+          { key: "tipoProveedor", label: "Tipo de proveedor", type: "select", options: [{ value: "compra", label: "Compra" }, { value: "servicio", label: "Servicio" }, { value: "trabajo", label: "Trabajo" }] },
+          { key: "nit", label: "NIT" },
+          { key: "ciudad", label: "Ciudad" },
+          { key: "direccion", label: "Dirección" },
+          { key: "telefono", label: "Teléfono" },
+          { key: "representanteLegal", label: "Representante legal" },
+          { key: "email", label: "Correo (obligatorio)", requerido: true },
+          { key: "email2", label: "Correo adicional (opcional)" },
+        ]}
+        datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro}
+        plantilla={{ nombre: "", tipoProveedor: "", nit: "", ciudad: "", direccion: "", telefono: "", representanteLegal: "", email: "", email2: "" }} />}
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
@@ -2876,8 +2897,8 @@ export default function App() {
     orderBy: 'nombre',
   });
   const { datos: proveedores, cargando: cargandoProveedores, guardar: guardarProveedor, eliminar: eliminarProveedor, guardarVarios: importarProveedores } = useSupabaseTable('proveedores', {
-    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, nit: r.nit, actividadEconomica: r.actividad_economica, contacto: r.contacto, email: r.email, email2: r.email2 }),
-    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, nit: r.nit, actividad_economica: r.actividadEconomica, contacto: r.contacto, email: r.email, email2: r.email2 }),
+    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, tipoProveedor: r.tipo_proveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representanteLegal: r.representante_legal, actividadEconomica: r.actividad_economica, contacto: r.contacto, email: r.email, email2: r.email2 }),
+    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, tipo_proveedor: r.tipoProveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representante_legal: r.representanteLegal, actividad_economica: r.actividadEconomica, contacto: r.contacto, email: r.email, email2: r.email2 }),
     orderBy: 'nombre',
   });
   const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios } = useSupabaseTable('usuarios', {
