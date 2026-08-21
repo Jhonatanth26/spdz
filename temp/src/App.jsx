@@ -1798,22 +1798,23 @@ function descargarExcelEvaluacion(ev, solicitud) {
 
 function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuardar }) {
   const [reevaluando, setReevaluando] = useState(false);
-  const ev = { ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor };
+  const [ev, setEv] = useState({ ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor });
+  // si la solicitud cambia por fuera (ej. otra persona la actualizó), se resincroniza el estado local
+  useEffect(() => { setEv({ ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor }); }, [solicitud.id, solicitud.evaluacionProveedor?.completada, solicitud.evaluacionProveedor?.fechaCompletado]);
+
   const esCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
   const yaFinalizada = solicitud.status !== "recepcion";
 
-  // la evaluación es responsabilidad exclusiva de Compras — nadie más la ve, ni en solo lectura
-  if (!esCompras) return null;
-
   // primera vez que se abre: se pre-llena automáticamente con los datos del proveedor adjudicado y de la solicitud
   const proveedorSugerido = proveedores.find((p) => p.id === ev.proveedorId) || proveedores.find((p) => proveedoresAdjudicadosDetalle(solicitud, proveedores).some((n) => mismoProveedor({ proveedorId: p.id }, n)));
-  const set = (campo, val) => onGuardar({ ...ev, [campo]: val });
-  const setDoc = (key, val) => onGuardar({ ...ev, documentos: { ...ev.documentos, [key]: val } });
-  const setCriterio = (key, val) => onGuardar({ ...ev, criterios: { ...ev.criterios, [key]: val } });
+  // escribe local al instante (fluido) y guarda en segundo plano, sin bloquear la escritura
+  const set = (campo, val) => { const copy = { ...ev, [campo]: val }; setEv(copy); onGuardar(copy); };
+  const setDoc = (key, val) => { const copy = { ...ev, documentos: { ...ev.documentos, [key]: val } }; setEv(copy); onGuardar(copy); };
+  const setCriterio = (key, val) => { const copy = { ...ev, criterios: { ...ev.criterios, [key]: val } }; setEv(copy); onGuardar(copy); };
 
   useEffect(() => {
-    if (!ev.completada && !ev.proveedorId && proveedorSugerido) {
-      onGuardar({
+    if (esCompras && !ev.completada && !ev.proveedorId && proveedorSugerido) {
+      const copy = {
         ...ev,
         proveedorId: proveedorSugerido.id,
         proveedorNombre: proveedorSugerido.nombre,
@@ -1825,10 +1826,15 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
         representanteLegal: proveedorSugerido.representanteLegal || "",
         email: proveedorSugerido.email || "",
         fechaEvaluacion: ev.fechaEvaluacion || hoy(),
-      });
+      };
+      setEv(copy);
+      onGuardar(copy);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [proveedorSugerido?.id]);
+  }, [proveedorSugerido?.id, esCompras]);
+
+  // la evaluación es responsabilidad exclusiva de Compras — nadie más la ve, ni en solo lectura
+  if (!esCompras) return null;
 
   const pct = puntajeEvaluacion(ev.criterios) * 100;
   const clas = clasificacionConfianza(pct);
