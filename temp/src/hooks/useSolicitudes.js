@@ -10,7 +10,6 @@ const desdeFila = (fila) => ({
   empresaId: fila.empresa_id,
   areaId: fila.area_id,
   departamentoId: fila.departamento_id,
-  departamentoId: fila.departamento_id,
   centroCostoId: fila.centro_costo_id,
   conceptoGastoId: fila.concepto_gasto_id,
   solicitanteId: fila.solicitante_id,
@@ -29,7 +28,6 @@ const haciaFila = (s) => ({
   tipo: s.tipo,
   empresa_id: s.empresaId,
   area_id: s.areaId,
-  departamento_id: s.departamentoId || null,
   departamento_id: s.departamentoId || null,
   centro_costo_id: s.centroCostoId || null,
   concepto_gasto_id: s.conceptoGastoId || null,
@@ -51,7 +49,7 @@ const haciaFila = (s) => ({
     historialEstados: s.historialEstados,
     notificaciones: s.notificaciones,
     prioridad: s.prioridad,
-    evaluacion: s.evaluacion,
+    evaluacionProveedor: s.evaluacionProveedor,
   },
 })
 

@@ -230,6 +230,66 @@ function pasoDelRechazo(solicitud) {
 const puedeVerCatalogos = (u) => u.rol === "Administrador" || ["Compras", "Dirección Financiera", "Gerencia"].includes(u.rol);
 const puedeVerTodasSolicitudes = (u) => u.rol === "Administrador" || u.rol !== "Solicitante";
 const puedeEditarPagos = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
+
+/* ---------------------------------------------------------
+   EVALUACIÓN DE PROVEEDORES — formato oficial (Registro Selección y Evaluación de Proveedores)
+--------------------------------------------------------- */
+const CRITERIOS_EVALUACION = [
+  { key: "estandaresCalidad", componente: "Calidad", subcomponente: "Estándares", texto: "Cumplimiento con estándares de calidad establecidos por la empresa (certificados de conformidad)", peso: 0.06 },
+  { key: "condicionesTecnicas", componente: "Calidad", subcomponente: "Estándares", texto: "Cumplimiento con las condiciones técnicas requeridas", peso: 0.06 },
+  { key: "atencion", componente: "Calidad", subcomponente: "Servicio al cliente", texto: "Atención", peso: 0.06 },
+  { key: "tiempoEntrega", componente: "Calidad", subcomponente: "Servicio al cliente", texto: "Tiempo de entrega (una vez recibida la solicitud, entrega rápidamente el producto o servicio)", peso: 0.08 },
+  { key: "servicioPostventa", componente: "Calidad", subcomponente: "Servicio al cliente", texto: "Servicio postventa", peso: 0.06 },
+  { key: "stockDisponible", componente: "Calidad", subcomponente: "Servicio al cliente", texto: "Mantiene producto en stock o disponible para el servicio", peso: 0.04 },
+  { key: "sgc", componente: "Calidad", subcomponente: "Servicio al cliente", texto: "Posee sistema de Gestión de la Calidad (certificado, en proceso o no tiene)", peso: 0.04 },
+  { key: "atencionQuejas", componente: "Calidad", subcomponente: "Servicio al cliente", texto: "Atiende oportunamente las quejas y solicitudes", peso: 0.08 },
+  { key: "sgSst", componente: "HSE", subcomponente: "Seguridad y salud en el trabajo", texto: "Cuenta con Sistema de Gestión en Seguridad y Salud en el Trabajo (SG-SST) implementado y funcionando", peso: 0.10 },
+  { key: "envioSgSst", componente: "HSE", subcomponente: "Seguridad y salud en el trabajo", texto: "Envía oportunamente los requerimientos de SG-SST (procedimientos, certificados, fichas MSDS, etc.)", peso: 0.09 },
+  { key: "politicasHseq", componente: "HSE", subcomponente: "Seguridad y salud en el trabajo", texto: "Cumple oportunamente las políticas de HSEQ (utilización EPP, inducción, procedimientos)", peso: 0.07 },
+  { key: "licenciaAmbiental", componente: "HSE", subcomponente: "Gestión ambiental", texto: "Dispone de una Licencia Ambiental (si aplica)", peso: 0.09 },
+  { key: "programaPostconsumo", componente: "HSE", subcomponente: "Gestión ambiental", texto: "Cuenta y brinda un programa de postconsumo (tóners, cartuchos, baterías, aceite usado, llantas, pilas, residuos electrónicos, residuos de iluminación)", peso: 0.08 },
+  { key: "programaResiduos", componente: "HSE", subcomponente: "Gestión ambiental", texto: "Dispone de un programa de disposición de residuos (si aplica)", peso: 0.09 },
+];
+const DOCUMENTOS_EVALUACION = [
+  { key: "rut", label: "RUT de la empresa" },
+  { key: "camaraComercio", label: "Certificado de Cámara de Comercio" },
+  { key: "cedulaRL", label: "Fotocopia de la cédula del representante legal" },
+  { key: "referenciasComerciales", label: "Referencias comerciales (2)" },
+  { key: "certificadosHSEQ", label: "Certificados de calidad, seguridad y salud en el trabajo y medio ambiente" },
+];
+
+function evaluacionProveedorVacia() {
+  return {
+    proveedorId: null, proveedorNombre: "", tipoProveedor: "",
+    fechaSeleccion: "", fechaEvaluacion: "",
+    nit: "", cc: "", representanteLegal: "", telefono: "", fax: "", email: "",
+    ciudad: "", direccion: "", serviciosPresta: "", descripcion: "", marca: "",
+    documentos: {},
+    criterios: {},
+    observaciones: "",
+    aprobadoPorCargo: "",
+    firmaRealizada: { nombre: null, cargo: null, empresa: null, fecha: null, fotoUrl: null },
+    completada: false, fechaCompletado: "",
+  };
+}
+
+// puntaje 0-1 (suma de calificación/10 × peso de cada criterio con valor)
+function puntajeEvaluacion(criterios) {
+  let total = 0;
+  CRITERIOS_EVALUACION.forEach((c) => { const v = parseFloat(criterios?.[c.key]); if (v > 0) total += (v / 10) * c.peso; });
+  return total;
+}
+function clasificacionConfianza(pct) {
+  if (pct >= 80) return { texto: "Confiable", tone: "green" };
+  if (pct >= 51) return { texto: "Medio Confiable", tone: "amber" };
+  return { texto: "Poco Confiable", tone: "red" };
+}
+// true si se calificaron los 14 criterios (obligatorio para poder completar la solicitud)
+function evaluacionProveedorCompleta(ev) {
+  if (!ev) return false;
+  return CRITERIOS_EVALUACION.every((c) => parseFloat(ev.criterios?.[c.key]) > 0);
+}
+
 const puedeVerHistorico = (u) => u.rol === "Administrador" || u.rol === "Compras";
 
 /* ---------------------------------------------------------
@@ -267,7 +327,7 @@ function datosSemilla() {
     pagosConfirmados: false,
     ocEnviada: { ordenesProveedor: [] },
     prioridad: null,
-    evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
+    evaluacionProveedor: evaluacionProveedorVacia(),
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-20T09:00:00.000Z" },
@@ -300,7 +360,7 @@ function datosSemilla() {
     pagosConfirmados: false,
     ocEnviada: { ordenesProveedor: [] },
     prioridad: null,
-    evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
+    evaluacionProveedor: evaluacionProveedorVacia(),
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-22T10:00:00.000Z" },
@@ -585,6 +645,120 @@ function Dashboard({ areas, solicitudes }) {
 /* ---------------------------------------------------------
    ESTADÍSTICAS (con filtro por empresa)
 --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   REPORTE: promedio de evaluaciones de un proveedor en un rango de fechas
+   (para auditorías ISO 9001)
+--------------------------------------------------------- */
+function ReporteEvaluacionesProveedores({ solicitudes, proveedores }) {
+  const [proveedorId, setProveedorId] = useState("");
+  const [desde, setDesde] = useState("");
+  const [hasta, setHasta] = useState("");
+
+  const proveedoresConEvaluacion = proveedores.filter((p) => solicitudes.some((s) => s.evaluacionProveedor?.completada && s.evaluacionProveedor.proveedorId === p.id));
+
+  const evaluaciones = solicitudes.filter((s) => {
+    const ev = s.evaluacionProveedor;
+    if (!ev?.completada) return false;
+    if (proveedorId && ev.proveedorId !== proveedorId) return false;
+    if (desde && ev.fechaCompletado < desde) return false;
+    if (hasta && ev.fechaCompletado > hasta) return false;
+    return true;
+  });
+
+  const promedioPct = evaluaciones.length
+    ? evaluaciones.reduce((acc, s) => acc + puntajeEvaluacion(s.evaluacionProveedor.criterios), 0) / evaluaciones.length * 100
+    : null;
+  const clas = promedioPct !== null ? clasificacionConfianza(promedioPct) : null;
+
+  const promediosPorCriterio = CRITERIOS_EVALUACION.map((c) => {
+    const valores = evaluaciones.map((s) => parseFloat(s.evaluacionProveedor.criterios?.[c.key])).filter((v) => v > 0);
+    return { ...c, promedio: valores.length ? valores.reduce((a, b) => a + b, 0) / valores.length : null };
+  });
+
+  const descargarReporte = () => {
+    const filas = [];
+    filas.push(["REPORTE PROMEDIO DE EVALUACIÓN DE PROVEEDOR — ISO 9001"]);
+    filas.push([]);
+    filas.push(["Proveedor:", proveedorId ? proveedores.find((p) => p.id === proveedorId)?.nombre : "Todos"]);
+    filas.push(["Rango de fechas:", desde || "sin límite", "a", hasta || "sin límite"]);
+    filas.push(["Número de evaluaciones incluidas:", evaluaciones.length]);
+    filas.push(["Resultado promedio (%):", promedioPct !== null ? promedioPct.toFixed(1) : "—"]);
+    filas.push(["Clasificación:", clas ? clas.texto : "—"]);
+    filas.push([]);
+    filas.push(["CRITERIO", "PROMEDIO (1-10)"]);
+    promediosPorCriterio.forEach((c) => filas.push([c.texto, c.promedio !== null ? c.promedio.toFixed(1) : "—"]));
+    filas.push([]);
+    filas.push(["DETALLE POR SOLICITUD"]);
+    filas.push(["Consecutivo", "Fecha evaluación", "Resultado (%)", "Clasificación"]);
+    evaluaciones.forEach((s) => {
+      const pct = puntajeEvaluacion(s.evaluacionProveedor.criterios) * 100;
+      filas.push([s.folio, s.evaluacionProveedor.fechaCompletado, pct.toFixed(1), clasificacionConfianza(pct).texto]);
+    });
+    const hoja = XLSX.utils.aoa_to_sheet(filas);
+    hoja["!cols"] = [{ wch: 45 }, { wch: 18 }, { wch: 16 }, { wch: 18 }];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Reporte");
+    XLSX.writeFile(libro, `Reporte_Evaluacion_Proveedor_${hoy()}.xlsx`);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-lg font-semibold text-slate-800">Evaluación de proveedores</h2>
+        <p className="text-xs text-slate-400 mt-1">Promedio de resultados de un proveedor en un rango de fechas — útil para auditorías ISO 9001.</p>
+      </div>
+      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
+        <div>
+          <label className="text-[11px] font-medium text-slate-500">Proveedor</label>
+          <select value={proveedorId} onChange={(e) => setProveedorId(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[200px]">
+            <option value="">Todos los evaluados</option>
+            {proveedoresConEvaluacion.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
+        </div>
+        <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+        <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+        <button onClick={descargarReporte} disabled={!evaluaciones.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
+      </div>
+
+      {evaluaciones.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay evaluaciones completas que coincidan con estos filtros.</div>
+      ) : (
+        <>
+          <div className="bg-white rounded-xl border border-slate-200 p-5 flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <div className="text-xs text-slate-400">Resultado promedio ({evaluaciones.length} evaluación{evaluaciones.length > 1 ? "es" : ""})</div>
+              <div className="text-2xl font-semibold text-slate-800">{promedioPct.toFixed(1)}%</div>
+            </div>
+            <Badge tone={clas.tone}>{clas.texto}</Badge>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
+            <div className="font-medium text-slate-700 mb-3">Promedio por criterio</div>
+            <table className="w-full text-xs"><tbody>
+              {promediosPorCriterio.map((c) => (
+                <tr key={c.key} className="border-t border-slate-100">
+                  <td className="py-1.5 text-slate-600">{c.texto}</td>
+                  <td className="py-1.5 text-right font-medium text-slate-700 w-16">{c.promedio !== null ? c.promedio.toFixed(1) : "—"}</td>
+                </tr>
+              ))}
+            </tbody></table>
+          </div>
+
+          <div className="bg-white rounded-xl border border-slate-200 p-5">
+            <div className="font-medium text-slate-700 mb-3">Evaluaciones incluidas</div>
+            <table className="w-full text-sm">
+              <thead className="text-slate-400 text-xs border-b border-slate-100"><tr><th className="text-left py-1">Consecutivo</th><th className="text-left py-1">Fecha evaluación</th><th className="text-right py-1">Resultado</th><th className="text-right py-1">Clasificación</th></tr></thead>
+              <tbody>{evaluaciones.map((s) => { const pct = puntajeEvaluacion(s.evaluacionProveedor.criterios) * 100; const c = clasificacionConfianza(pct); return (
+                <tr key={s.id} className="border-t border-slate-50"><td className="py-1.5">{s.folio}</td><td className="py-1.5">{s.evaluacionProveedor.fechaCompletado}</td><td className="py-1.5 text-right">{pct.toFixed(1)}%</td><td className="py-1.5 text-right"><Badge tone={c.tone}>{c.texto}</Badge></td></tr>
+              ); })}</tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
   const [filtroEmpresa, setFiltroEmpresa] = useState("todas");
   const [fDesde, setFDesde] = useState("");
@@ -926,7 +1100,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       pagosSugeridos, pagos: planPagosVacio(), pagosConfirmados: false,
       ocEnviada: { ordenesProveedor: [] },
     prioridad: null,
-    evaluacion: { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } },
+    evaluacionProveedor: evaluacionProveedorVacia(),
       recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
       historialEstados: esJefeDeSuPropiaArea
         ? [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_director", fecha: ahoraISO() }]
@@ -1564,41 +1738,210 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
 --------------------------------------------------------- */
 function CalificacionSelect({ value, onChange, disabled }) {
   return (
-    <select value={value || ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} disabled={disabled} className="border border-slate-200 rounded-md px-2 py-1.5 text-sm w-20 disabled:bg-slate-50">
+    <select value={value || ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} disabled={disabled} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-16 disabled:bg-slate-50">
       <option value="">—</option>
       {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
     </select>
   );
 }
 
-function EvaluacionPanel({ solicitud, currentUser, onGuardar }) {
-  const e = solicitud.evaluacion || { solicitante: { calidad: null, entregaOportuna: null, observaciones: "" }, compras: { precio: null, servicioCliente: null, observaciones: "" } };
+// genera y descarga el Excel del "Registro Selección y Evaluación de Proveedores" con los datos ya diligenciados
+function descargarExcelEvaluacion(ev, solicitud) {
+  const filas = [];
+  filas.push(["REGISTRO SELECCIÓN Y EVALUACIÓN DE PROVEEDORES"]);
+  filas.push([]);
+  filas.push(["PROVEEDOR (Razón Social):", ev.proveedorNombre]);
+  filas.push(["TIPO DE PROVEEDOR:", ev.tipoProveedor === "compra" ? "Compra" : ev.tipoProveedor === "servicio" ? "Servicio" : "Trabajo"]);
+  filas.push(["FECHA DE SELECCIÓN:", ev.fechaSeleccion, "NIT:", ev.nit, "CC:", ev.cc]);
+  filas.push(["FECHA DE EVALUACIÓN:", ev.fechaEvaluacion]);
+  filas.push(["CIUDAD:", ev.ciudad, "DIRECCIÓN:", ev.direccion]);
+  filas.push(["REPRESENTANTE LEGAL:", ev.representanteLegal, "TELÉFONO:", ev.telefono]);
+  filas.push(["FAX:", ev.fax, "EMAIL:", ev.email]);
+  filas.push([]);
+  filas.push(["SERVICIOS QUE PRESTA", ev.serviciosPresta]);
+  filas.push(["DESCRIPCIÓN", ev.descripcion]);
+  filas.push(["MARCA", ev.marca]);
+  filas.push([]);
+  filas.push(["FAVOR ANEXAR LOS SIGUIENTES DOCUMENTOS", "SI", "NO", "NO APLICA"]);
+  DOCUMENTOS_EVALUACION.forEach((d) => {
+    const v = ev.documentos?.[d.key];
+    filas.push([d.label, v === "si" ? "X" : "", v === "no" ? "X" : "", v === "no_aplica" ? "X" : ""]);
+  });
+  filas.push([]);
+  filas.push(["COMPONENTE", "SUBCOMPONENTE", "CRITERIO", "CALIFICACIÓN (1-10)", "PONDERACIÓN", "%"]);
+  CRITERIOS_EVALUACION.forEach((c) => {
+    const cal = parseFloat(ev.criterios?.[c.key]) || 0;
+    filas.push([c.componente, c.subcomponente, c.texto, cal, c.peso, cal ? ((cal / 10) * c.peso) : 0]);
+  });
+  const pct = puntajeEvaluacion(ev.criterios) * 100;
+  const clas = clasificacionConfianza(pct);
+  filas.push([]);
+  filas.push(["RESULTADO (%)", pct.toFixed(1)]);
+  filas.push(["CLASIFICACIÓN", clas.texto]);
+  filas.push(["Rangos:", "Poco Confiable ≤ 50%", "Medio Confiable 51%-79%", "Confiable ≥ 80%"]);
+  filas.push([]);
+  filas.push(["OBSERVACIONES:", ev.observaciones || ""]);
+  filas.push([]);
+  filas.push(["Aprobado por (cargo):", ev.aprobadoPorCargo || ""]);
+  filas.push(["Realizado por:", ev.firmaRealizada?.nombre || ""]);
+  filas.push(["Cargo:", ev.firmaRealizada?.cargo || ""]);
+  filas.push(["Empresa:", ev.firmaRealizada?.empresa || ""]);
+  filas.push(["Fecha firma:", ev.firmaRealizada?.fecha || ""]);
+  filas.push(["Solicitud:", solicitud.folio]);
+
+  const hoja = XLSX.utils.aoa_to_sheet(filas);
+  hoja["!cols"] = [{ wch: 32 }, { wch: 30 }, { wch: 45 }, { wch: 16 }, { wch: 12 }, { wch: 10 }];
+  const libro = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(libro, hoja, "Evaluación");
+  XLSX.writeFile(libro, `Evaluacion_Proveedor_${(ev.proveedorNombre || "").replace(/[^a-zA-Z0-9]/g, "_")}_${solicitud.folio}.xlsx`);
+}
+
+function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuardar }) {
+  const [reevaluando, setReevaluando] = useState(false);
+  const ev = { ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor };
   const esCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
   const yaFinalizada = solicitud.status !== "recepcion";
 
   // la evaluación es responsabilidad exclusiva de Compras — nadie más la ve, ni en solo lectura
   if (!esCompras) return null;
 
-  const setSolicitante = (campo, val) => onGuardar({ ...e, solicitante: { ...e.solicitante, [campo]: val } });
-  const setCompras = (campo, val) => onGuardar({ ...e, compras: { ...e.compras, [campo]: val } });
+  // primera vez que se abre: se pre-llena con los datos del proveedor adjudicado y de la solicitud
+  const proveedorSugerido = proveedores.find((p) => p.id === ev.proveedorId) || proveedores.find((p) => proveedoresAdjudicadosDetalle(solicitud, proveedores).some((n) => mismoProveedor({ proveedorId: p.id }, n)));
+  const set = (campo, val) => onGuardar({ ...ev, [campo]: val });
+  const setDoc = (key, val) => onGuardar({ ...ev, documentos: { ...ev.documentos, [key]: val } });
+  const setCriterio = (key, val) => onGuardar({ ...ev, criterios: { ...ev.criterios, [key]: val } });
+  const usarProveedorAdjudicado = () => {
+    if (!proveedorSugerido) return;
+    onGuardar({ ...ev, proveedorId: proveedorSugerido.id, proveedorNombre: proveedorSugerido.nombre, nit: proveedorSugerido.nit || "", email: proveedorSugerido.email || "", tipoProveedor: solicitud.tipo, fechaEvaluacion: ev.fechaEvaluacion || hoy() });
+  };
+
+  const pct = puntajeEvaluacion(ev.criterios) * 100;
+  const clas = clasificacionConfianza(pct);
+  // ya completada (solicitud finalizada) y sin haber pedido reevaluar → solo lectura
+  const disabled = !esCompras || (yaFinalizada && !reevaluando);
+  const esRegistroViejoVacio = yaFinalizada && !ev.completada; // solicitudes completadas antes de este formato, sin diligenciar
+
+  const guardarEvaluacion = () => {
+    onGuardar({
+      ...ev,
+      completada: true,
+      fechaCompletado: hoy(),
+      fechaEvaluacion: ev.fechaEvaluacion || hoy(),
+      firmaRealizada: { nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), fotoUrl: currentUser.firmaFotoUrl || null },
+    });
+    setReevaluando(false);
+  };
+
+  const grupos = [];
+  CRITERIOS_EVALUACION.forEach((c) => {
+    let g = grupos.find((x) => x.componente === c.componente && x.subcomponente === c.subcomponente);
+    if (!g) { g = { componente: c.componente, subcomponente: c.subcomponente, items: [] }; grupos.push(g); }
+    g.items.push(c);
+  });
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><Award size={16} /> Evaluación de recepción {!yaFinalizada && <span className="text-[11px] text-amber-600 font-normal">(obligatoria para completar — la hace Compras)</span>}</div>
-
-      <div className="border border-slate-200 rounded-lg p-3">
-        <div className="text-sm font-medium text-slate-700 mb-2">Calificación del proveedor {!esCompras && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
-        <div className="grid grid-cols-2 gap-3 mb-2">
-          <div><label className="text-xs text-slate-500 block mb-1">Calidad (1-10)</label><CalificacionSelect value={e.solicitante.calidad} onChange={(v) => setSolicitante("calidad", v)} disabled={!esCompras || yaFinalizada} /></div>
-          <div><label className="text-xs text-slate-500 block mb-1">Entrega oportuna (1-10)</label><CalificacionSelect value={e.solicitante.entregaOportuna} onChange={(v) => setSolicitante("entregaOportuna", v)} disabled={!esCompras || yaFinalizada} /></div>
-          <div><label className="text-xs text-slate-500 block mb-1">Precio (1-10)</label><CalificacionSelect value={e.compras.precio} onChange={(v) => setCompras("precio", v)} disabled={!esCompras || yaFinalizada} /></div>
-          <div><label className="text-xs text-slate-500 block mb-1">Servicio al cliente (1-10)</label><CalificacionSelect value={e.compras.servicioCliente} onChange={(v) => setCompras("servicioCliente", v)} disabled={!esCompras || yaFinalizada} /></div>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="font-medium text-slate-700 flex items-center gap-2">
+          <Award size={16} /> Evaluación de proveedor {!yaFinalizada && <span className="text-[11px] text-amber-600 font-normal">(obligatoria para completar — la hace Compras)</span>}
+          {yaFinalizada && ev.completada && !reevaluando && <Badge tone="green">Diligenciada</Badge>}
         </div>
-        <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
-        <textarea value={e.compras.observaciones} onChange={(ev) => setCompras("observaciones", ev.target.value)} disabled={!esCompras || yaFinalizada} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
+        <div className="flex items-center gap-2">
+          {ev.completada && <button onClick={() => descargarExcelEvaluacion(ev, solicitud)} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>}
+          {yaFinalizada && esCompras && !reevaluando && <button onClick={() => setReevaluando(true)} className="text-xs text-indigo-600 underline">{ev.completada ? "Reevaluar" : "Diligenciar ahora"}</button>}
+        </div>
       </div>
 
-      {!yaFinalizada && !evaluacionCompleta(solicitud) && <div className="text-[11px] text-amber-600">Faltan calificaciones obligatorias (calidad, entrega oportuna, precio y servicio al cliente) para poder completar la solicitud.</div>}
+      {esRegistroViejoVacio && !reevaluando && (
+        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          Esta solicitud se completó antes de este formato de evaluación, así que quedó sin diligenciar. Usa "Diligenciar ahora" para llenarla con la información disponible.
+        </div>
+      )}
+
+      {!ev.proveedorId && proveedorSugerido && !disabled && (
+        <div className="text-xs bg-slate-50 border border-slate-200 rounded-md px-3 py-2 flex items-center justify-between">
+          <span>Proveedor adjudicado detectado: <b>{proveedorSugerido.nombre}</b></span>
+          <button onClick={usarProveedorAdjudicado} className="text-indigo-600 font-medium ml-2 shrink-0">Usar estos datos</button>
+        </div>
+      )}
+
+      {/* DATOS DEL PROVEEDOR */}
+      <div className="border border-slate-200 rounded-lg p-3 space-y-2">
+        <div className="text-sm font-medium text-slate-700">Datos del proveedor</div>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2 text-xs">
+          <div><label className="text-slate-500 block mb-0.5">Razón social</label><input disabled={disabled} value={ev.proveedorNombre} onChange={(e) => set("proveedorNombre", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div><label className="text-slate-500 block mb-0.5">Tipo de proveedor</label><select disabled={disabled} value={ev.tipoProveedor} onChange={(e) => set("tipoProveedor", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50"><option value="">—</option><option value="compra">Compra</option><option value="servicio">Servicio</option><option value="trabajo">Trabajo</option></select></div>
+          <div><label className="text-slate-500 block mb-0.5">NIT</label><input disabled={disabled} value={ev.nit} onChange={(e) => set("nit", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div><label className="text-slate-500 block mb-0.5">Fecha de selección</label><InputFecha disabled={disabled} value={ev.fechaSeleccion} onChange={(v) => set("fechaSeleccion", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div><label className="text-slate-500 block mb-0.5">Fecha de evaluación</label><InputFecha disabled={disabled} value={ev.fechaEvaluacion} onChange={(v) => set("fechaEvaluacion", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div><label className="text-slate-500 block mb-0.5">Ciudad</label><input disabled={disabled} value={ev.ciudad} onChange={(e) => set("ciudad", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div className="col-span-2"><label className="text-slate-500 block mb-0.5">Dirección</label><input disabled={disabled} value={ev.direccion} onChange={(e) => set("direccion", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div><label className="text-slate-500 block mb-0.5">Representante legal</label><input disabled={disabled} value={ev.representanteLegal} onChange={(e) => set("representanteLegal", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div><label className="text-slate-500 block mb-0.5">Teléfono</label><input disabled={disabled} value={ev.telefono} onChange={(e) => set("telefono", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div><label className="text-slate-500 block mb-0.5">Email</label><input disabled={disabled} value={ev.email} onChange={(e) => set("email", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+          <div className="col-span-2 md:col-span-3"><label className="text-slate-500 block mb-0.5">Servicios que presta / descripción</label><input disabled={disabled} value={ev.serviciosPresta} onChange={(e) => set("serviciosPresta", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
+        </div>
+      </div>
+
+      {/* DOCUMENTOS */}
+      <div className="border border-slate-200 rounded-lg p-3 space-y-1.5">
+        <div className="text-sm font-medium text-slate-700 mb-1">Documentos anexos</div>
+        {DOCUMENTOS_EVALUACION.map((d) => (
+          <div key={d.key} className="flex items-center justify-between text-xs gap-2">
+            <span className="text-slate-600">{d.label}</span>
+            <select disabled={disabled} value={ev.documentos?.[d.key] || ""} onChange={(e) => setDoc(d.key, e.target.value)} className="border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50 shrink-0">
+              <option value="">—</option><option value="si">Sí</option><option value="no">No</option><option value="no_aplica">No aplica</option>
+            </select>
+          </div>
+        ))}
+      </div>
+
+      {/* CRITERIOS PONDERADOS */}
+      <div className="border border-slate-200 rounded-lg p-3 space-y-3">
+        <div className="text-sm font-medium text-slate-700">Criterios de selección y evaluación (1-10)</div>
+        {grupos.map((g, gi) => (
+          <div key={gi}>
+            <div className="text-[11px] font-medium text-slate-500 mb-1">{g.componente} — {g.subcomponente}</div>
+            <div className="space-y-1">
+              {g.items.map((c) => (
+                <div key={c.key} className="flex items-center justify-between gap-2 text-xs">
+                  <span className="text-slate-600 flex-1">{c.texto} <span className="text-slate-400">(peso {(c.peso * 100).toFixed(0)}%)</span></span>
+                  <CalificacionSelect value={ev.criterios?.[c.key]} onChange={(v) => setCriterio(c.key, v)} disabled={disabled} />
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+        <div className="border-t border-slate-200 pt-2 flex items-center justify-between">
+          <div className="text-sm text-slate-600">Resultado: <b className="text-slate-800">{pct.toFixed(1)}%</b></div>
+          <Badge tone={clas.tone}>{clas.texto}</Badge>
+        </div>
+        <div className="text-[10px] text-slate-400">Poco Confiable ≤ 50% · Medio Confiable 51%-79% · Confiable ≥ 80%</div>
+      </div>
+
+      <div>
+        <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
+        <textarea value={ev.observaciones} onChange={(e) => set("observaciones", e.target.value)} disabled={disabled} rows={2} className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none disabled:bg-slate-50" />
+      </div>
+
+      <div>
+        <label className="text-xs text-slate-500 block mb-0.5">Aprobado por (cargo)</label>
+        <input disabled={disabled} value={ev.aprobadoPorCargo} onChange={(e) => set("aprobadoPorCargo", e.target.value)} className="w-full max-w-xs border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" />
+      </div>
+
+      <div>
+        <div className="text-xs text-slate-500 mb-1">Firma de quien realiza la evaluación</div>
+        <FirmaBlock rol="evaluación" firma={ev.firmaRealizada} />
+        {!disabled && <div className="text-[10px] text-slate-400 mt-1">Se registra automáticamente con tu nombre, cargo y firma guardada en "Mi perfil" al guardar.</div>}
+      </div>
+
+      {!disabled && !evaluacionProveedorCompleta(ev) && <div className="text-[11px] text-amber-600">Falta calificar todos los criterios (14) para poder {yaFinalizada ? "guardar" : "completar la solicitud"}.</div>}
+      {!disabled && evaluacionProveedorCompleta(ev) && (
+        <div className="flex items-center gap-2">
+          <button onClick={guardarEvaluacion} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium">Guardar evaluación</button>
+          {reevaluando && <button onClick={() => setReevaluando(false)} className="text-xs text-slate-500">Cancelar</button>}
+        </div>
+      )}
     </div>
   );
 }
@@ -1779,12 +2122,12 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       )}
 
       {/* EVALUACIÓN */}
-      {solicitud.evaluacion && (solicitud.evaluacion.solicitante?.calidad || solicitud.evaluacion.compras?.precio) && (
+      {solicitud.evaluacionProveedor && Object.keys(solicitud.evaluacionProveedor.criterios || {}).length > 0 && (
         <div>
-          <div className="text-xs font-medium text-slate-500 mb-1">Evaluación de recepción</div>
-          <div className="grid grid-cols-2 gap-3 text-xs">
-            <div className="text-slate-600">Calidad: {solicitud.evaluacion.solicitante?.calidad ?? "—"}/10 · Entrega oportuna: {solicitud.evaluacion.solicitante?.entregaOportuna ?? "—"}/10{solicitud.evaluacion.solicitante?.observaciones && <div className="italic">"{solicitud.evaluacion.solicitante.observaciones}"</div>}</div>
-            <div className="text-slate-600">Precio: {solicitud.evaluacion.compras?.precio ?? "—"}/10 · Servicio al cliente: {solicitud.evaluacion.compras?.servicioCliente ?? "—"}/10{solicitud.evaluacion.compras?.observaciones && <div className="italic">"{solicitud.evaluacion.compras.observaciones}"</div>}</div>
+          <div className="text-xs font-medium text-slate-500 mb-1">Evaluación de proveedor{solicitud.evaluacionProveedor.proveedorNombre ? ` — ${solicitud.evaluacionProveedor.proveedorNombre}` : ""}</div>
+          <div className="text-xs text-slate-600">
+            Resultado: <b>{(puntajeEvaluacion(solicitud.evaluacionProveedor.criterios) * 100).toFixed(1)}%</b> — {clasificacionConfianza(puntajeEvaluacion(solicitud.evaluacionProveedor.criterios) * 100).texto}
+            {solicitud.evaluacionProveedor.observaciones && <div className="italic mt-0.5">"{solicitud.evaluacionProveedor.observaciones}"</div>}
           </div>
         </div>
       )}
@@ -2099,8 +2442,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       {["recepcion", "completada"].includes(solicitud.status) && (
         <EvaluacionPanel
           solicitud={solicitud}
+          empresa={empresa}
+          proveedores={proveedores}
           currentUser={currentUser}
-          onGuardar={(ev) => patch({ evaluacion: ev })}
+          onGuardar={(ev) => patch({ evaluacionProveedor: ev })}
         />
       )}
 
@@ -2146,7 +2491,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             if (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) motivos.push("Falta que Dirección Financiera firme la orden de uno o más proveedores.");
             if (solicitud.status === "recepcion") {
               if (!solicitud.recepcion.recibidoSatisfaccion) motivos.push("Falta marcar \"Recibo a satisfacción\" en el panel de Recepción.");
-              if (!evaluacionCompleta(solicitud)) motivos.push("Falta completar la evaluación de recepción (calidad, entrega oportuna, precio, servicio al cliente).");
+              if (!evaluacionCompleta(solicitud)) motivos.push("Falta completar la evaluación del proveedor (14 criterios).");
             }
             return motivos.length > 0 && (
               <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
@@ -2234,11 +2579,9 @@ function todasOrdenesFirmadas(solicitud, proveedores) {
   return necesarios.length > 0 && necesarios.every((n) => ordenes.some((o) => mismoProveedor(o, n) && o.archivoFirmadoUrl));
 }
 
-// true si ambas evaluaciones (solicitante y compras) ya tienen sus calificaciones obligatorias
+// true si la evaluación del proveedor (formato oficial, 14 criterios) ya está completa
 function evaluacionCompleta(solicitud) {
-  const e = solicitud.evaluacion;
-  if (!e) return false;
-  return !!e.solicitante?.calidad && !!e.solicitante?.entregaOportuna && !!e.compras?.precio && !!e.compras?.servicioCliente;
+  return evaluacionProveedorCompleta(solicitud.evaluacionProveedor);
 }
 
 // true si esta solicitud está esperando una acción del usuario actual, según su rol y el paso en que está
@@ -2634,6 +2977,7 @@ export default function App() {
         {currentUser.rol !== "Solicitante" && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
         {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
         <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
+        {currentUser.rol !== "Solicitante" && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
         {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
 
         <div className="mt-auto pt-4 border-t border-slate-100">
@@ -2684,6 +3028,8 @@ export default function App() {
           </div>
         ) : tab === "estadisticas" ? (
           <Estadisticas solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} proveedores={proveedores} />
+        ) : tab === "evalProveedores" && currentUser.rol !== "Solicitante" ? (
+          <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             currentUser={currentUser}
