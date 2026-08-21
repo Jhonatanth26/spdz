@@ -649,21 +649,35 @@ function Dashboard({ areas, solicitudes }) {
    REPORTE: promedio de evaluaciones de un proveedor en un rango de fechas
    (para auditorías ISO 9001)
 --------------------------------------------------------- */
-function ReporteEvaluacionesProveedores({ solicitudes, proveedores }) {
-  const [proveedorId, setProveedorId] = useState("");
+function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
+  const [filtro, setFiltro] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
 
-  const proveedoresConEvaluacion = proveedores.filter((p) => solicitudes.some((s) => s.evaluacionProveedor?.completada && s.evaluacionProveedor.proveedorId === p.id));
+  const claveProveedor = (ev) => ev.proveedorId ? `id:${ev.proveedorId}` : `nombre:${(ev.proveedorNombre || "").trim().toLowerCase()}`;
 
-  const evaluaciones = solicitudes.filter((s) => {
+  const todasCompletadas = solicitudes.filter((s) => s.evaluacionProveedor?.completada);
+  // opciones del selector: se arman a partir de las evaluaciones mismas (por ID si lo tienen, si no por nombre)
+  // así no se pierden proveedores cuyo registro no quedó vinculado por ID (datos de antes de esa mejora)
+  const opciones = [];
+  const vistos = new Set();
+  todasCompletadas.forEach((s) => {
     const ev = s.evaluacionProveedor;
-    if (!ev?.completada) return false;
-    if (proveedorId && ev.proveedorId !== proveedorId) return false;
+    if (!ev.proveedorId && !ev.proveedorNombre) return;
+    const key = claveProveedor(ev);
+    if (!vistos.has(key)) { vistos.add(key); opciones.push({ key, label: ev.proveedorNombre || proveedores.find((p) => p.id === ev.proveedorId)?.nombre || "Sin nombre" }); }
+  });
+  opciones.sort((a, b) => a.label.localeCompare(b.label));
+
+  const evaluaciones = todasCompletadas.filter((s) => {
+    const ev = s.evaluacionProveedor;
+    if (filtro && claveProveedor(ev) !== filtro) return false;
     if (desde && ev.fechaCompletado < desde) return false;
     if (hasta && ev.fechaCompletado > hasta) return false;
     return true;
   });
+
+  const pendientes = solicitudes.filter((s) => s.status === "recepcion" && !evaluacionProveedorCompleta(s.evaluacionProveedor));
 
   const promedioPct = evaluaciones.length
     ? evaluaciones.reduce((acc, s) => acc + puntajeEvaluacion(s.evaluacionProveedor.criterios), 0) / evaluaciones.length * 100
@@ -679,7 +693,7 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores }) {
     const filas = [];
     filas.push(["REPORTE PROMEDIO DE EVALUACIÓN DE PROVEEDOR — ISO 9001"]);
     filas.push([]);
-    filas.push(["Proveedor:", proveedorId ? proveedores.find((p) => p.id === proveedorId)?.nombre : "Todos"]);
+    filas.push(["Proveedor:", filtro ? opciones.find((o) => o.key === filtro)?.label : "Todos"]);
     filas.push(["Rango de fechas:", desde || "sin límite", "a", hasta || "sin límite"]);
     filas.push(["Número de evaluaciones incluidas:", evaluaciones.length]);
     filas.push(["Resultado promedio (%):", promedioPct !== null ? promedioPct.toFixed(1) : "—"]);
@@ -707,17 +721,34 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores }) {
         <h2 className="text-lg font-semibold text-slate-800">Evaluación de proveedores</h2>
         <p className="text-xs text-slate-400 mt-1">Promedio de resultados de un proveedor en un rango de fechas — útil para auditorías ISO 9001.</p>
       </div>
+
+      {pendientes.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5">
+          <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><Clock size={15} /> Pendientes de evaluación ({pendientes.length})</div>
+          <table className="w-full text-sm">
+            <thead className="text-slate-400 text-xs border-b border-slate-100"><tr><th className="text-left py-1">Consecutivo</th><th className="text-left py-1">Objetivo</th><th className="text-left py-1">Proveedor adjudicado</th></tr></thead>
+            <tbody>{pendientes.map((s) => (
+              <tr key={s.id} onClick={() => onAbrir?.(s.id)} className="border-t border-slate-50 hover:bg-slate-50 cursor-pointer">
+                <td className="py-1.5 font-medium text-slate-700">{s.folio}</td>
+                <td className="py-1.5 text-slate-600 max-w-[300px] truncate" title={s.objetivo}>{s.objetivo}</td>
+                <td className="py-1.5 text-slate-600">{s.evaluacionProveedor?.proveedorNombre || "—"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
         <div>
           <label className="text-[11px] font-medium text-slate-500">Proveedor</label>
-          <select value={proveedorId} onChange={(e) => setProveedorId(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[200px]">
+          <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[200px]">
             <option value="">Todos los evaluados</option>
-            {proveedoresConEvaluacion.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+            {opciones.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
           </select>
         </div>
         <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
         <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
-        <button onClick={descargarReporte} disabled={!evaluaciones.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
+        <button onClick={descargarReporte} disabled={!evaluaciones.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel (resumen)</button>
       </div>
 
       {evaluaciones.length === 0 ? (
@@ -745,11 +776,18 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores }) {
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="font-medium text-slate-700 mb-3">Evaluaciones incluidas</div>
+            <div className="font-medium text-slate-700 mb-3">Evaluaciones incluidas — clic en una fila para ver el detalle completo</div>
             <table className="w-full text-sm">
-              <thead className="text-slate-400 text-xs border-b border-slate-100"><tr><th className="text-left py-1">Consecutivo</th><th className="text-left py-1">Fecha evaluación</th><th className="text-right py-1">Resultado</th><th className="text-right py-1">Clasificación</th></tr></thead>
+              <thead className="text-slate-400 text-xs border-b border-slate-100"><tr><th className="text-left py-1">Consecutivo</th><th className="text-left py-1">Proveedor</th><th className="text-left py-1">Fecha evaluación</th><th className="text-right py-1">Resultado</th><th className="text-right py-1">Clasificación</th><th></th></tr></thead>
               <tbody>{evaluaciones.map((s) => { const pct = puntajeEvaluacion(s.evaluacionProveedor.criterios) * 100; const c = clasificacionConfianza(pct); return (
-                <tr key={s.id} className="border-t border-slate-50"><td className="py-1.5">{s.folio}</td><td className="py-1.5">{s.evaluacionProveedor.fechaCompletado}</td><td className="py-1.5 text-right">{pct.toFixed(1)}%</td><td className="py-1.5 text-right"><Badge tone={c.tone}>{c.texto}</Badge></td></tr>
+                <tr key={s.id} onClick={() => onAbrir?.(s.id)} className="border-t border-slate-50 hover:bg-slate-50 cursor-pointer">
+                  <td className="py-1.5 font-medium text-slate-700">{s.folio}</td>
+                  <td className="py-1.5 text-slate-600">{s.evaluacionProveedor.proveedorNombre}</td>
+                  <td className="py-1.5">{s.evaluacionProveedor.fechaCompletado}</td>
+                  <td className="py-1.5 text-right">{pct.toFixed(1)}%</td>
+                  <td className="py-1.5 text-right"><Badge tone={c.tone}>{c.texto}</Badge></td>
+                  <td className="py-1.5 text-right"><button onClick={(e) => { e.stopPropagation(); descargarExcelEvaluacion(s.evaluacionProveedor, s); }} title="Descargar esta evaluación" className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={14} /></button></td>
+                </tr>
               ); })}</tbody>
             </table>
           </div>
@@ -3056,7 +3094,7 @@ export default function App() {
         ) : tab === "estadisticas" ? (
           <Estadisticas solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} proveedores={proveedores} />
         ) : tab === "evalProveedores" && currentUser.rol !== "Solicitante" ? (
-          <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} />
+          <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             currentUser={currentUser}
