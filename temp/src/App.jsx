@@ -2448,14 +2448,19 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="font-medium text-slate-700 mb-3">Ítems solicitados</div>
-        <table className="w-full text-sm mb-2"><thead className="text-slate-400 text-xs"><tr><th className="text-left py-1">Ítem</th><th className="text-right py-1">Cantidad</th><th className="text-right py-1">Unidad</th><th></th></tr></thead><tbody>{solicitud.items.map((it) => {
+        <table className="w-full text-sm mb-2"><thead className="text-slate-400 text-xs"><tr><th className="text-left py-1 w-8">#</th><th className="text-left py-1">Ítem</th><th className="text-right py-1">Cantidad</th><th className="text-right py-1">Unidad</th><th className="text-right py-1">Valor unitario</th><th className="text-right py-1">Total ítem</th><th></th></tr></thead><tbody>{solicitud.items.map((it, idx) => {
           const cat = it.itemCatalogoId ? itemsCatalogo.find((c) => c.id === it.itemCatalogoId) : null;
           const desactualizado = cat && (cat.nombre !== it.nombre || cat.unidadDefault !== it.unidad) && !["completada", "rechazada"].includes(solicitud.status);
+          const d = desgloseItem(it);
+          const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0;
           return (
             <tr key={it.id} className="border-t border-slate-100">
+              <td className="py-1.5 text-slate-400">{idx + 1}</td>
               <td className="py-1.5">{it.nombre}</td>
               <td className="py-1.5 text-right">{it.cantidad}</td>
               <td className="py-1.5 text-right">{it.unidad}</td>
+              <td className="py-1.5 text-right">{unitario > 0 ? fmt(unitario) : "—"}</td>
+              <td className="py-1.5 text-right font-medium">{d.subtotal > 0 ? fmt(d.subtotal) : "—"}</td>
               <td className="py-1.5 text-right">
                 {desactualizado && (
                   <button
