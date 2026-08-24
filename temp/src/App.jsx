@@ -87,7 +87,7 @@ const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "met
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
 const COLORS = ["#4f46e5", "#f59e0b", "#10b981", "#ef4444", "#0ea5e9", "#a855f7"];
-const ROLES = ["Solicitante", "Jefe de Área", "Director de Área", "Dirección Financiera", "Gerencia", "Compras", "Administrador"];
+const ROLES = ["Solicitante", "Jefe de Área", "Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia", "Compras", "Administrador"];
 
 const PASOS = [
   { key: "solicitud", label: "Solicitud creada" },
@@ -212,8 +212,8 @@ function duracion(iniISO, finISO) {
 /* ---------------------------------------------------------
    PERMISOS
 --------------------------------------------------------- */
-const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (u.rol === "Jefe de Área" && u.areaId === s.areaId);
-const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (u.rol === "Director de Área" && u.areaId === s.areaId);
+const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (["Jefe de Área", "Jefe de Área y Director"].includes(u.rol) && u.areaId === s.areaId);
+const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (["Director de Área", "Jefe de Área y Director"].includes(u.rol) && u.areaId === s.areaId);
 const puedeGestionarCotizaciones = (u) => u.rol === "Administrador" || u.rol === "Compras";
 const puedeAprobarFinanciera = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
 const puedeAprobarGerencia = (u) => u.rol === "Administrador" || u.rol === "Gerencia";
@@ -1118,17 +1118,20 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         if (!yaExiste) guardarItemCatalogo({ nombre: it.nombre.trim(), unidadDefault: it.unidad, categoria: "" });
       }
     });
-    const jefe = usuarios.find((u) => u.areaId === areaId && u.rol === "Jefe de Área");
-    const director = usuarios.find((u) => u.areaId === areaId && u.rol === "Director de Área");
+    const jefe = usuarios.find((u) => u.areaId === areaId && ["Jefe de Área", "Jefe de Área y Director"].includes(u.rol));
+    const director = usuarios.find((u) => u.areaId === areaId && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
     // si quien crea la solicitud es el propio jefe del área seleccionada, queda auto-aprobada en ese paso
-    // (no tiene sentido que se apruebe a sí mismo con un clic aparte) — pero igual pasa por Director de Área
-    const esJefeDeSuPropiaArea = currentUser.rol === "Jefe de Área" && currentUser.areaId === areaId;
+    // (no tiene sentido que se apruebe a sí mismo con un clic aparte) — pero igual pasa por Director de Área,
+    // salvo que la misma persona también tenga el rol combinado, en cuyo caso se salta los dos pasos
+    const esJefeDeSuPropiaArea = ["Jefe de Área", "Jefe de Área y Director"].includes(currentUser.rol) && currentUser.areaId === areaId;
+    const esAmbosRoles = currentUser.rol === "Jefe de Área y Director" && currentUser.areaId === areaId;
+    const statusInicial = esAmbosRoles ? "cotizando" : esJefeDeSuPropiaArea ? "aprobacion_director" : "aprobacion_jefe";
     onCrear({
       id: nextId(), folio,
       tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCostoId, conceptoGastoId, solicitanteId: currentUser.id,
       fechaCreacion: hoy(), fechaEstimada, objetivo, justificacion,
-      status: esJefeDeSuPropiaArea ? "aprobacion_director" : "aprobacion_jefe",
+      status: statusInicial,
       revisionCompras: tipo === "compra" ? { estado: "pendiente", observacion: "", usuario: "", fecha: "" } : { estado: "no_aplica", observacion: "", usuario: "", fecha: "" },
       items: items.map((i) => ({ ...i, cotizacionSeleccionada: null, observacionSeleccion: "" })),
       firmas: {
@@ -1136,7 +1139,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         jefe: esJefeDeSuPropiaArea
           ? { aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), observacion: "Creada y aprobada por el mismo jefe de área.", fotoUrl: currentUser.firmaFotoUrl || null }
           : { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
-        director: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
+        director: esAmbosRoles
+          ? { aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), observacion: "Aprobado junto con el paso de jefe de área (mismo responsable).", fotoUrl: currentUser.firmaFotoUrl || null }
+          : { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         financiera: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         gerencia: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
       },
@@ -1145,10 +1150,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     prioridad: null,
     evaluacionProveedor: evaluacionProveedorVacia(),
       recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
-      historialEstados: esJefeDeSuPropiaArea
-        ? [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_director", fecha: ahoraISO() }]
-        : [{ status: "solicitud", fecha: ahoraISO() }, { status: "aprobacion_jefe", fecha: ahoraISO() }],
-      notificaciones: esJefeDeSuPropiaArea
+      historialEstados: [{ status: "solicitud", fecha: ahoraISO() }, { status: statusInicial, fecha: ahoraISO() }],
+      notificaciones: esAmbosRoles
+        ? [{ fecha: ahoraISO(), mensaje: `Solicitud creada y auto-aprobada por ${currentUser.nombre} (jefe de área y director) — lista para cotizar.` }]
+        : esJefeDeSuPropiaArea
         ? [{ fecha: ahoraISO(), mensaje: director?.email ? `Solicitud auto-aprobada por ${currentUser.nombre} (jefe de área). Correo enviado a ${director.nombre} (${director.email}) para su aprobación.` : `Solicitud auto-aprobada por ${currentUser.nombre} (jefe de área). No hay un director de área con correo configurado para notificar.` }]
         : [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
     });
@@ -1158,7 +1163,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         `Nueva solicitud pendiente: ${folio}`,
         `<p>Hola ${jefe.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}) y quedó pendiente de tu aprobación.</p><p><b>Objetivo:</b> ${objetivo}</p>`
       );
-    } else if (esJefeDeSuPropiaArea && director?.email) {
+    } else if (esJefeDeSuPropiaArea && !esAmbosRoles && director?.email) {
       enviarCorreo(
         director.email,
         `Solicitud pendiente de tu aprobación: ${folio}`,
@@ -2325,8 +2330,13 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const avanzar = () => {
     const s = solicitud.status;
     if (s === "aprobacion_jefe") {
-      const director = usuarios.find((u) => u.areaId === solicitud.areaId && u.rol === "Director de Área");
-      patch({ status: "aprobacion_director", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("aprobacion_director"), notificaciones: notificar(director?.email ? `Correo enviado a ${director.nombre} (${director.email}): solicitud ${solicitud.folio} pendiente de tu aprobación.` : `Solicitud aprobada por el jefe de área. No hay un director de área con correo configurado para notificar.`) });
+      if (currentUser.rol === "Jefe de Área y Director") {
+        // la misma persona hace ambos roles: se aprueban los dos pasos de una vez, sin duplicar el clic
+        patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar(), director: { ...firmar(), observacion: "Aprobado junto con el paso de jefe de área (mismo responsable)." } }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada (jefe y director), lista para cotizar.`) });
+      } else {
+        const director = usuarios.find((u) => u.areaId === solicitud.areaId && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
+        patch({ status: "aprobacion_director", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("aprobacion_director"), notificaciones: notificar(director?.email ? `Correo enviado a ${director.nombre} (${director.email}): solicitud ${solicitud.folio} pendiente de tu aprobación.` : `Solicitud aprobada por el jefe de área. No hay un director de área con correo configurado para notificar.`) });
+      }
     }
     else if (s === "aprobacion_director") patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) });
     else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
@@ -2477,14 +2487,15 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         </div>
       )}
 
-      {["comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && solicitud.items.some((i) => i.cotizaciones.length > 0) && (
+      {["aprobacion_jefe", "aprobacion_director", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && solicitud.items.some((i) => i.cotizaciones.length > 0) && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <div className="font-medium text-slate-700 flex items-center gap-2"><TrendingUp size={16} /> Cuadro comparativo (sugerencia automática)</div>
-          {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} item={it} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado} />)}
+          {["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && <div className="text-xs text-slate-400">Cotizaciones que el solicitante adjuntó al crear la solicitud — Compras podrá completar y ajustar esto más adelante.</div>}
+          {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} item={it} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} />)}
         </div>
       )}
 
-      {["comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && <ResumenTotales solicitud={solicitud} />}
+      {["aprobacion_jefe", "aprobacion_director", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && <ResumenTotales solicitud={solicitud} />}
 
       {solicitud.tipo === "servicio" && ["aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
         <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
