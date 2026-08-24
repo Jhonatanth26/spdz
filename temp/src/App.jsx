@@ -81,8 +81,8 @@ const HISTORICO_INIT = [
   { id: "h2", itemNombre: "Sal industrial", fecha: "2026-01-08", proveedor: "Distribuidora del Norte", precioUnitario: 4100, cantidad: 20, unidad: "kilo" },
 ];
 
-const UMBRAL_DIRECCION = 3000000;
-const UMBRAL_GERENCIA = 12000000;
+const UMBRAL_DIRECCION = 500000;
+const UMBRAL_GERENCIA = 100000000;
 const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "caja", "paquete", "hora", "servicio"];
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
