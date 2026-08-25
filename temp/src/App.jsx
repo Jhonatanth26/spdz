@@ -212,8 +212,9 @@ function duracion(iniISO, finISO) {
 /* ---------------------------------------------------------
    PERMISOS
 --------------------------------------------------------- */
-const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (["Jefe de Área", "Jefe de Área y Director"].includes(u.rol) && u.areaId === s.areaId);
-const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (["Director de Área", "Jefe de Área y Director"].includes(u.rol) && u.areaId === s.areaId);
+const tieneAreaACargo = (u, areaId) => u.areaId === areaId || (u.areasAdicionales || []).includes(areaId);
+const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (["Jefe de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, s.areaId));
+const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (["Director de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, s.areaId));
 const puedeGestionarCotizaciones = (u) => u.rol === "Administrador" || u.rol === "Compras";
 const puedeAprobarFinanciera = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
 const puedeAprobarGerencia = (u) => u.rol === "Administrador" || u.rol === "Gerencia";
@@ -487,6 +488,19 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
       const valorMostrado = c.type === "select" ? (c.options.find((o) => o.value === form[c.key])?.label || "—") : (form[c.key] || "—");
       return <div title="Solo un Administrador puede cambiar este campo" className="border border-slate-100 bg-slate-50 rounded-md px-2 py-1 text-xs w-full text-slate-400">{valorMostrado}</div>;
     }
+    if (c.type === "multiselect") {
+      const valores = form[c.key] || [];
+      const toggle = (v) => setForm({ ...form, [c.key]: valores.includes(v) ? valores.filter((x) => x !== v) : [...valores, v] });
+      return (
+        <div className="border border-slate-200 rounded-md px-2 py-1 max-h-24 overflow-y-auto space-y-0.5">
+          {c.options.map((o) => (
+            <label key={o.value} className="flex items-center gap-1.5 text-xs">
+              <input type="checkbox" checked={valores.includes(o.value)} onChange={() => toggle(o.value)} /> {o.label}
+            </label>
+          ))}
+        </div>
+      );
+    }
     return c.type === "select" ? (
       <select value={form[c.key] || ""} onChange={(e) => setForm({ ...form, [c.key]: e.target.value })} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-full">
         <option value="">—</option>{c.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
@@ -569,7 +583,7 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
           ) : (
             <tr key={fila.id} className={`border-t border-slate-100 ${seleccionados.includes(fila.id) ? "bg-indigo-50/30" : ""}`}>
               <td className="px-4 py-2"><input type="checkbox" checked={seleccionados.includes(fila.id)} onChange={() => alternarUno(fila.id)} /></td>
-              {columnas.map((c) => <td key={c.key} className="px-4 py-2 text-slate-600">{c.type === "select" ? (c.options.find((o) => o.value === fila[c.key])?.label || "—") : (fila[c.key] || "—")}</td>)}
+              {columnas.map((c) => <td key={c.key} className="px-4 py-2 text-slate-600">{c.type === "select" ? (c.options.find((o) => o.value === fila[c.key])?.label || "—") : c.type === "multiselect" ? ((fila[c.key] || []).map((v) => c.options.find((o) => o.value === v)?.label).filter(Boolean).join(", ") || "—") : (fila[c.key] || "—")}</td>)}
               <td className="px-4 py-2 text-right whitespace-nowrap"><button onClick={() => iniciarEdicion(fila)} className="text-slate-400 hover:text-indigo-600 p-1"><Pencil size={13} /></button><button onClick={() => onEliminar(fila.id)} className="text-slate-400 hover:text-rose-500 p-1"><Trash2 size={13} /></button></td>
             </tr>
           ))}
@@ -1254,14 +1268,14 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         if (!yaExiste) guardarItemCatalogo({ nombre: it.nombre.trim(), unidadDefault: it.unidad, categoria: "" });
       }
     });
-    const jefe = usuarios.find((u) => u.areaId === areaId && ["Jefe de Área", "Jefe de Área y Director"].includes(u.rol));
-    const director = usuarios.find((u) => u.areaId === areaId && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
+    const jefe = usuarios.find((u) => tieneAreaACargo(u, areaId) && ["Jefe de Área", "Jefe de Área y Director"].includes(u.rol));
+    const director = usuarios.find((u) => tieneAreaACargo(u, areaId) && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
     // si quien crea la solicitud es el propio jefe del área seleccionada, queda auto-aprobada en ese paso
     // (no tiene sentido que se apruebe a sí mismo con un clic aparte) — pero igual pasa por Director de Área,
     // salvo que la misma persona también tenga el rol combinado, en cuyo caso se salta los dos pasos
-    const esJefeDeSuPropiaArea = ["Jefe de Área", "Jefe de Área y Director"].includes(currentUser.rol) && currentUser.areaId === areaId;
-    const esAmbosRoles = currentUser.rol === "Jefe de Área y Director" && currentUser.areaId === areaId;
+    const esJefeDeSuPropiaArea = ["Jefe de Área", "Jefe de Área y Director"].includes(currentUser.rol) && tieneAreaACargo(currentUser, areaId);
+    const esAmbosRoles = currentUser.rol === "Jefe de Área y Director" && tieneAreaACargo(currentUser, areaId);
     const statusInicial = esAmbosRoles ? "cotizando" : esJefeDeSuPropiaArea ? "aprobacion_director" : "aprobacion_jefe";
     onCrear({
       id: nextId(), folio,
@@ -3147,8 +3161,15 @@ function Catalogos({
             <br /><b>Importante:</b> editar o agregar una fila aquí solo cambia sus datos de perfil (nombre, cargo, área, rol). Para que una persona pueda <i>iniciar sesión</i>, primero debes crearla en Supabase → Authentication → Users con el mismo correo, y vincular su ID ahí.
           </div>
           <CrudTable titulo="Usuarios y roles" icon={Users} currentUser={currentUser}
-            columnas={[{ key: "nombre", label: "Nombre" }, { key: "email", label: "Correo electrónico" }, { key: "cargo", label: "Cargo" }, { key: "areaId", label: "Área", type: "select", options: areas.map((a) => ({ value: a.id, label: a.nombre })) }, { key: "rol", label: "Rol", type: "select", options: ROLES.map((r) => ({ value: r, label: r })), soloAdmin: true }]}
-            datos={usuarios} onGuardar={guardarUsuario} onEliminar={eliminarUsuario} plantilla={{ nombre: "", email: "", cargo: "", areaId: "", rol: "Solicitante" }} />
+            columnas={[
+              { key: "nombre", label: "Nombre" },
+              { key: "email", label: "Correo electrónico" },
+              { key: "cargo", label: "Cargo" },
+              { key: "areaId", label: "Área principal", type: "select", options: areas.map((a) => ({ value: a.id, label: a.nombre })) },
+              { key: "areasAdicionales", label: "Áreas adicionales a cargo (Director)", type: "multiselect", options: areas.map((a) => ({ value: a.id, label: a.nombre })) },
+              { key: "rol", label: "Rol", type: "select", options: ROLES.map((r) => ({ value: r, label: r })), soloAdmin: true },
+            ]}
+            datos={usuarios} onGuardar={guardarUsuario} onEliminar={eliminarUsuario} plantilla={{ nombre: "", email: "", cargo: "", areaId: "", areasAdicionales: [], rol: "Solicitante" }} />
         </>
       )}
       {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
@@ -3184,8 +3205,8 @@ export default function App() {
     orderBy: 'nombre',
   });
   const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios } = useSupabaseTable('usuarios', {
-    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, areaId: r.area_id, rol: r.rol, firmaFotoUrl: r.firma_foto_url }),
-    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, area_id: r.areaId, rol: r.rol }),
+    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, areaId: r.area_id, areasAdicionales: r.areas_adicionales || [], rol: r.rol, firmaFotoUrl: r.firma_foto_url }),
+    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, area_id: r.areaId, areas_adicionales: r.areasAdicionales || [], rol: r.rol }),
     orderBy: 'nombre',
   });
   const { datos: itemsCatalogo, cargando: cargandoItems, guardar: guardarItemCatalogo, eliminar: eliminarItemCatalogo, guardarVarios: importarItems } = useSupabaseTable('items_catalogo', {
@@ -3288,7 +3309,9 @@ export default function App() {
           {menuExpandido && (
             <div className="px-2 mb-2">
               <div className="text-sm font-medium text-slate-700 truncate">{currentUser.nombre}</div>
-              <div className="text-[11px] text-slate-400 truncate">{currentUser.rol} · {areas.find((a) => a.id === currentUser.areaId)?.nombre}</div>
+              <div className="text-[11px] text-slate-400 truncate" title={[areas.find((a) => a.id === currentUser.areaId)?.nombre, ...(currentUser.areasAdicionales || []).map((id) => areas.find((a) => a.id === id)?.nombre)].filter(Boolean).join(", ")}>
+                {currentUser.rol} · {[areas.find((a) => a.id === currentUser.areaId)?.nombre, ...(currentUser.areasAdicionales || []).map((id) => areas.find((a) => a.id === id)?.nombre)].filter(Boolean).join(", ")}
+              </div>
             </div>
           )}
           <button title="Cerrar sesión" onClick={() => { cerrarSesion(); setAbierta(null); setCreando(false); }} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-100 w-full ${!menuExpandido ? "justify-center" : ""}`}><LogOut size={13} className="shrink-0" /> {menuExpandido && "Cerrar sesión"}</button>
