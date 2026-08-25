@@ -1455,6 +1455,15 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
   const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: item.ivaEstimado ?? 19, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
+
+  // guarda automáticamente lo que ya se alcanzó a escribir (incluido el archivo adjunto), sin depender
+  // de que se le dé clic al botón — así nada se pierde si alguien solo adjunta el archivo y no le da "Guardar"
+  useEffect(() => {
+    const validas = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
+    onGuardar(item.id, validas);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cots]);
+
   const guardar = async () => {
     let listaCots = [...cots];
     // los proveedores escritos a mano (sin elegirlos del catálogo) también quedan guardados ahí,
