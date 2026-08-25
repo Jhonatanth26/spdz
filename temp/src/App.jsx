@@ -3259,6 +3259,7 @@ export default function App() {
     rol: perfilAuth.rol,
     firmaFotoUrl: perfilAuth.firma_foto_url,
     areaId: perfilAuth.area_id,
+    areasAdicionales: perfilAuth.areas_adicionales || [],
   };
 
   const crearSolicitud = async (nueva) => { await crearSolicitudDB(nueva); setCreando(false); setTab("solicitudes"); };
