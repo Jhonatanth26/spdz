@@ -1359,7 +1359,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 
       <div className="space-y-2 mb-5">
         {items.map((it, idx) => (
-          <div key={it.id} className="bg-slate-50 rounded-lg p-2 space-y-1.5">
+          <div key={it.id} className={`${["bg-slate-50", "bg-indigo-50/60", "bg-amber-50/60", "bg-emerald-50/60", "bg-rose-50/50", "bg-sky-50/60"][idx % 6]} rounded-lg p-2 space-y-1.5 border border-black/5`}>
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-slate-400 shrink-0 w-5 text-right">{idx + 1}.</span>
               <div className="flex-1">
@@ -2360,19 +2360,23 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       </div>
 
       {/* PLAN DE PAGOS (solo servicio) */}
-      {pagoActivo && (
-        <div>
-          <div className="text-xs font-medium text-slate-500 mb-1">Plan de pagos {solicitud.pagosConfirmados ? "(confirmado por Dirección Financiera)" : "(sin confirmar)"}</div>
-          <table className="w-full text-[11px]">
-            <thead className="text-slate-400 border-b border-slate-100"><tr><th className="text-left py-0.5">Pago</th><th className="text-right py-0.5">Valor</th><th className="text-right py-0.5">Fecha</th><th className="text-center py-0.5">Pagado</th></tr></thead>
-            <tbody>
-              <tr className="border-t border-slate-50"><td className="py-0.5">Anticipo</td><td className="py-0.5 text-right">{fmt(solicitud.pagos.anticipo.valor)}</td><td className="py-0.5 text-right">{solicitud.pagos.anticipo.fecha || "—"}</td><td className="py-0.5 text-center">{solicitud.pagos.anticipo.pagado ? "✓" : ""}</td></tr>
-              {solicitud.pagos.intermedio.activo && <tr className="border-t border-slate-50"><td className="py-0.5">Intermedio</td><td className="py-0.5 text-right">{fmt(solicitud.pagos.intermedio.valor)}</td><td className="py-0.5 text-right">{solicitud.pagos.intermedio.fecha || "—"}</td><td className="py-0.5 text-center">{solicitud.pagos.intermedio.pagado ? "✓" : ""}</td></tr>}
-              <tr className="border-t border-slate-50"><td className="py-0.5">Final</td><td className="py-0.5 text-right">{fmt(solicitud.pagos.final.valor)}</td><td className="py-0.5 text-right">{solicitud.pagos.final.fecha || "—"}</td><td className="py-0.5 text-center">{solicitud.pagos.final.pagado ? "✓" : ""}</td></tr>
-            </tbody>
-          </table>
-        </div>
-      )}
+      {pagoActivo && (() => {
+        const usaSugerido = !solicitud.pagosConfirmados && !(solicitud.pagos.anticipo.valor > 0 || solicitud.pagos.final.valor > 0);
+        const p = usaSugerido ? solicitud.pagosSugeridos : solicitud.pagos;
+        return (
+          <div>
+            <div className="text-xs font-medium text-slate-500 mb-1">Plan de pagos {solicitud.pagosConfirmados ? "(confirmado por Dirección Financiera)" : usaSugerido ? "(sugerido por el solicitante — pendiente de confirmar)" : "(sin confirmar)"}</div>
+            <table className="w-full text-[11px]">
+              <thead className="text-slate-400 border-b border-slate-100"><tr><th className="text-left py-0.5">Pago</th><th className="text-right py-0.5">Valor</th><th className="text-right py-0.5">Fecha</th><th className="text-center py-0.5">Pagado</th></tr></thead>
+              <tbody>
+                <tr className="border-t border-slate-50"><td className="py-0.5">Anticipo</td><td className="py-0.5 text-right">{fmt(p.anticipo.valor)}</td><td className="py-0.5 text-right">{p.anticipo.fecha || "—"}</td><td className="py-0.5 text-center">{p.anticipo.pagado ? "✓" : ""}</td></tr>
+                {p.intermedio.activo && <tr className="border-t border-slate-50"><td className="py-0.5">Intermedio</td><td className="py-0.5 text-right">{fmt(p.intermedio.valor)}</td><td className="py-0.5 text-right">{p.intermedio.fecha || "—"}</td><td className="py-0.5 text-center">{p.intermedio.pagado ? "✓" : ""}</td></tr>}
+                <tr className="border-t border-slate-50"><td className="py-0.5">Final</td><td className="py-0.5 text-right">{fmt(p.final.valor)}</td><td className="py-0.5 text-right">{p.final.fecha || "—"}</td><td className="py-0.5 text-center">{p.final.pagado ? "✓" : ""}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        );
+      })()}
 
       {/* OC ENVIADA Y RECEPCIÓN */}
       {((solicitud.ocEnviada.ordenesProveedor && solicitud.ocEnviada.ordenesProveedor.length) || (solicitud.recepcion.archivos && solicitud.recepcion.archivos.length) || solicitud.recepcion.comentario) && (
@@ -2750,7 +2754,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {["aprobacion_jefe", "aprobacion_director", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && <ResumenTotales solicitud={solicitud} />}
 
-      {solicitud.tipo === "servicio" && ["aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
+      {solicitud.tipo === "servicio" && ["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
         <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
       )}
 
