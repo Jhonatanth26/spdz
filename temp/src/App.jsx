@@ -2508,6 +2508,17 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const notificar = (mensaje) => [...solicitud.notificaciones, { fecha: ahoraISO(), mensaje }];
 
   const guardarCotizaciones = (itemId, cots) => patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizaciones: cots } : i)) });
+  const [mostrarCotGeneralCompras, setMostrarCotGeneralCompras] = useState(false);
+  // aplica una misma cotización (proveedor + archivo) a varios ítems a la vez, cada uno con su propio precio
+  const aplicarCotizacionGeneralCompras = (precios, cotizacionBase) => {
+    patch({
+      items: solicitud.items.map((i) => {
+        if (!(i.id in precios) || i.cotizaciones.length >= 3) return i;
+        return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
+      }),
+    });
+    setMostrarCotGeneralCompras(false);
+  };
   const seleccionarCotizacion = (itemId, idx, obs) => patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizacionSeleccionada: idx, observacionSeleccion: obs } : i)) });
   const guardarItemsRevision = (items) => patch({ items });
   const decidirRevisionCompras = (estado, obs) => {
@@ -2717,8 +2728,14 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {!comparativoBloqueado && ["cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status) && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada") && puedeGestionarCotizaciones(currentUser) && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-          <div className="font-medium text-slate-700">Cargar hasta 3 cotizaciones por ítem (Compras)</div>
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="font-medium text-slate-700">Cargar hasta 3 cotizaciones por ítem (Compras)</div>
+            <button onClick={() => setMostrarCotGeneralCompras(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>
+          </div>
           <div className="text-[11px] text-slate-400">Si por error solo guardaste 1 o 2, puedes seguir agregando hasta 3 aquí mismo, incluso después de generar el cuadro comparativo — hasta que se cree la orden.</div>
+          {mostrarCotGeneralCompras && (
+            <CotizacionGeneralForm items={solicitud.items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneralCompras} onCerrar={() => setMostrarCotGeneralCompras(false)} />
+          )}
           {solicitud.items.map((it) => <CotizacionForm key={it.id} item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} />)}
         </div>
       )}
