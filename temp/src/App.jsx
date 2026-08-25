@@ -1189,6 +1189,16 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
       )}
 
       <button onClick={aplicar} disabled={!listo || guardando} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40">{guardando ? "Aplicando..." : `Aplicar a ${seleccionados.length} ítem(s)`}</button>
+      {!listo && !guardando && (
+        <div className="text-[11px] text-amber-600">
+          Falta:{" "}
+          {[
+            !seleccionados.length && "seleccionar al menos un ítem",
+            !(proveedorId || proveedorNombre.trim()) && "el proveedor",
+            seleccionados.some((id) => !(parseFloat(precios[id]) > 0)) && "el precio de uno o más ítems seleccionados",
+          ].filter(Boolean).join(", ")}.
+        </div>
+      )}
     </div>
   );
 }
