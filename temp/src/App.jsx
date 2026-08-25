@@ -81,8 +81,8 @@ const HISTORICO_INIT = [
   { id: "h2", itemNombre: "Sal industrial", fecha: "2026-01-08", proveedor: "Distribuidora del Norte", precioUnitario: 4100, cantidad: 20, unidad: "kilo" },
 ];
 
-const UMBRAL_DIRECCION = 3000000;
-const UMBRAL_GERENCIA = 12000000;
+const UMBRAL_DIRECCION = 500000;
+const UMBRAL_GERENCIA = 100000000;
 const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "caja", "paquete", "hora", "servicio"];
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
@@ -1081,6 +1081,118 @@ function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir
 }
 
 
+// una sola cotización (mismo proveedor, mismo archivo) que cubre varios ítems a la vez —
+// cada ítem seleccionado puede tener su propio precio dentro del mismo documento.
+// Útil cuando un proveedor cotiza varios ítems juntos en un solo PDF.
+function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar, onCerrar }) {
+  const [seleccionados, setSeleccionados] = useState(items.map((i) => i.id)); // por defecto: todos (modo "cotización general")
+  const [proveedorId, setProveedorId] = useState("");
+  const [proveedorNombre, setProveedorNombre] = useState("");
+  const [proveedorEmailNuevo, setProveedorEmailNuevo] = useState("");
+  const [archivoNombre, setArchivoNombre] = useState(null);
+  const [moneda, setMoneda] = useState("COP");
+  const [tasaCambio, setTasaCambio] = useState(1);
+  const [precios, setPrecios] = useState({});
+  const [guardando, setGuardando] = useState(false);
+
+  const toggleItem = (id) => setSeleccionados((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const todosSeleccionados = seleccionados.length === items.length;
+  const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : items.map((i) => i.id));
+
+  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0);
+
+  const aplicar = async () => {
+    if (!listo) return;
+    setGuardando(true);
+    let idFinal = proveedorId;
+    if (!idFinal && proveedorNombre.trim() && guardarProveedor) {
+      const existente = proveedores.find((p) => p.nombre.trim().toLowerCase() === proveedorNombre.trim().toLowerCase());
+      if (existente) idFinal = existente.id;
+      else {
+        const creado = await guardarProveedor({ nombre: proveedorNombre.trim(), nit: "", actividadEconomica: "", contacto: "", email: proveedorEmailNuevo.trim() });
+        if (creado?.id) idFinal = creado.id;
+      }
+    }
+    const base = {
+      proveedorId: idFinal || "",
+      proveedorNombre: idFinal ? "" : proveedorNombre.trim(),
+      precioFinal: "",
+      moneda, tasaCambio,
+      descuentoTipo: "porcentaje", descuentoValor: "",
+      diasEntrega: "", condicionesScore: 5,
+      ivaPct: 19,
+      archivoNombre,
+    };
+    const preciosLimpios = {};
+    seleccionados.forEach((id) => { preciosLimpios[id] = precios[id]; });
+    setGuardando(false);
+    onAplicar(preciosLimpios, base);
+  };
+
+  return (
+    <div className="border border-indigo-200 bg-indigo-50/40 rounded-lg p-3 mb-3 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="text-sm font-medium text-slate-700">Cotización general — un mismo proveedor/archivo para varios ítems</div>
+        <button onClick={onCerrar} className="text-slate-400 hover:text-slate-600 text-xs">✕ Cerrar</button>
+      </div>
+
+      <div>
+        <label className="text-[11px] text-slate-500 block mb-1">Ítems que cubre esta cotización</label>
+        <label className="flex items-center gap-1.5 text-xs mb-1"><input type="checkbox" checked={todosSeleccionados} onChange={alternarTodos} /> Todos (cotización general para toda la solicitud)</label>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1">
+          {items.map((it, idx) => (
+            <label key={it.id} className="flex items-center gap-1.5 text-xs bg-white border border-slate-200 rounded-md px-2 py-1">
+              <input type="checkbox" checked={seleccionados.includes(it.id)} onChange={() => toggleItem(it.id)} />
+              {idx + 1}. {it.nombre || "(sin nombre)"}
+            </label>
+          ))}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Proveedor</label>
+          <AutocompletarProveedor
+            proveedores={proveedores}
+            valorTexto={proveedorId ? (proveedores.find((p) => p.id === proveedorId)?.nombre || "") : proveedorNombre}
+            proveedorId={proveedorId}
+            onElegir={(p) => { setProveedorId(p.id); setProveedorNombre(""); }}
+            onEscribir={(texto) => { setProveedorNombre(texto); setProveedorId(""); }}
+          />
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Moneda</label>
+          <select value={moneda} onChange={(e) => setMoneda(e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
+        </div>
+      </div>
+      {!proveedorId && proveedorNombre.trim() && (
+        <input type="email" placeholder="Correo del proveedor (opcional)" value={proveedorEmailNuevo} onChange={(e) => setProveedorEmailNuevo(e.target.value)} className="w-full max-w-xs border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+      )}
+      {moneda !== "COP" && (
+        <input type="number" placeholder={`Tasa ${moneda}→COP`} value={tasaCambio} onChange={(e) => setTasaCambio(e.target.value)} className="w-40 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+      )}
+
+      <AdjuntarArchivo nombre={archivoNombre} label="Adjuntar el documento de cotización (PDF/foto)" onSeleccionar={setArchivoNombre} carpeta="cotizaciones-generales" />
+
+      {seleccionados.length > 0 && (
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Precio por ítem (según lo que dice el documento)</label>
+          <div className="space-y-1">
+            {items.filter((it) => seleccionados.includes(it.id)).map((it, idx) => (
+              <div key={it.id} className="flex items-center gap-2">
+                <span className="text-xs text-slate-600 flex-1 truncate">{items.findIndex((x) => x.id === it.id) + 1}. {it.nombre || "(sin nombre)"}</span>
+                <InputMiles placeholder="Precio" value={precios[it.id] || ""} onChange={(v) => setPrecios((prev) => ({ ...prev, [it.id]: v }))} className="w-32 border border-slate-200 rounded-md px-2 py-1 text-xs" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button onClick={aplicar} disabled={!listo || guardando} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40">{guardando ? "Aplicando..." : `Aplicar a ${seleccionados.length} ítem(s)`}</button>
+    </div>
+  );
+}
+
 function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
   const [tipo, setTipo] = useState("compra");
   const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
@@ -1108,6 +1220,20 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   };
   const cambiarMonedaItem = (id, moneda) => { updateItem(id, "moneda", moneda); if (moneda !== "COP") actualizarTasaItem(id, moneda); };
   const setCotizacionesItem = (itemId, cots) => setItems(items.map((i) => (i.id === itemId ? { ...i, cotizaciones: cots } : i)));
+
+  const [mostrarCotGeneral, setMostrarCotGeneral] = useState(false);
+  const totalGeneral = items.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
+
+  // aplica una misma cotización (proveedor + archivo) a varios ítems seleccionados de una sola vez,
+  // cada uno con su propio precio dentro del mismo documento
+  const aplicarCotizacionGeneral = (precios, cotizacionBase) => {
+    setItems((prev) => prev.map((i) => {
+      if (!(i.id in precios)) return i;
+      if (i.cotizaciones.length >= 3) return i;
+      return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
+    }));
+    setMostrarCotGeneral(false);
+  };
 
   const submit = () => {
     if (!items.length || items.some((i) => !i.nombre.trim()) || !objetivo.trim() || !justificacion.trim()) return;
@@ -1173,7 +1299,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-3xl">
+    <div className="flex gap-5 items-start max-w-6xl">
+    <div className="bg-white rounded-xl border border-slate-200 p-6 flex-1 min-w-0">
       <h2 className="text-lg font-semibold text-slate-800 mb-5">Nueva solicitud</h2>
       <div className="grid grid-cols-2 gap-4 mb-5">
         <div>
@@ -1194,17 +1321,33 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
       </div>
 
-      <div className="mb-2 flex items-center justify-between"><label className="text-xs font-medium text-slate-500">Ítems solicitados</label><button onClick={addItem} className="text-xs text-indigo-600 font-medium flex items-center gap-1"><Plus size={13} /> Agregar ítem</button></div>
+      <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
+        <label className="text-xs font-medium text-slate-500">Ítems solicitados</label>
+        <div className="flex items-center gap-3">
+          <button onClick={() => setMostrarCotGeneral(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>
+          <button onClick={addItem} className="text-xs text-indigo-600 font-medium flex items-center gap-1"><Plus size={13} /> Agregar ítem</button>
+        </div>
+      </div>
+
+      {mostrarCotGeneral && (
+        <CotizacionGeneralForm items={items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneral} onCerrar={() => setMostrarCotGeneral(false)} />
+      )}
+
       <div className="space-y-2 mb-5">
-        {items.map((it) => (
+        {items.map((it, idx) => (
           <div key={it.id} className="bg-slate-50 rounded-lg p-2 space-y-1.5">
-            <AutocompletarItem
-              itemsCatalogo={itemsCatalogo}
-              valorTexto={it.nombre}
-              catalogoId={it.itemCatalogoId}
-              onElegir={(cat) => setItems((prev) => prev.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: cat.id, nombre: cat.nombre, unidad: cat.unidadDefault } : i)))}
-              onEscribir={(texto) => setItems((prev) => prev.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: "", nombre: texto } : i)))}
-            />
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-slate-400 shrink-0 w-5 text-right">{idx + 1}.</span>
+              <div className="flex-1">
+                <AutocompletarItem
+                  itemsCatalogo={itemsCatalogo}
+                  valorTexto={it.nombre}
+                  catalogoId={it.itemCatalogoId}
+                  onElegir={(cat) => setItems((prev) => prev.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: cat.id, nombre: cat.nombre, unidad: cat.unidadDefault } : i)))}
+                  onEscribir={(texto) => setItems((prev) => prev.map((i) => (i.id === it.id ? { ...i, itemCatalogoId: "", nombre: texto } : i)))}
+                />
+              </div>
+            </div>
             <div className="flex gap-2 items-start flex-wrap">
               <input type="number" min="0" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.unidad} onChange={(e) => updateItem(it.id, "unidad", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
@@ -1261,6 +1404,33 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm text-slate-500 border border-slate-200">Cancelar</button>
         <button onClick={submit} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium">Enviar solicitud</button>
       </div>
+    </div>
+
+    {/* Resumen a la derecha — aprovecha el espacio en blanco */}
+    <div className="w-72 shrink-0 sticky top-4 hidden lg:block">
+      <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+        <div className="font-medium text-slate-700 text-sm">Resumen</div>
+        <div className="text-xs text-slate-500 space-y-1">
+          <div className="flex justify-between"><span>Ítems</span><span className="font-medium text-slate-700">{items.length}</span></div>
+          <div className="flex justify-between"><span>Empresa</span><span className="font-medium text-slate-700 text-right">{empresas.find((e) => e.id === empresaId)?.nombre || "—"}</span></div>
+          <div className="flex justify-between"><span>Área</span><span className="font-medium text-slate-700 text-right">{areas.find((a) => a.id === areaId)?.nombre || "—"}</span></div>
+        </div>
+        <div className="border-t border-slate-100 pt-3 space-y-1 text-xs">
+          {items.map((it, idx) => {
+            const d = desgloseItem(it);
+            if (!(d.subtotal > 0)) return null;
+            return <div key={it.id} className="flex justify-between text-slate-500"><span className="truncate pr-2">{idx + 1}. {it.nombre || "(sin nombre)"}</span><span className="shrink-0 text-slate-700">{fmt(d.total)}</span></div>;
+          })}
+        </div>
+        <div className="border-t border-slate-200 pt-3 space-y-1">
+          <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span>{fmt(totalGeneral.subtotal)}</span></div>
+          <div className="flex justify-between text-xs text-slate-500"><span>IVA</span><span>{fmt(totalGeneral.iva)}</span></div>
+          <div className="flex justify-between text-sm font-semibold text-slate-800 pt-1"><span>Total</span><span>{fmt(totalGeneral.total)}</span></div>
+        </div>
+        {requiereGerencia(totalGeneral.total) && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Este monto requerirá aprobación de Gerencia.</div>}
+        {!requiereGerencia(totalGeneral.total) && requiereDireccion(totalGeneral.total) && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Este monto requerirá aprobación de Dirección Financiera.</div>}
+      </div>
+    </div>
     </div>
   );
 }
