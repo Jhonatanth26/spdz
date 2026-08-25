@@ -2448,45 +2448,61 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="font-medium text-slate-700 mb-3">Ítems solicitados</div>
-        <table className="w-full text-sm mb-2"><thead className="text-slate-400 text-xs"><tr><th className="text-left py-1 w-8">#</th><th className="text-left py-1">Ítem</th><th className="text-right py-1">Cantidad</th><th className="text-right py-1">Unidad</th><th className="text-right py-1">Valor unitario</th><th className="text-right py-1">Total ítem</th><th className="text-left py-1">Cotizaciones</th><th></th></tr></thead><tbody>{solicitud.items.map((it, idx) => {
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm mb-2 min-w-[880px]">
+          <thead className="text-slate-400 text-xs">
+            <tr>
+              <th className="text-left py-1.5 pr-2 w-8">#</th>
+              <th className="text-left py-1.5 pr-3">Ítem</th>
+              <th className="text-right py-1.5 px-2 whitespace-nowrap w-20">Cantidad</th>
+              <th className="text-right py-1.5 px-2 whitespace-nowrap w-20">Unidad</th>
+              <th className="text-right py-1.5 px-2 whitespace-nowrap w-28">Valor unitario</th>
+              <th className="text-right py-1.5 px-2 whitespace-nowrap w-28">Total ítem</th>
+              <th className="text-left py-1.5 px-2 whitespace-nowrap w-40">Cotizaciones</th>
+              <th className="w-10"></th>
+            </tr>
+          </thead>
+          <tbody>{solicitud.items.map((it, idx) => {
           const cat = it.itemCatalogoId ? itemsCatalogo.find((c) => c.id === it.itemCatalogoId) : null;
           const desactualizado = cat && (cat.nombre !== it.nombre || cat.unidadDefault !== it.unidad) && !["completada", "rechazada"].includes(solicitud.status);
           const d = desgloseItem(it);
           const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0;
           const cotConArchivo = (it.cotizaciones || []).filter((c) => c.archivoNombre);
           return (
-            <tr key={it.id} className="border-t border-slate-100">
-              <td className="py-1.5 text-slate-400">{idx + 1}</td>
-              <td className="py-1.5">{it.nombre}</td>
-              <td className="py-1.5 text-right">{it.cantidad}</td>
-              <td className="py-1.5 text-right">{it.unidad}</td>
-              <td className="py-1.5 text-right">{unitario > 0 ? fmt(unitario) : "—"}</td>
-              <td className="py-1.5 text-right font-medium">{d.subtotal > 0 ? fmt(d.subtotal) : "—"}</td>
-              <td className="py-1.5">
+            <tr key={it.id} className="border-t border-slate-100 align-top">
+              <td className="py-2 pr-2 text-slate-400">{idx + 1}</td>
+              <td className="py-2 pr-3">{it.nombre}</td>
+              <td className="py-2 px-2 text-right whitespace-nowrap">{it.cantidad}</td>
+              <td className="py-2 px-2 text-right whitespace-nowrap">{it.unidad}</td>
+              <td className="py-2 px-2 text-right whitespace-nowrap">{unitario > 0 ? fmt(unitario) : "—"}</td>
+              <td className="py-2 px-2 text-right font-medium whitespace-nowrap">{d.subtotal > 0 ? fmt(d.subtotal) : "—"}</td>
+              <td className="py-2 px-2">
                 {cotConArchivo.length ? (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-col gap-1">
                     {cotConArchivo.map((c, ci) => (
-                      <EnlacePrivado key={ci} path={c.archivoNombre} className="text-indigo-600 hover:text-indigo-800 flex items-center gap-1 text-xs">
+                      <EnlacePrivado key={ci} path={c.archivoNombre} className="text-indigo-600 hover:text-indigo-800 flex items-center gap-1 text-xs whitespace-nowrap">
                         <FileText size={12} /> {proveedores.find((p) => p.id === c.proveedorId)?.nombre || c.proveedorNombre || "Proveedor"}
                       </EnlacePrivado>
                     ))}
                   </div>
-                ) : <span className="text-slate-300 text-xs">—</span>}
+                ) : <span className="text-slate-300 text-xs">Sin archivo</span>}
               </td>
-              <td className="py-1.5 text-right">
+              <td className="py-2 pl-2 text-right">
                 {desactualizado && (
                   <button
                     onClick={() => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, nombre: cat.nombre, unidad: cat.unidadDefault } : x)) })}
                     title={`El catálogo tiene: "${cat.nombre}" (${cat.unidadDefault})`}
-                    className="text-[11px] text-amber-600 underline"
+                    className="text-[11px] text-amber-600 underline whitespace-nowrap"
                   >
-                    ⚠ Actualizar con el catálogo
+                    ⚠ Actualizar
                   </button>
                 )}
               </td>
             </tr>
           );
-        })}</tbody></table>
+          })}</tbody>
+        </table>
+        </div>
       </div>
 
       {solicitud.status === "cotizando" && puedeVerHistorico(currentUser) && (
