@@ -663,6 +663,93 @@ function Dashboard({ areas, solicitudes }) {
    REPORTE: promedio de evaluaciones de un proveedor en un rango de fechas
    (para auditorías ISO 9001)
 --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   CALENDARIO DE PAGOS — solo Dirección Financiera y Compras
+--------------------------------------------------------- */
+function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
+  const [seleccionados, setSeleccionados] = useState([]);
+
+  // arma una fila por cada pago confirmado (anticipo / intermedio / final) de cada solicitud tipo servicio
+  const filas = [];
+  solicitudes.forEach((s) => {
+    if (s.tipo !== "servicio" || !s.pagosConfirmados) return;
+    const prov = proveedoresAdjudicados(s, proveedores);
+    const tramos = [
+      { tipo: "Anticipo", ...s.pagos.anticipo },
+      ...(s.pagos.intermedio.activo ? [{ tipo: "Intermedio", ...s.pagos.intermedio }] : []),
+      { tipo: "Final", ...s.pagos.final },
+    ];
+    tramos.forEach((t) => {
+      if (!(parseFloat(t.valor) > 0) || !t.fecha) return;
+      filas.push({ id: `${s.id}-${t.tipo}`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: t.tipo, valor: parseFloat(t.valor), fecha: t.fecha, pagado: !!t.pagado });
+    });
+  });
+  filas.sort((a, b) => a.fecha.localeCompare(b.fecha)); // más antiguo primero
+
+  const alternar = (id) => setSeleccionados((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const todosSeleccionados = filas.length > 0 && seleccionados.length === filas.length;
+  const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : filas.map((f) => f.id));
+  const totalSeleccionado = filas.filter((f) => seleccionados.includes(f.id)).reduce((acc, f) => acc + f.valor, 0);
+
+  const descargar = () => {
+    const encabezado = ["Fecha", "Consecutivo", "Proveedor", "Tipo de pago", "Valor", "Pagado"];
+    const cuerpo = filas.map((f) => [f.fecha, f.folio, f.proveedor, f.tipo, f.valor, f.pagado ? "Sí" : "No"]);
+    const hoja = XLSX.utils.aoa_to_sheet([encabezado, ...cuerpo]);
+    hoja["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 16 }, { wch: 10 }];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Pagos");
+    XLSX.writeFile(libro, `Calendario_pagos_${hoy()}.xlsx`);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800">Calendario de pagos</h2>
+          <p className="text-xs text-slate-400 mt-1">Pagos programados (planes ya confirmados), ordenados del más antiguo al más reciente.</p>
+        </div>
+        <button onClick={descargar} disabled={!filas.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
+      </div>
+
+      {seleccionados.length > 0 && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl px-4 py-3 flex items-center justify-between">
+          <span className="text-sm text-slate-700">{seleccionados.length} pago(s) seleccionado(s)</span>
+          <span className="text-lg font-semibold text-indigo-700">{fmt(totalSeleccionado)}</span>
+        </div>
+      )}
+
+      {filas.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay pagos programados con plan confirmado todavía.</div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs"><tr>
+              <th className="px-4 py-2 w-8"><input type="checkbox" checked={todosSeleccionados} onChange={alternarTodos} /></th>
+              <th className="text-left px-4 py-2 font-medium">Fecha</th>
+              <th className="text-left px-4 py-2 font-medium">Consecutivo</th>
+              <th className="text-left px-4 py-2 font-medium">Proveedor</th>
+              <th className="text-left px-4 py-2 font-medium">Tipo de pago</th>
+              <th className="text-right px-4 py-2 font-medium">Valor</th>
+              <th className="text-center px-4 py-2 font-medium">Pagado</th>
+            </tr></thead>
+            <tbody>{filas.map((f) => (
+              <tr key={f.id} className={`border-t border-slate-100 ${f.pagado ? "opacity-50" : ""} ${seleccionados.includes(f.id) ? "bg-indigo-50/40" : ""}`}>
+                <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionados.includes(f.id)} onChange={() => alternar(f.id)} /></td>
+                <td className="px-4 py-2 whitespace-nowrap">{f.fecha}</td>
+                <td className="px-4 py-2 font-medium text-slate-700 cursor-pointer hover:text-indigo-600" onClick={() => onAbrir?.(f.solicitudId)}>{f.folio}</td>
+                <td className="px-4 py-2 text-slate-600">{f.proveedor}</td>
+                <td className="px-4 py-2 text-slate-600">{f.tipo}</td>
+                <td className="px-4 py-2 text-right font-medium">{fmt(f.valor)}</td>
+                <td className="px-4 py-2 text-center">{f.pagado ? "✓" : "—"}</td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
   const [filtro, setFiltro] = useState("");
   const [desde, setDesde] = useState("");
@@ -3324,6 +3411,7 @@ export default function App() {
         {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
         <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
         {currentUser.rol !== "Solicitante" && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
+        {["Dirección Financiera", "Compras", "Administrador"].includes(currentUser.rol) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
         {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
 
         <div className="mt-auto pt-4 border-t border-slate-100">
@@ -3378,6 +3466,8 @@ export default function App() {
           <Estadisticas solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} proveedores={proveedores} />
         ) : tab === "evalProveedores" && currentUser.rol !== "Solicitante" ? (
           <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
+        ) : tab === "calendarioPagos" && ["Dirección Financiera", "Compras", "Administrador"].includes(currentUser.rol) ? (
+          <CalendarioPagos solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             currentUser={currentUser}
