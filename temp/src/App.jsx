@@ -669,20 +669,30 @@ function Dashboard({ areas, solicitudes }) {
 function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
   const [seleccionados, setSeleccionados] = useState([]);
 
-  // arma una fila por cada pago confirmado (anticipo / intermedio / final) de cada solicitud tipo servicio
+  // arma una fila por cada pago confirmado (anticipo / intermedio / final) de cada solicitud tipo servicio;
+  // las que no tienen plan de pagos (compras, o servicios sin confirmar) usan su fecha estimada de entrega
   const filas = [];
   solicitudes.forEach((s) => {
-    if (s.tipo !== "servicio" || !s.pagosConfirmados) return;
+    if (["completada", "rechazada"].includes(s.status)) return;
     const prov = proveedoresAdjudicados(s, proveedores);
-    const tramos = [
-      { tipo: "Anticipo", ...s.pagos.anticipo },
-      ...(s.pagos.intermedio.activo ? [{ tipo: "Intermedio", ...s.pagos.intermedio }] : []),
-      { tipo: "Final", ...s.pagos.final },
-    ];
-    tramos.forEach((t) => {
-      if (!(parseFloat(t.valor) > 0) || !t.fecha) return;
-      filas.push({ id: `${s.id}-${t.tipo}`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: t.tipo, valor: parseFloat(t.valor), fecha: t.fecha, pagado: !!t.pagado });
-    });
+    if (s.tipo === "servicio" && s.pagosConfirmados) {
+      const tramos = [
+        { tipo: "Anticipo", ...s.pagos.anticipo },
+        ...(s.pagos.intermedio.activo ? [{ tipo: "Intermedio", ...s.pagos.intermedio }] : []),
+        { tipo: "Final", ...s.pagos.final },
+      ];
+      tramos.forEach((t) => {
+        if (!(parseFloat(t.valor) > 0) || !t.fecha) return;
+        const dias = Math.round((new Date(t.fecha + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
+        filas.push({ id: `${s.id}-${t.tipo}`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: t.tipo, valor: parseFloat(t.valor), fecha: t.fecha, dias, pagado: !!t.pagado });
+      });
+    } else if (s.fechaEstimada) {
+      const total = totalSolicitud(s);
+      if (total > 0) {
+        const dias = Math.round((new Date(s.fechaEstimada + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
+        filas.push({ id: `${s.id}-estimado`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: "Sin plan de pagos (fecha de entrega est.)", valor: total, fecha: s.fechaEstimada, dias, pagado: false });
+      }
+    }
   });
   filas.sort((a, b) => a.fecha.localeCompare(b.fecha)); // más antiguo primero
 
@@ -691,11 +701,19 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
   const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : filas.map((f) => f.id));
   const totalSeleccionado = filas.filter((f) => seleccionados.includes(f.id)).reduce((acc, f) => acc + f.valor, 0);
 
+  const textoDias = (dias, pagado) => {
+    if (pagado) return "Pagado";
+    if (dias < 0) return `Vencido hace ${Math.abs(dias)} día${Math.abs(dias) === 1 ? "" : "s"}`;
+    if (dias === 0) return "Hoy";
+    return `Faltan ${dias} día${dias === 1 ? "" : "s"}`;
+  };
+  const colorDias = (dias, pagado) => pagado ? "text-slate-400" : dias < 0 ? "text-rose-600" : dias <= 3 ? "text-amber-600" : "text-slate-600";
+
   const descargar = () => {
-    const encabezado = ["Fecha", "Consecutivo", "Proveedor", "Tipo de pago", "Valor", "Pagado"];
-    const cuerpo = filas.map((f) => [f.fecha, f.folio, f.proveedor, f.tipo, f.valor, f.pagado ? "Sí" : "No"]);
+    const encabezado = ["Fecha", "Días", "Consecutivo", "Proveedor", "Tipo de pago", "Valor", "Pagado"];
+    const cuerpo = filas.map((f) => [f.fecha, f.pagado ? "" : f.dias, f.folio, f.proveedor, f.tipo, f.valor, f.pagado ? "Sí" : "No"]);
     const hoja = XLSX.utils.aoa_to_sheet([encabezado, ...cuerpo]);
-    hoja["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 16 }, { wch: 10 }];
+    hoja["!cols"] = [{ wch: 14 }, { wch: 8 }, { wch: 14 }, { wch: 30 }, { wch: 14 }, { wch: 16 }, { wch: 10 }];
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, "Pagos");
     XLSX.writeFile(libro, `Calendario_pagos_${hoy()}.xlsx`);
@@ -706,7 +724,7 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h2 className="text-lg font-semibold text-slate-800">Calendario de pagos</h2>
-          <p className="text-xs text-slate-400 mt-1">Pagos programados (planes ya confirmados), ordenados del más antiguo al más reciente.</p>
+          <p className="text-xs text-slate-400 mt-1">Pagos con plan confirmado, y solicitudes sin plan de pagos (usan su fecha estimada de entrega) — ordenados del más antiguo al más reciente.</p>
         </div>
         <button onClick={descargar} disabled={!filas.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
       </div>
@@ -726,6 +744,7 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
             <thead className="bg-slate-50 text-slate-500 text-xs"><tr>
               <th className="px-4 py-2 w-8"><input type="checkbox" checked={todosSeleccionados} onChange={alternarTodos} /></th>
               <th className="text-left px-4 py-2 font-medium">Fecha</th>
+              <th className="text-left px-4 py-2 font-medium">Días</th>
               <th className="text-left px-4 py-2 font-medium">Consecutivo</th>
               <th className="text-left px-4 py-2 font-medium">Proveedor</th>
               <th className="text-left px-4 py-2 font-medium">Tipo de pago</th>
@@ -736,6 +755,7 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
               <tr key={f.id} className={`border-t border-slate-100 ${f.pagado ? "opacity-50" : ""} ${seleccionados.includes(f.id) ? "bg-indigo-50/40" : ""}`}>
                 <td className="px-4 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionados.includes(f.id)} onChange={() => alternar(f.id)} /></td>
                 <td className="px-4 py-2 whitespace-nowrap">{f.fecha}</td>
+                <td className={`px-4 py-2 whitespace-nowrap font-medium ${colorDias(f.dias, f.pagado)}`}>{textoDias(f.dias, f.pagado)}</td>
                 <td className="px-4 py-2 font-medium text-slate-700 cursor-pointer hover:text-indigo-600" onClick={() => onAbrir?.(f.solicitudId)}>{f.folio}</td>
                 <td className="px-4 py-2 text-slate-600">{f.proveedor}</td>
                 <td className="px-4 py-2 text-slate-600">{f.tipo}</td>
