@@ -210,15 +210,47 @@ function duracion(iniISO, finISO) {
 }
 
 /* ---------------------------------------------------------
-   PERMISOS
+   PERMISOS — configurables desde la app (Catálogo → Permisos),
+   ya no están fijos en el código. Administrador siempre tiene
+   todo, sin excepción, para que nunca se pueda quedar sin acceso.
 --------------------------------------------------------- */
+const PERMISOS_DISPONIBLES = [
+  { key: "aprobar_jefe", label: "Aprobar como jefe de área" },
+  { key: "aprobar_director", label: "Aprobar como director de área" },
+  { key: "aprobar_financiera", label: "Aprobar como Dirección Financiera" },
+  { key: "aprobar_gerencia", label: "Aprobar como Gerencia" },
+  { key: "gestionar_cotizaciones", label: "Gestionar cotizaciones y cuadro comparativo" },
+  { key: "editar_pagos", label: "Editar y confirmar el plan de pagos" },
+  { key: "ver_catalogos", label: "Ver el Catálogo" },
+  { key: "ver_todas_solicitudes", label: "Ver todas las solicitudes (no solo las propias)" },
+  { key: "reabrir_solicitudes", label: "Reabrir solicitudes rechazadas" },
+  { key: "ver_historico", label: "Ver histórico de compras" },
+];
+
+// mapa en memoria { [rol]: { [permiso]: true } } — se sincroniza cada vez que se
+// cargan/actualizan los permisos desde Supabase (ver App()). Así todas las
+// funciones de abajo consultan el permiso sin que el resto del código cambie.
+let __permisosPorRol = {};
+function construirMapaPermisos(lista) {
+  const mapa = {};
+  (lista || []).forEach((p) => {
+    if (!mapa[p.rol]) mapa[p.rol] = {};
+    mapa[p.rol][p.permiso] = !!p.activo;
+  });
+  return mapa;
+}
+function tienePermiso(rol, permiso) {
+  if (rol === "Administrador") return true;
+  return !!__permisosPorRol[rol]?.[permiso];
+}
+
 const tieneAreaACargo = (u, areaId) => u.areaId === areaId || (u.areasAdicionales || []).includes(areaId);
-const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (["Jefe de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, s.areaId));
-const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (["Director de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, s.areaId));
-const puedeGestionarCotizaciones = (u) => u.rol === "Administrador" || u.rol === "Compras";
-const puedeAprobarFinanciera = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
-const puedeAprobarGerencia = (u) => u.rol === "Administrador" || u.rol === "Gerencia";
-const puedeReabrir = (u) => ["Administrador", "Compras", "Dirección Financiera"].includes(u.rol);
+const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (tienePermiso(u.rol, "aprobar_jefe") && tieneAreaACargo(u, s.areaId));
+const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (tienePermiso(u.rol, "aprobar_director") && tieneAreaACargo(u, s.areaId));
+const puedeGestionarCotizaciones = (u) => tienePermiso(u.rol, "gestionar_cotizaciones");
+const puedeAprobarFinanciera = (u) => tienePermiso(u.rol, "aprobar_financiera");
+const puedeAprobarGerencia = (u) => tienePermiso(u.rol, "aprobar_gerencia");
+const puedeReabrir = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "reabrir_solicitudes");
 // determina en qué paso quedó marcada como rechazada, para poder reabrirla justo ahí
 function pasoDelRechazo(solicitud) {
   if (solicitud.firmas?.gerencia?.aprobado === false) return { status: "aprobacion_gerencia", campo: "gerencia" };
@@ -228,9 +260,9 @@ function pasoDelRechazo(solicitud) {
   if (solicitud.revisionCompras?.estado === "rechazada") return { status: "cotizando", campo: null, revision: true };
   return { status: "aprobacion_jefe", campo: null };
 }
-const puedeVerCatalogos = (u) => u.rol === "Administrador" || ["Compras", "Dirección Financiera", "Gerencia"].includes(u.rol);
-const puedeVerTodasSolicitudes = (u) => u.rol === "Administrador" || u.rol !== "Solicitante";
-const puedeEditarPagos = (u) => u.rol === "Administrador" || u.rol === "Dirección Financiera";
+const puedeVerCatalogos = (u) => tienePermiso(u.rol, "ver_catalogos");
+const puedeVerTodasSolicitudes = (u) => tienePermiso(u.rol, "ver_todas_solicitudes");
+const puedeEditarPagos = (u) => tienePermiso(u.rol, "editar_pagos");
 
 /* ---------------------------------------------------------
    EVALUACIÓN DE PROVEEDORES — formato oficial (Registro Selección y Evaluación de Proveedores)
@@ -291,7 +323,7 @@ function evaluacionProveedorCompleta(ev) {
   return CRITERIOS_EVALUACION.every((c) => parseFloat(ev.criterios?.[c.key]) > 0);
 }
 
-const puedeVerHistorico = (u) => u.rol === "Administrador" || u.rol === "Compras";
+const puedeVerHistorico = (u) => tienePermiso(u.rol, "ver_historico");
 
 /* ---------------------------------------------------------
    DATOS SEMILLA
@@ -3229,12 +3261,14 @@ function Catalogos({
   itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo,
   centrosCosto, guardarCentroCosto, eliminarCentroCosto,
   conceptosGasto, guardarConceptoGasto, eliminarConceptoGasto,
+  permisos, togglePermiso,
 }) {
   const [sub, setSub] = useState("empresas");
   const tabs = [
     { key: "empresas", label: "Empresas", icon: Building2 }, { key: "areas", label: "Áreas", icon: Layers }, { key: "departamentos", label: "Departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
     { key: "centros", label: "Centros de costo", icon: Layers }, { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
+    ...(currentUser?.rol === "Administrador" ? [{ key: "permisos", label: "Permisos", icon: Lock }] : []),
   ];
 
   // no se puede borrar un proveedor o un ítem que ya está referenciado en alguna solicitud existente
@@ -3303,6 +3337,35 @@ function Catalogos({
       {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
       {sub === "centros" && <CrudTable titulo="Centros de costo" icon={Layers} columnas={[{ key: "nombre", label: "Nombre" }]} datos={centrosCosto} onGuardar={guardarCentroCosto} onEliminar={eliminarCentroCosto} plantilla={{ nombre: "" }} />}
       {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto" icon={ClipboardList} columnas={[{ key: "nombre", label: "Nombre" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ nombre: "" }} />}
+      {sub === "permisos" && currentUser?.rol === "Administrador" && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <div className="px-5 py-3 border-b border-slate-100">
+            <div className="flex items-center gap-2 font-medium text-slate-700"><Lock size={16} /> Permisos por rol</div>
+            <div className="text-xs text-slate-400 mt-1">Marca o desmarca lo que puede hacer cada rol — el cambio aplica de inmediato a todos, sin necesidad de tocar código. Administrador siempre tiene todo, por seguridad no aparece en esta lista.</div>
+          </div>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs"><tr>
+              <th className="text-left px-4 py-2 font-medium sticky left-0 bg-slate-50">Permiso</th>
+              {ROLES.filter((r) => r !== "Administrador" && r !== "Solicitante").map((r) => <th key={r} className="text-center px-3 py-2 font-medium whitespace-nowrap">{r}</th>)}
+            </tr></thead>
+            <tbody>
+              {PERMISOS_DISPONIBLES.map((p) => (
+                <tr key={p.key} className="border-t border-slate-100">
+                  <td className="px-4 py-2 text-slate-600 sticky left-0 bg-white">{p.label}</td>
+                  {ROLES.filter((r) => r !== "Administrador" && r !== "Solicitante").map((r) => {
+                    const activo = !!permisos.find((x) => x.rol === r && x.permiso === p.key)?.activo;
+                    return (
+                      <td key={r} className="text-center px-3 py-2">
+                        <input type="checkbox" checked={activo} onChange={() => togglePermiso(r, p.key)} />
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -3337,6 +3400,19 @@ export default function App() {
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, area_id: r.areaId, areas_adicionales: r.areasAdicionales || [], rol: r.rol }),
     orderBy: 'nombre',
   });
+  const { datos: permisos, cargando: cargandoPermisos, guardar: guardarPermiso } = useSupabaseTable('permisos', {
+    desdeDb: (r) => ({ id: r.id, rol: r.rol, permiso: r.permiso, activo: r.activo }),
+    haciaDb: (r) => ({ id: r.id, rol: r.rol, permiso: r.permiso, activo: r.activo }),
+    orderBy: 'rol',
+  });
+  // sincroniza el mapa en memoria que usan todas las funciones "puedeXxx" cada vez que
+  // cambian los permisos — así se reflejan de inmediato en toda la app, sin recargar.
+  useEffect(() => { __permisosPorRol = construirMapaPermisos(permisos); }, [permisos]);
+  const togglePermiso = (rol, permisoKey) => {
+    const actual = permisos.find((p) => p.rol === rol && p.permiso === permisoKey);
+    if (actual) guardarPermiso({ ...actual, activo: !actual.activo });
+    else guardarPermiso({ id: nextId(), rol, permiso: permisoKey, activo: true });
+  };
   const { datos: itemsCatalogo, cargando: cargandoItems, guardar: guardarItemCatalogo, eliminar: eliminarItemCatalogo, guardarVarios: importarItems } = useSupabaseTable('items_catalogo', {
     desdeDb: (r) => ({ id: r.id, nombre: r.nombre, unidadDefault: r.unidad_default, categoria: r.categoria }),
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, unidad_default: r.unidadDefault, categoria: r.categoria }),
@@ -3500,6 +3576,7 @@ export default function App() {
             itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
             centrosCosto={centrosCosto} guardarCentroCosto={guardarCentroCosto} eliminarCentroCosto={eliminarCentroCosto}
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
+            permisos={permisos} togglePermiso={togglePermiso}
           />
         ) : (
           <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
