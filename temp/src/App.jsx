@@ -227,6 +227,7 @@ const PERMISOS_DISPONIBLES = [
   { key: "ver_historico", label: "Ver histórico de compras" },
   { key: "ver_mis_pendientes", label: "Ver la pantalla \"Mis pendientes\"" },
   { key: "ver_calendario_pagos", label: "Ver el Calendario de pagos" },
+  { key: "ver_ordenes_enviadas", label: "Ver el reporte de Órdenes enviadas a proveedores" },
   { key: "ver_evaluaciones_proveedores", label: "Ver el reporte de Evaluación de proveedores" },
 ];
 
@@ -268,6 +269,7 @@ const puedeVerTodasSolicitudes = (u) => tienePermiso(u.rol, "ver_todas_solicitud
 const puedeEditarPagos = (u) => tienePermiso(u.rol, "editar_pagos");
 const puedeVerMisPendientes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_mis_pendientes");
 const puedeVerCalendarioPagos = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_calendario_pagos");
+const puedeVerOrdenesEnviadas = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_ordenes_enviadas");
 const puedeVerEvaluaciones = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_evaluaciones_proveedores");
 
 /* ---------------------------------------------------------
@@ -486,9 +488,10 @@ function EnlacePrivado({ path, children, className, title }) {
   return <button type="button" onClick={abrir} disabled={cargando} title={title} className={className}>{cargando ? "..." : children}</button>;
 }
 
-function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta }) {
+function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta, soloPdf }) {
   const [subiendo, setSubiendo] = useState(false);
   const manejar = async (file) => {
+    if (soloPdf && file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) { alert("Este archivo debe ser un PDF."); return; }
     if (!archivoDentroDelLimite(file)) { alert(`El archivo pesa más de ${TAMANO_MAXIMO_MB} MB. Sube uno más liviano.`); return; }
     setSubiendo(true);
     const ruta = await subirArchivo(file, carpeta || "adjuntos");
@@ -502,7 +505,7 @@ function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta }) {
       <label className={`inline-flex items-center gap-1.5 border border-dashed border-slate-300 rounded-md px-2 py-1 cursor-pointer text-slate-500 hover:border-indigo-400 hover:text-indigo-600 ${small ? "text-[11px]" : "text-xs"}`}>
         <Paperclip size={small ? 11 : 13} />
         {subiendo ? <span>Subiendo...</span> : mostrar ? <span className="truncate max-w-[120px]">{mostrar}</span> : <span>{label || "Adjuntar archivo"}</span>}
-        <input type="file" accept=".pdf,image/*" className="hidden" disabled={subiendo} onChange={(e) => e.target.files[0] && manejar(e.target.files[0])} />
+        <input type="file" accept={soloPdf ? ".pdf" : ".pdf,image/*"} className="hidden" disabled={subiendo} onChange={(e) => e.target.files[0] && manejar(e.target.files[0])} />
       </label>
       {nombre && !subiendo && <EnlacePrivado path={nombre} className={`text-indigo-600 underline ${small ? "text-[11px]" : "text-xs"}`}>ver</EnlacePrivado>}
     </span>
@@ -704,6 +707,82 @@ function Dashboard({ areas, solicitudes }) {
 /* ---------------------------------------------------------
    CALENDARIO DE PAGOS — solo Dirección Financiera y Compras
 --------------------------------------------------------- */
+/* ---------------------------------------------------------
+   ÓRDENES ENVIADAS A PROVEEDORES — consolidado para contabilidad
+--------------------------------------------------------- */
+function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir }) {
+  const filas = [];
+  solicitudes.forEach((s) => {
+    if (!["oc_enviada", "recepcion", "completada"].includes(s.status)) return;
+    (s.ocEnviada?.ordenesProveedor || []).forEach((o) => {
+      if (!o.archivoFirmadoUrl) return;
+      filas.push({
+        id: `${s.id}-${o.proveedorId || o.proveedorNombre}`,
+        solicitudId: s.id,
+        folio: s.folio,
+        tipo: s.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo",
+        empresa: empresas.find((e) => e.id === s.empresaId)?.nombre || "",
+        proveedor: o.proveedorNombre,
+        fecha: o.fecha,
+        total: totalSolicitud(s),
+        archivo: o.archivoFirmadoUrl,
+      });
+    });
+  });
+  filas.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")); // más reciente primero
+
+  const descargar = () => {
+    const encabezado = ["Fecha envío", "Consecutivo", "Tipo", "Empresa", "Proveedor", "Total solicitud"];
+    const cuerpo = filas.map((f) => [f.fecha, f.folio, f.tipo, f.empresa, f.proveedor, f.total]);
+    const hoja = XLSX.utils.aoa_to_sheet([encabezado, ...cuerpo]);
+    hoja["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 30 }, { wch: 16 }];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Órdenes enviadas");
+    XLSX.writeFile(libro, `Ordenes_enviadas_${hoy()}.xlsx`);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800">Órdenes enviadas a proveedores</h2>
+          <p className="text-xs text-slate-400 mt-1">Consolidado de todas las órdenes ya firmadas y enviadas — para registrar en el sistema contable.</p>
+        </div>
+        <button onClick={descargar} disabled={!filas.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
+      </div>
+
+      {filas.length === 0 ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">Todavía no hay órdenes enviadas al proveedor.</div>
+      ) : (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-slate-500 text-xs"><tr>
+              <th className="text-left px-4 py-2 font-medium">Fecha envío</th>
+              <th className="text-left px-4 py-2 font-medium">Consecutivo</th>
+              <th className="text-left px-4 py-2 font-medium">Tipo</th>
+              <th className="text-left px-4 py-2 font-medium">Empresa</th>
+              <th className="text-left px-4 py-2 font-medium">Proveedor</th>
+              <th className="text-right px-4 py-2 font-medium">Total solicitud</th>
+              <th className="text-center px-4 py-2 font-medium">PDF</th>
+            </tr></thead>
+            <tbody>{filas.map((f) => (
+              <tr key={f.id} className="border-t border-slate-100">
+                <td className="px-4 py-2 whitespace-nowrap">{f.fecha}</td>
+                <td className="px-4 py-2 font-medium text-slate-700 cursor-pointer hover:text-indigo-600" onClick={() => onAbrir?.(f.solicitudId)}>{f.folio}</td>
+                <td className="px-4 py-2 text-slate-600">{f.tipo}</td>
+                <td className="px-4 py-2 text-slate-600">{f.empresa}</td>
+                <td className="px-4 py-2 text-slate-600">{f.proveedor}</td>
+                <td className="px-4 py-2 text-right font-medium">{fmt(f.total)}</td>
+                <td className="px-4 py-2 text-center"><EnlacePrivado path={f.archivo} className="text-indigo-600 underline text-xs">Descargar</EnlacePrivado></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
   const [seleccionados, setSeleccionados] = useState([]);
 
@@ -1406,6 +1485,16 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 
   const submit = () => {
     if (!items.length || items.some((i) => !i.nombre.trim()) || !objetivo.trim() || !justificacion.trim()) return;
+    // si el solicitante empezó a llenar el plan de pagos sugerido, debe cuadrar exacto con el total —
+    // si lo dejó completamente vacío, no pasa nada, es opcional
+    const algoDelPlanLlenado = parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0;
+    if (algoDelPlanLlenado) {
+      const restantePlan = totalGeneral.total - totalPagado(pagosSugeridos);
+      if (Math.abs(restantePlan) > 0.5) {
+        alert(restantePlan > 0 ? `El plan de pagos sugerido no cubre el total: faltan ${fmt(restantePlan)}. Complétalo o déjalo completamente vacío si no quieres sugerir uno.` : `El plan de pagos sugerido supera el total en ${fmt(-restantePlan)}. Ajústalo antes de enviar.`);
+        return;
+      }
+    }
     // los ítems escritos a mano (sin elegir del catálogo) también quedan guardados ahí, para no perder esa información
     items.forEach((it) => {
       if (!it.itemCatalogoId && it.nombre.trim()) {
@@ -1900,7 +1989,9 @@ function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGu
 --------------------------------------------------------- */
 function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConfirmar, onEditarDeNuevo }) {
   const [pagos, setPagos] = useState(solicitud.pagos);
-  const editable = puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados;
+  // una vez la orden ya se envió al proveedor, las condiciones de pago quedan fijas — ya no se pueden tocar
+  const ocYaEnviada = ["oc_enviada", "recepcion", "completada"].includes(solicitud.status);
+  const editable = puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados && !ocYaEnviada;
   const pagado = totalPagado(pagos);
   const restante = total - pagado;
   const sug = solicitud.pagosSugeridos;
@@ -1928,9 +2019,14 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
         <div className="flex items-center gap-2 text-slate-700 font-medium"><CalendarClock size={16} /> Plan de pagos (máx. 3)</div>
         <div className="flex items-center gap-2">
           {solicitud.pagosConfirmados ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado por Dirección Financiera</Badge> : <Badge tone="amber">Pendiente de confirmación</Badge>}
-          {solicitud.pagosConfirmados && puedeEditarPagos(currentUser) && <button onClick={onEditarDeNuevo} className="text-[11px] text-indigo-600 underline">Editar de nuevo</button>}
+          {solicitud.pagosConfirmados && !ocYaEnviada && puedeEditarPagos(currentUser) && <button onClick={onEditarDeNuevo} className="text-[11px] text-indigo-600 underline">Editar de nuevo</button>}
         </div>
       </div>
+      {ocYaEnviada && (
+        <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2 mb-2">
+          🔒 La orden ya fue enviada al proveedor — las condiciones de pago quedaron fijas y no se pueden modificar.
+        </div>
+      )}
       {descuadrado && (
         <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2 mb-2">
           ⚠ Este plan quedó confirmado con un descuadre de <b>{fmt(Math.abs(restante))}</b> ({restante > 0 ? "falta programar" : "programado de más"}) — probablemente de antes de esta validación. Usa "Editar de nuevo" para corregirlo.
@@ -2021,7 +2117,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       {ordenes.map((o, i) => (
         <div key={i} className="border border-slate-200 rounded-lg p-3 space-y-2">
           <div className="text-sm font-medium text-slate-700 flex items-center gap-2"><Truck size={13} /> {o.proveedorNombre}</div>
-          <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" />
+          <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" soloPdf />
           {o.archivoOriginalUrl && (
             o.archivoFirmadoUrl ? (
               <div className="text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 size={13} /> Firmada por {o.usuario} el {o.fecha}. <EnlacePrivado path={o.archivoFirmadoUrl} className="underline">Ver PDF firmado</EnlacePrivado></div>
@@ -2210,6 +2306,8 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
 
   useEffect(() => {
     if (esCompras && !ev.completada && !ev.proveedorId && proveedorSugerido) {
+      // fecha en que quedó adjudicado el proveedor (paso "comparativo" del historial), si existe
+      const fechaComparativo = solicitud.historialEstados?.find((h) => h.status === "comparativo")?.fecha;
       const copy = {
         ...ev,
         proveedorId: proveedorSugerido.id,
@@ -2221,7 +2319,10 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
         telefono: proveedorSugerido.telefono || "",
         representanteLegal: proveedorSugerido.representanteLegal || "",
         email: proveedorSugerido.email || "",
+        fechaSeleccion: ev.fechaSeleccion || (fechaComparativo ? fechaComparativo.slice(0, 10) : solicitud.fechaCreacion) || "",
         fechaEvaluacion: ev.fechaEvaluacion || hoy(),
+        serviciosPresta: ev.serviciosPresta || proveedorSugerido.actividadEconomica || "",
+        descripcion: ev.descripcion || solicitud.items.map((it) => it.nombre).join(", "),
       };
       setEv(copy);
       onGuardar(copy);
@@ -3514,6 +3615,7 @@ export default function App() {
         <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
         {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
         {puedeVerCalendarioPagos(currentUser) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
+        {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Órdenes enviadas" />}
         {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
 
         <div className="mt-auto pt-4 border-t border-slate-100">
@@ -3570,6 +3672,8 @@ export default function App() {
           <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "calendarioPagos" && puedeVerCalendarioPagos(currentUser) ? (
           <CalendarioPagos solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
+        ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
+          <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             currentUser={currentUser}
