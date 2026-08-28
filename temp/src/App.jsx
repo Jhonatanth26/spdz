@@ -2731,7 +2731,7 @@ function accionLabel(solicitud, total) {
   }
 }
 
-function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onVolver }) {
+function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver }) {
   const [observacion, setObservacion] = useState("");
   const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
   const area = areas.find((a) => a.id === solicitud.areaId);
@@ -2886,7 +2886,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
-            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone="green">Recibida</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button></div>
+            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone="green">Recibida</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{currentUser.rol === "Administrador" && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> Eliminar solicitud</button>}</div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
           </div>
           <div className="text-right">
@@ -3534,7 +3534,7 @@ export default function App() {
   const cargandoCatalogos = cargandoAreas || cargandoDepartamentos || cargandoEmpresas || cargandoProveedores || cargandoUsuarios || cargandoItems || cargandoCentros || cargandoConceptos;
 
   const [historico, setHistorico] = useState(HISTORICO_INIT);
-  const { solicitudes, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB } = useSolicitudes();
+  const { solicitudes, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB } = useSolicitudes();
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   const [creando, setCreando] = useState(false);
@@ -3575,6 +3575,13 @@ export default function App() {
 
   const crearSolicitud = async (nueva) => { await crearSolicitudDB(nueva); setCreando(false); setTab("solicitudes"); };
   const actualizarSolicitud = async (upd) => { await actualizarSolicitudDB(upd); };
+
+  const eliminarSolicitud = async (id, folio) => {
+    if (currentUser.rol !== "Administrador") return;
+    if (!window.confirm(`¿Eliminar por completo la solicitud ${folio}? Esta acción no se puede deshacer — se borra todo su historial, cotizaciones, firmas y evaluación.`)) return;
+    await eliminarSolicitudDB(id);
+    setAbierta(null);
+  };
   // La foto de firma del perfil, por ahora, solo se guarda en memoria durante la sesión.
   // Falta conectar esto a un "update" real sobre la tabla usuarios (próximo módulo a migrar).
   const guardarPerfil = async (u) => { await actualizarPerfil({ firma_foto_url: u.firmaFotoUrl }); setPerfil(false); };
@@ -3639,7 +3646,7 @@ export default function App() {
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
         ) : solicitudAbierta ? (
-          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
+          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} />
         ) : tab === "misPendientes" && puedeVerMisPendientes(currentUser) ? (

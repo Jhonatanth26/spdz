@@ -81,5 +81,11 @@ export function useSolicitudes() {
     await recargar()
   }
 
-  return { solicitudes, cargando, crear, actualizar, recargar }
+  const eliminar = async (id) => {
+    const { error } = await supabase.from('solicitudes').delete().eq('id', id)
+    if (error) { console.error('Error eliminando solicitud:', error.message); return error }
+    await recargar()
+  }
+
+  return { solicitudes, cargando, crear, actualizar, eliminar, recargar }
 }
