@@ -225,6 +225,9 @@ const PERMISOS_DISPONIBLES = [
   { key: "ver_todas_solicitudes", label: "Ver todas las solicitudes (no solo las propias)" },
   { key: "reabrir_solicitudes", label: "Reabrir solicitudes rechazadas" },
   { key: "ver_historico", label: "Ver histórico de compras" },
+  { key: "ver_mis_pendientes", label: "Ver la pantalla \"Mis pendientes\"" },
+  { key: "ver_calendario_pagos", label: "Ver el Calendario de pagos" },
+  { key: "ver_evaluaciones_proveedores", label: "Ver el reporte de Evaluación de proveedores" },
 ];
 
 // mapa en memoria { [rol]: { [permiso]: true } } — se sincroniza cada vez que se
@@ -263,6 +266,9 @@ function pasoDelRechazo(solicitud) {
 const puedeVerCatalogos = (u) => tienePermiso(u.rol, "ver_catalogos");
 const puedeVerTodasSolicitudes = (u) => tienePermiso(u.rol, "ver_todas_solicitudes");
 const puedeEditarPagos = (u) => tienePermiso(u.rol, "editar_pagos");
+const puedeVerMisPendientes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_mis_pendientes");
+const puedeVerCalendarioPagos = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_calendario_pagos");
+const puedeVerEvaluaciones = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_evaluaciones_proveedores");
 
 /* ---------------------------------------------------------
    EVALUACIÓN DE PROVEEDORES — formato oficial (Registro Selección y Evaluación de Proveedores)
@@ -3503,11 +3509,11 @@ export default function App() {
         </button>
         <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         <NavBtn id="dashboard" icon={LayoutDashboard} label="Dashboard" />
-        {currentUser.rol !== "Solicitante" && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
+        {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
         {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
         <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
-        {currentUser.rol !== "Solicitante" && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
-        {["Dirección Financiera", "Compras", "Administrador"].includes(currentUser.rol) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
+        {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
+        {puedeVerCalendarioPagos(currentUser) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
         {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
 
         <div className="mt-auto pt-4 border-t border-slate-100">
@@ -3534,7 +3540,7 @@ export default function App() {
           <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onVolver={() => setAbierta(null)} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} />
-        ) : tab === "misPendientes" && currentUser.rol !== "Solicitante" ? (
+        ) : tab === "misPendientes" && puedeVerMisPendientes(currentUser) ? (
           <div className="space-y-4">
             <div>
               <h2 className="text-lg font-semibold text-slate-800">Mis pendientes</h2>
@@ -3560,9 +3566,9 @@ export default function App() {
           </div>
         ) : tab === "estadisticas" ? (
           <Estadisticas solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} proveedores={proveedores} />
-        ) : tab === "evalProveedores" && currentUser.rol !== "Solicitante" ? (
+        ) : tab === "evalProveedores" && puedeVerEvaluaciones(currentUser) ? (
           <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
-        ) : tab === "calendarioPagos" && ["Dirección Financiera", "Compras", "Administrador"].includes(currentUser.rol) ? (
+        ) : tab === "calendarioPagos" && puedeVerCalendarioPagos(currentUser) ? (
           <CalendarioPagos solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
