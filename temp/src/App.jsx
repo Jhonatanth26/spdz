@@ -3171,7 +3171,7 @@ function requiereMiAccion(currentUser, s, proveedores) {
   }
 }
 
-function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, currentUser, onAbrir, onExportar, titulo }) {
+function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas, titulo }) {
   const [fArea, setFArea] = useState("todas");
   const [fEmpresa, setFEmpresa] = useState("todas");
   const [fEstado, setFEstado] = useState("todos");
@@ -3266,13 +3266,26 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
         {hayFiltros && <button onClick={limpiarFiltros} className="text-xs text-slate-500 underline mb-1.5">Limpiar filtros</button>}
         <div className="text-xs text-slate-400 ml-auto mb-1.5">{filtradas.length} de {solicitudes.length} solicitudes</div>
       </div>
-      <ListaSolicitudes solicitudes={filtradas} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={onAbrir} onExportar={onExportar} />
+      <ListaSolicitudes solicitudes={filtradas} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={onAbrir} onExportar={onExportar} onEliminarSeleccionadas={onEliminarSeleccionadas} />
     </div>
   );
 }
 
-function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUser, onAbrir, onExportar }) {
+function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas }) {
   const [enviandoId, setEnviandoId] = useState(null);
+  const [seleccionadas, setSeleccionadas] = useState([]);
+  const esAdmin = currentUser?.rol === "Administrador";
+
+  const alternar = (id) => setSeleccionadas((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const todasSeleccionadas = solicitudes.length > 0 && seleccionadas.length === solicitudes.length;
+  const alternarTodas = () => setSeleccionadas(todasSeleccionadas ? [] : solicitudes.map((s) => s.id));
+
+  const eliminarSeleccion = () => {
+    if (!seleccionadas.length) return;
+    if (!window.confirm(`¿Eliminar ${seleccionadas.length} solicitud(es) por completo? Esta acción no se puede deshacer.`)) return;
+    onEliminarSeleccionadas(seleccionadas);
+    setSeleccionadas([]);
+  };
 
   const reenviarTodas = async (e, s, empresa) => {
     e.stopPropagation();
@@ -3298,12 +3311,22 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
   };
 
   return (
+    <div className="space-y-2">
+      {esAdmin && seleccionadas.length > 0 && (
+        <div className="flex items-center justify-between bg-rose-50 border border-rose-200 rounded-lg px-4 py-2">
+          <span className="text-sm text-rose-700">{seleccionadas.length} solicitud(es) seleccionada(s)</span>
+          <button onClick={eliminarSeleccion} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Trash2 size={13} /> Eliminar seleccionadas</button>
+        </div>
+      )}
     <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 text-slate-500"><tr><th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
+        <thead className="bg-slate-50 text-slate-500"><tr>
+          {esAdmin && <th className="px-4 py-2 w-8"><input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} /></th>}
+          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
         <tbody>{solicitudes.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
           const puedeReenviar = currentUser && puedeGestionarCotizaciones(currentUser) && (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl);
-          return (<tr key={s.id} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer" onClick={() => onAbrir(s.id)}>
+          return (<tr key={s.id} className={`border-t border-slate-100 hover:bg-slate-50 cursor-pointer ${seleccionadas.includes(s.id) ? "bg-rose-50/40" : ""}`} onClick={() => onAbrir(s.id)}>
+            {esAdmin && <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} /></td>}
             <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
             <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
             <td className="px-4 py-2.5">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td>
@@ -3318,6 +3341,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
             <td className="px-4 py-2.5 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
             <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
       </table>
+    </div>
     </div>
   );
 }
@@ -3582,6 +3606,10 @@ export default function App() {
     await eliminarSolicitudDB(id);
     setAbierta(null);
   };
+  const eliminarSolicitudesSeleccionadas = async (ids) => {
+    if (currentUser.rol !== "Administrador") return;
+    for (const id of ids) await eliminarSolicitudDB(id);
+  };
   // La foto de firma del perfil, por ahora, solo se guarda en memoria durante la sesión.
   // Falta conectar esto a un "update" real sobre la tabla usuarios (próximo módulo a migrar).
   const guardarPerfil = async (u) => { await actualizarPerfil({ firma_foto_url: u.firmaFotoUrl }); setPerfil(false); };
@@ -3656,7 +3684,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mt-1">Solicitudes que están esperando una acción tuya en este momento, según tu rol.</p>
             </div>
             {solicitudesMisPendientes.length ? (
-              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} />
+              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} />
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No tienes solicitudes pendientes de tu acción en este momento.</div>
             )}
@@ -3668,7 +3696,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mt-1">Solicitudes en el paso "Orden generada" que tienen al menos una orden de proveedor pendiente de tu firma.</p>
             </div>
             {solicitudesPorFirmar.length ? (
-              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} />
+              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} />
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay órdenes pendientes de firma en este momento.</div>
             )}
@@ -3696,7 +3724,7 @@ export default function App() {
             permisos={permisos} togglePermiso={togglePermiso}
           />
         ) : (
-          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
+          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         )}
       </main>
 
