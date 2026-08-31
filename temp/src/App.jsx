@@ -1651,10 +1651,11 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 
       <div className="mb-5 bg-slate-50 rounded-lg p-3 border border-slate-200">
         <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><CalendarClock size={13} /> Plan de pagos sugerido (opcional — Dirección Financiera lo confirmará o ajustará)</div>
+        {!(totalGeneral.total > 0) && <div className="text-[11px] text-amber-600 mb-2">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
         <div className="grid grid-cols-3 gap-2">
-          <div><InputMiles placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1" /><InputFecha value={pagosSugeridos.anticipo.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" /></div>
-          <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" checked={pagosSugeridos.intermedio.activo} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, activo: e.target.checked } })} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
-          <div><InputMiles placeholder="Pago final" value={pagosSugeridos.final.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1" /><InputFecha value={pagosSugeridos.final.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" /></div>
+          <div><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.anticipo.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+          <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" disabled={!(totalGeneral.total > 0)} checked={pagosSugeridos.intermedio.activo} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, activo: e.target.checked } })} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+          <div><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Pago final" value={pagosSugeridos.final.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.final.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
         </div>
       </div>
 
@@ -1991,7 +1992,9 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
   const [pagos, setPagos] = useState(solicitud.pagos);
   // una vez la orden ya se envió al proveedor, las condiciones de pago quedan fijas — ya no se pueden tocar
   const ocYaEnviada = ["oc_enviada", "recepcion", "completada"].includes(solicitud.status);
-  const editable = puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados && !ocYaEnviada;
+  // sin precios (ni cotización ni estimado), no hay contra qué cuadrar el plan — se habilita cuando Compras cargue precios
+  const sinPrecio = !(total > 0);
+  const editable = puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados && !ocYaEnviada && !sinPrecio;
   const pagado = totalPagado(pagos);
   const restante = total - pagado;
   const sug = solicitud.pagosSugeridos;
@@ -2027,6 +2030,11 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
           🔒 La orden ya fue enviada al proveedor — las condiciones de pago quedaron fijas y no se pueden modificar.
         </div>
       )}
+      {sinPrecio && !ocYaEnviada && (
+        <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2 mb-2">
+          ⚠ Todavía no hay ningún precio (estimado ni cotizado) para esta solicitud, así que no hay contra qué cuadrar el plan de pagos. Se habilita en cuanto Compras cargue al menos una cotización.
+        </div>
+      )}
       {descuadrado && (
         <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2 mb-2">
           ⚠ Este plan quedó confirmado con un descuadre de <b>{fmt(Math.abs(restante))}</b> ({restante > 0 ? "falta programar" : "programado de más"}) — probablemente de antes de esta validación. Usa "Editar de nuevo" para corregirlo.
@@ -2035,7 +2043,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       {hasSugerencia && !solicitud.pagosConfirmados && (
         <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 mb-2 flex items-center justify-between">
           <span>El solicitante sugirió: anticipo {fmt(sug.anticipo.valor)} ({sug.anticipo.fecha || "sin fecha"}){sug.intermedio.activo ? `, intermedio ${fmt(sug.intermedio.valor)}` : ""}, final {fmt(sug.final.valor)} ({sug.final.fecha || "sin fecha"})</span>
-          {puedeEditarPagos(currentUser) && <button onClick={usarSugerencia} className="text-indigo-600 font-medium ml-2 shrink-0">Usar sugerencia</button>}
+          {editable && <button onClick={usarSugerencia} className="text-indigo-600 font-medium ml-2 shrink-0">Usar sugerencia</button>}
         </div>
       )}
       {!editable && !solicitud.pagosConfirmados && <div className="text-[11px] text-slate-400 mb-3">Solo Dirección Financiera puede editar y confirmar este plan.</div>}
