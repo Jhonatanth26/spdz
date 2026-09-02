@@ -196,6 +196,18 @@ function requiereGerencia(m) { return m >= UMBRAL_GERENCIA; }
 function totalPagado(pagos) {
   return (parseFloat(pagos?.anticipo?.valor) || 0) + (pagos?.intermedio?.activo ? (parseFloat(pagos.intermedio.valor) || 0) : 0) + (parseFloat(pagos?.final?.valor) || 0);
 }
+// valida que las fechas del plan de pagos queden en orden creciente: anticipo ≤ intermedio (si aplica) ≤ final
+// devuelve un mensaje de error, o null si está bien
+function validarOrdenFechas(pagos, campo, nuevaFecha) {
+  const anticipo = campo === "anticipo" ? nuevaFecha : pagos.anticipo.fecha;
+  const intermedio = campo === "intermedio" ? nuevaFecha : pagos.intermedio.fecha;
+  const final = campo === "final" ? nuevaFecha : pagos.final.fecha;
+  const hayIntermedio = pagos.intermedio.activo || campo === "intermedio";
+  if (anticipo && final && anticipo > final) return "La fecha del anticipo no puede ser posterior a la del pago final.";
+  if (hayIntermedio && anticipo && intermedio && anticipo > intermedio) return "La fecha del anticipo no puede ser posterior a la del pago intermedio.";
+  if (hayIntermedio && intermedio && final && intermedio > final) return "La fecha del pago intermedio no puede ser posterior a la del pago final.";
+  return null;
+}
 // duración legible entre dos timestamps ISO
 function duracion(iniISO, finISO) {
   if (!iniISO || !finISO) return "—";
@@ -1470,6 +1482,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const setCotizacionesItem = (itemId, cots) => setItems(items.map((i) => (i.id === itemId ? { ...i, cotizaciones: cots } : i)));
 
   const [mostrarCotGeneral, setMostrarCotGeneral] = useState(false);
+  const setFechaSugerida = (campo, val) => {
+    if (val) {
+      const error = validarOrdenFechas(pagosSugeridos, campo, val);
+      if (error) { alert(error); return; }
+    }
+    setPagosSugeridos({ ...pagosSugeridos, [campo]: { ...pagosSugeridos[campo], fecha: val } });
+  };
   const totalGeneral = items.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
 
   // aplica una misma cotización (proveedor + archivo) a varios ítems seleccionados de una sola vez,
@@ -1653,10 +1672,18 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><CalendarClock size={13} /> Plan de pagos sugerido (opcional — Dirección Financiera lo confirmará o ajustará)</div>
         {!(totalGeneral.total > 0) && <div className="text-[11px] text-amber-600 mb-2">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
         <div className="grid grid-cols-3 gap-2">
-          <div><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.anticipo.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
-          <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" disabled={!(totalGeneral.total > 0)} checked={pagosSugeridos.intermedio.activo} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, activo: e.target.checked } })} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
-          <div><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Pago final" value={pagosSugeridos.final.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.final.fecha} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, fecha: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+          <div><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.anticipo.fecha} onChange={(v) => setFechaSugerida("anticipo", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+          <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" disabled={!(totalGeneral.total > 0)} checked={pagosSugeridos.intermedio.activo} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, activo: e.target.checked } })} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.fecha} onChange={(v) => setFechaSugerida("intermedio", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+          <div><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Pago final" value={pagosSugeridos.final.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.final.fecha} onChange={(v) => setFechaSugerida("final", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
         </div>
+        {totalGeneral.total > 0 && (parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0) && (() => {
+          const restantePlan = totalGeneral.total - totalPagado(pagosSugeridos);
+          return (
+            <div className={`text-[11px] mt-2 ${Math.abs(restantePlan) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
+              {Math.abs(restantePlan) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restantePlan))} ${restantePlan > 0 ? "por programar" : "de más"}` : "✓ El plan cuadra exacto con el total"}
+            </div>
+          );
+        })()}
       </div>
 
       <div className="flex gap-2 justify-end">
@@ -2001,7 +2028,13 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
   const hasSugerencia = parseFloat(sug?.anticipo?.valor) > 0 || parseFloat(sug?.final?.valor) > 0;
   const descuadrado = solicitud.pagosConfirmados && Math.abs(restante) > 0.5;
 
-  const set = (campo, sub, val) => { const copy = { ...pagos, [campo]: { ...pagos[campo], [sub]: val } }; setPagos(copy); onProgramar(copy); };
+  const set = (campo, sub, val) => {
+    if (sub === "fecha" && val) {
+      const error = validarOrdenFechas(pagos, campo, val);
+      if (error) { alert(error); return; }
+    }
+    const copy = { ...pagos, [campo]: { ...pagos[campo], [sub]: val } }; setPagos(copy); onProgramar(copy);
+  };
   const usarSugerencia = () => { setPagos(sug); onProgramar(sug); };
 
   const confirmar = () => {
@@ -2885,6 +2918,19 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
   const mostrarObservacion = ["aprobacion_jefe", "aprobacion_director", "aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status);
   const autorizado = puedeActuar();
+  // solo se avisa "tu rol no tiene permiso" a quien de verdad podría tener algo que ver con este paso
+  // (ej. un jefe de área de otra área) — no a roles que estructuralmente nunca actúan en este paso
+  const ROLES_RELEVANTES_POR_PASO = {
+    aprobacion_jefe: ["Jefe de Área", "Jefe de Área y Director"],
+    aprobacion_director: ["Director de Área", "Jefe de Área y Director"],
+    aprobacion_financiera: ["Dirección Financiera"],
+    aprobacion_gerencia: ["Gerencia"],
+    cotizando: ["Compras"],
+    comparativo: ["Compras"],
+    orden: ["Dirección Financiera"],
+    recepcion: ["Compras"],
+  };
+  const pasoLeConcierne = (ROLES_RELEVANTES_POR_PASO[solicitud.status] || []).includes(currentUser.rol);
 
   return (
     <div className="space-y-5">
@@ -2911,15 +2957,18 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="mt-4 pt-4 border-t border-slate-100"><Stepper status={solicitud.status} /></div>
       </div>
 
-      {solicitud.status === "rechazada" && puedeReabrir(currentUser) && (
+      {solicitud.status === "rechazada" && (puedeReabrir(currentUser) || currentUser.id === solicitud.solicitanteId) && (
         <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
-          <div className="text-sm text-rose-700">Esta solicitud fue rechazada. Si el motivo fue un error que ya se corrigió (ej. en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada.</div>
+          <div className="text-sm text-rose-700">Esta solicitud fue rechazada. Si el motivo fue un error que ya se corrigió (ej. en los precios estimados o en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada.</div>
           <button onClick={reabrirSolicitud} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium shrink-0">Reabrir para corregir</button>
         </div>
       )}
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="font-medium text-slate-700 mb-3">Ítems solicitados</div>
+        {currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && solicitud.items.every((it) => !(it.cotizaciones?.length > 0)) && (
+          <div className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2 mb-3">Puedes corregir el precio estimado de cada ítem mientras la solicitud esté en este paso.</div>
+        )}
         <div className="overflow-x-auto">
         <table className="w-full text-sm mb-2 min-w-[880px]">
           <thead className="text-slate-400 text-xs">
@@ -2940,13 +2989,20 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           const d = desgloseItem(it);
           const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0;
           const cotConArchivo = (it.cotizaciones || []).filter((c) => c.archivoNombre);
+          const puedeEditarPrecio = currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && !(it.cotizaciones?.length > 0);
           return (
             <tr key={it.id} className="border-t border-slate-100 align-top">
               <td className="py-2 pr-2 text-slate-400">{idx + 1}</td>
               <td className="py-2 pr-3">{it.nombre}</td>
               <td className="py-2 px-2 text-right whitespace-nowrap">{it.cantidad}</td>
               <td className="py-2 px-2 text-right whitespace-nowrap">{it.unidad}</td>
-              <td className="py-2 px-2 text-right whitespace-nowrap">{unitario > 0 ? fmt(unitario) : "—"}</td>
+              <td className="py-2 px-2 text-right whitespace-nowrap">
+                {puedeEditarPrecio ? (
+                  <InputMiles value={it.precioEstimado} onChange={(v) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, precioEstimado: v } : x)) })} className="w-24 border border-slate-200 rounded-md px-2 py-1 text-xs text-right" />
+                ) : (
+                  unitario > 0 ? fmt(unitario) : "—"
+                )}
+              </td>
               <td className="py-2 px-2 text-right font-medium whitespace-nowrap">{d.subtotal > 0 ? fmt(d.subtotal) : "—"}</td>
               <td className="py-2 px-2">
                 {cotConArchivo.length ? (
@@ -3046,7 +3102,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       <TiempoProceso historial={solicitud.historialEstados} />
       <NotificacionesPanel notificaciones={solicitud.notificaciones} />
 
-      {!autorizado && solicitud.status !== "completada" && solicitud.status !== "rechazada" && (
+      {!autorizado && pasoLeConcierne && solicitud.status !== "completada" && solicitud.status !== "rechazada" && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2"><ShieldCheck size={14} /> Tu rol ({currentUser.rol}) no tiene permiso para actuar sobre este paso del flujo.</div>
       )}
 
