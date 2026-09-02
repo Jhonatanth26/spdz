@@ -1514,6 +1514,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         alert(restantePlan > 0 ? `El plan de pagos sugerido no cubre el total: faltan ${fmt(restantePlan)}. Complétalo o déjalo completamente vacío si no quieres sugerir uno.` : `El plan de pagos sugerido supera el total en ${fmt(-restantePlan)}. Ajústalo antes de enviar.`);
         return;
       }
+      if (!pagosSugeridos.anticipo.fecha || !pagosSugeridos.final.fecha || (pagosSugeridos.intermedio.activo && !pagosSugeridos.intermedio.fecha)) {
+        alert("Falta poner la fecha de uno o más pagos del plan sugerido antes de enviar.");
+        return;
+      }
     }
     // los ítems escritos a mano (sin elegir del catálogo) también quedan guardados ahí, para no perder esa información
     items.forEach((it) => {
@@ -1685,10 +1689,14 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         </div>
         {totalGeneral.total > 0 && (parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0) && (() => {
           const restantePlan = totalGeneral.total - totalPagado(pagosSugeridos);
+          const faltaFecha = !pagosSugeridos.anticipo.fecha || !pagosSugeridos.final.fecha || (pagosSugeridos.intermedio.activo && !pagosSugeridos.intermedio.fecha);
           return (
+            <>
             <div className={`text-[11px] mt-2 ${Math.abs(restantePlan) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
               {Math.abs(restantePlan) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restantePlan))} ${restantePlan > 0 ? "por programar" : "de más"}` : "✓ El plan cuadra exacto con el total"}
             </div>
+            {faltaFecha && <div className="text-[11px] text-amber-600">Falta poner la fecha de uno o más pagos.</div>}
+            </>
           );
         })()}
         </>
@@ -2373,6 +2381,9 @@ function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
             <div className={`text-[11px] ${Math.abs(restante) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
               {Math.abs(restante) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restante))} ${restante > 0 ? "por programar" : "de más"}` : "✓ El plan cuadra exacto con el total"}
             </div>
+          )}
+          {total > 0 && tienePlan && (!sug.anticipo.fecha || !sug.final.fecha || (sug.intermedio.activo && !sug.intermedio.fecha)) && (
+            <div className="text-[11px] text-amber-600">Falta poner la fecha de uno o más pagos.</div>
           )}
         </>
       )}
