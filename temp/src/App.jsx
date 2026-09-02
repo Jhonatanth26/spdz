@@ -3774,7 +3774,7 @@ export default function App() {
 
         {menuExpandido ? (
           <button onClick={() => toggleGrupo("misSolicitudes")} className="flex items-center justify-between px-2 mt-1 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
-            <span>Mis solicitudes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misSolicitudes ? "rotate-90" : ""}`} />
+            <span>Solicitudes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misSolicitudes ? "rotate-90" : ""}`} />
           </button>
         ) : <div className="mt-1" />}
         {(gruposAbiertos.misSolicitudes || !menuExpandido) && (
@@ -3790,12 +3790,12 @@ export default function App() {
           <>
             {menuExpandido ? (
               <button onClick={() => toggleGrupo("misPendientes")} className="flex items-center justify-between px-2 mt-3 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
-                <span>Mis pendientes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misPendientes ? "rotate-90" : ""}`} />
+                <span>Pendientes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misPendientes ? "rotate-90" : ""}`} />
               </button>
             ) : <div className="mt-3" />}
             {(gruposAbiertos.misPendientes || !menuExpandido) && (
               <>
-                {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
+                {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Pendientes" badge={solicitudesMisPendientes.length} />}
                 {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
               </>
             )}
