@@ -1250,7 +1250,7 @@ function InputFecha({ value, onChange, disabled, className }) {
   return <input type="date" min={hoy()} disabled={disabled} value={value} onChange={manejarCambio} className={className} />;
 }
 
-function InputMiles({ value, onChange, className, placeholder }) {
+function InputMiles({ value, onChange, className, placeholder, disabled }) {
   const formatear = (v) => (v || v === 0) && v !== "" ? Number(v).toLocaleString("es-CO") : "";
   const [texto, setTexto] = useState(formatear(value));
   useEffect(() => { setTexto(formatear(value)); }, [value]); // eslint-disable-line
@@ -1261,7 +1261,7 @@ function InputMiles({ value, onChange, className, placeholder }) {
     onChange(crudo);
   };
 
-  return <input type="text" inputMode="numeric" value={texto} onChange={manejarCambio} placeholder={placeholder} className={className} />;
+  return <input type="text" inputMode="numeric" value={texto} onChange={manejarCambio} placeholder={placeholder} className={className} disabled={disabled} />;
 }
 
 function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir, onEscribir, className }) {
