@@ -1465,6 +1465,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const [justificacion, setJustificacion] = useState("");
   const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const [pagosSugeridos, setPagosSugeridos] = useState(planPagosVacio());
+  const [tienePlanPagos, setTienePlanPagos] = useState(false);
 
   const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
@@ -1669,7 +1670,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       </div>
 
       <div className="mb-5 bg-slate-50 rounded-lg p-3 border border-slate-200">
-        <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><CalendarClock size={13} /> Plan de pagos sugerido (opcional — Dirección Financiera lo confirmará o ajustará)</div>
+        <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><CalendarClock size={13} /> ¿Esta solicitud cuenta con plan de pagos?</div>
+        <div className="flex gap-2 mb-3">
+          <button type="button" onClick={() => setTienePlanPagos(true)} className={`px-3 py-1.5 rounded-md text-xs font-medium border ${tienePlanPagos ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Sí</button>
+          <button type="button" onClick={() => { setTienePlanPagos(false); setPagosSugeridos(planPagosVacio()); }} className={`px-3 py-1.5 rounded-md text-xs font-medium border ${!tienePlanPagos ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>No</button>
+        </div>
+        {tienePlanPagos && (
+          <>
         {!(totalGeneral.total > 0) && <div className="text-[11px] text-amber-600 mb-2">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
         <div className="grid grid-cols-3 gap-2">
           <div><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.anticipo.fecha} onChange={(v) => setFechaSugerida("anticipo", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
@@ -1684,6 +1691,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             </div>
           );
         })()}
+        </>
+        )}
       </div>
 
       <div className="flex gap-2 justify-end">
@@ -2329,6 +2338,48 @@ function descargarExcelEvaluacion(ev, solicitud) {
   XLSX.writeFile(libro, `Evaluacion_Proveedor_${(ev.proveedorNombre || "").replace(/[^a-zA-Z0-9]/g, "_")}_${solicitud.folio}.xlsx`);
 }
 
+// permite corregir/agregar el plan de pagos sugerido después de reabrir una solicitud rechazada
+// (el mismo Sí/No y campos que existen al crearla, pero editable desde el detalle)
+function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
+  const sug = solicitud.pagosSugeridos || planPagosVacio();
+  const tienePlan = parseFloat(sug.anticipo.valor) > 0 || parseFloat(sug.intermedio.valor) > 0 || parseFloat(sug.final.valor) > 0;
+  const [mostrar, setMostrar] = useState(tienePlan);
+
+  const set = (campo, sub, val) => {
+    if (sub === "fecha" && val) {
+      const error = validarOrdenFechas(sug, campo, val);
+      if (error) { alert(error); return; }
+    }
+    onGuardar({ ...sug, [campo]: { ...sug[campo], [sub]: val } });
+  };
+  const restante = total - totalPagado(sug);
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+      <div className="text-sm font-medium text-slate-700 flex items-center gap-2"><CalendarClock size={15} /> ¿Esta solicitud cuenta con plan de pagos?</div>
+      <div className="flex gap-2">
+        <button type="button" onClick={() => setMostrar(true)} className={`px-3 py-1.5 rounded-md text-xs font-medium border ${mostrar ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Sí</button>
+        <button type="button" onClick={() => { setMostrar(false); onGuardar(planPagosVacio()); }} className={`px-3 py-1.5 rounded-md text-xs font-medium border ${!mostrar ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>No</button>
+      </div>
+      {mostrar && (
+        <>
+          {!(total > 0) && <div className="text-[11px] text-amber-600">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div><InputMiles disabled={!(total > 0)} placeholder="Anticipo" value={sug.anticipo.valor} onChange={(v) => set("anticipo", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(total > 0)} value={sug.anticipo.fecha} onChange={(v) => set("anticipo", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+            <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" disabled={!(total > 0)} checked={sug.intermedio.activo} onChange={(e) => set("intermedio", "activo", e.target.checked)} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!(total > 0) || !sug.intermedio.activo} value={sug.intermedio.valor} onChange={(v) => set("intermedio", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(total > 0) || !sug.intermedio.activo} value={sug.intermedio.fecha} onChange={(v) => set("intermedio", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+            <div><InputMiles disabled={!(total > 0)} placeholder="Pago final" value={sug.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(total > 0)} value={sug.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
+          </div>
+          {total > 0 && tienePlan && (
+            <div className={`text-[11px] ${Math.abs(restante) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
+              {Math.abs(restante) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restante))} ${restante > 0 ? "por programar" : "de más"}` : "✓ El plan cuadra exacto con el total"}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuardar }) {
   const [reevaluando, setReevaluando] = useState(false);
   const [ev, setEv] = useState({ ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor });
@@ -2966,7 +3017,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="font-medium text-slate-700 mb-3">Ítems solicitados</div>
-        {currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && solicitud.items.every((it) => !(it.cotizaciones?.length > 0)) && (
+        {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && solicitud.items.every((it) => !(it.cotizaciones?.length > 0)) && (
           <div className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2 mb-3">Puedes corregir el precio estimado de cada ítem mientras la solicitud esté en este paso.</div>
         )}
         <div className="overflow-x-auto">
@@ -2989,7 +3040,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           const d = desgloseItem(it);
           const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0;
           const cotConArchivo = (it.cotizaciones || []).filter((c) => c.archivoNombre);
-          const puedeEditarPrecio = currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && !(it.cotizaciones?.length > 0);
+          const puedeEditarPrecio = (currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && !(it.cotizaciones?.length > 0);
           return (
             <tr key={it.id} className="border-t border-slate-100 align-top">
               <td className="py-2 pr-2 text-slate-400">{idx + 1}</td>
@@ -3032,6 +3083,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         </table>
         </div>
       </div>
+
+      {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
+        <PagosSugeridosEditor solicitud={solicitud} total={total} onGuardar={(sug) => patch({ pagosSugeridos: sug })} />
+      )}
 
       {solicitud.status === "cotizando" && puedeVerHistorico(currentUser) && (
         <RevisionCompras solicitud={solicitud} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onGuardarItems={guardarItemsRevision} onDecision={decidirRevisionCompras} />
