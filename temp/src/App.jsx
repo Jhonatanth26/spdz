@@ -3694,6 +3694,8 @@ export default function App() {
   const [creando, setCreando] = useState(false);
   const [perfil, setPerfil] = useState(false);
   const [menuExpandido, setMenuExpandido] = useState(true);
+  const [gruposAbiertos, setGruposAbiertos] = useState({ misSolicitudes: true, misPendientes: true, gestion: true });
+  const toggleGrupo = (g) => setGruposAbiertos((prev) => ({ ...prev, [g]: !prev[g] }));
   const [exportando, setExportando] = useState(null);
 
   useEffect(() => {
@@ -3770,27 +3772,51 @@ export default function App() {
           </button>
         </div>
 
-        {menuExpandido && <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 mt-1 mb-0.5">Mis solicitudes</div>}
-        <button title="Nueva solicitud" onClick={() => { setCreando(true); setAbierta(null); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left mb-1 ${!menuExpandido ? "justify-center px-2" : ""} ${creando ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
-          <Plus size={16} className="shrink-0" /> {menuExpandido && "Nueva solicitud"}
-        </button>
-        <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
-
-        {(puedeVerMisPendientes(currentUser) || puedeAprobarFinanciera(currentUser)) && (
+        {menuExpandido ? (
+          <button onClick={() => toggleGrupo("misSolicitudes")} className="flex items-center justify-between px-2 mt-1 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
+            <span>Mis solicitudes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misSolicitudes ? "rotate-90" : ""}`} />
+          </button>
+        ) : <div className="mt-1" />}
+        {(gruposAbiertos.misSolicitudes || !menuExpandido) && (
           <>
-            {menuExpandido && <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 mt-3 mb-0.5">Mis pendientes</div>}
-            {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
-            {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
+            <button title="Nueva solicitud" onClick={() => { setCreando(true); setAbierta(null); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left mb-1 ${!menuExpandido ? "justify-center px-2" : ""} ${creando ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+              <Plus size={16} className="shrink-0" /> {menuExpandido && "Nueva solicitud"}
+            </button>
+            <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
           </>
         )}
 
-        {menuExpandido && <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 mt-3 mb-0.5">Gestión de la información</div>}
-        <NavBtn id="dashboard" icon={LayoutDashboard} label="Dashboard" />
-        <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
-        {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
-        {puedeVerCalendarioPagos(currentUser) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
-        {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Órdenes enviadas" />}
-        {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
+        {(puedeVerMisPendientes(currentUser) || puedeAprobarFinanciera(currentUser)) && (
+          <>
+            {menuExpandido ? (
+              <button onClick={() => toggleGrupo("misPendientes")} className="flex items-center justify-between px-2 mt-3 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
+                <span>Mis pendientes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misPendientes ? "rotate-90" : ""}`} />
+              </button>
+            ) : <div className="mt-3" />}
+            {(gruposAbiertos.misPendientes || !menuExpandido) && (
+              <>
+                {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
+                {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
+              </>
+            )}
+          </>
+        )}
+
+        {menuExpandido ? (
+          <button onClick={() => toggleGrupo("gestion")} className="flex items-center justify-between px-2 mt-3 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
+            <span>Gestión de la información</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.gestion ? "rotate-90" : ""}`} />
+          </button>
+        ) : <div className="mt-3" />}
+        {(gruposAbiertos.gestion || !menuExpandido) && (
+          <>
+            <NavBtn id="dashboard" icon={LayoutDashboard} label="Dashboard" />
+            <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
+            {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
+            {puedeVerCalendarioPagos(currentUser) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
+            {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Órdenes enviadas" />}
+            {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
+          </>
+        )}
 
         <div className="mt-auto pt-4 border-t border-slate-100">
           <button title="Mi perfil" onClick={() => { setPerfil(true); setAbierta(null); setCreando(false); }} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-100 w-full mb-1 ${!menuExpandido ? "justify-center" : ""}`}><UserCircle size={13} className="shrink-0" /> {menuExpandido && "Mi perfil"}</button>
