@@ -3759,13 +3759,22 @@ export default function App() {
           </button>
         </div>
 
+        {menuExpandido && <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 mt-1 mb-0.5">Mis solicitudes</div>}
         <button title="Nueva solicitud" onClick={() => { setCreando(true); setAbierta(null); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left mb-1 ${!menuExpandido ? "justify-center px-2" : ""} ${creando ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
           <Plus size={16} className="shrink-0" /> {menuExpandido && "Nueva solicitud"}
         </button>
         <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
+
+        {(puedeVerMisPendientes(currentUser) || puedeAprobarFinanciera(currentUser)) && (
+          <>
+            {menuExpandido && <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 mt-3 mb-0.5">Mis pendientes</div>}
+            {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
+            {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
+          </>
+        )}
+
+        {menuExpandido && <div className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide px-2 mt-3 mb-0.5">Gestión de la información</div>}
         <NavBtn id="dashboard" icon={LayoutDashboard} label="Dashboard" />
-        {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Mis pendientes" badge={solicitudesMisPendientes.length} />}
-        {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
         <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
         {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
         {puedeVerCalendarioPagos(currentUser) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
