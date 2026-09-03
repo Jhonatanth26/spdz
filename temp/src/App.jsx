@@ -3527,6 +3527,7 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
   const [fArea, setFArea] = useState("todas");
   const [fEmpresa, setFEmpresa] = useState("todas");
   const [fEstado, setFEstado] = useState("todos");
+  const [fTipo, setFTipo] = useState("todos");
   const [fCreadoPor, setFCreadoPor] = useState("todos");
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
@@ -3538,6 +3539,7 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
     (fArea === "todas" || s.areaId === fArea) &&
     (fEmpresa === "todas" || s.empresaId === fEmpresa) &&
     (fEstado === "todos" || s.status === fEstado) &&
+    (fTipo === "todos" || s.tipo === fTipo) &&
     (fCreadoPor === "todos" || s.solicitanteId === fCreadoPor) &&
     (!fDesde || s.fechaCreacion >= fDesde) &&
     (!fHasta || s.fechaCreacion <= fHasta) &&
@@ -3547,8 +3549,8 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
       s.items.some((it) => it.nombre.toLowerCase().includes(texto)) ||
       proveedoresAdjudicados(s, proveedores).toLowerCase().includes(texto))
   );
-  const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta || busqueda;
-  const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); setBusqueda(""); };
+  const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fTipo !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta || busqueda;
+  const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFTipo("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); setBusqueda(""); };
 
   const exportarExcel = () => {
     const filas = filtradas.map((s) => {
@@ -3606,6 +3608,10 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
         <div>
           <label className="text-[11px] font-medium text-slate-500">Estado</label>
           <select value={fEstado} onChange={(e) => setFEstado(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="todos">Todos</option>{PASOS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}<option value="rechazada">Rechazada</option></select>
+        </div>
+        <div>
+          <label className="text-[11px] font-medium text-slate-500">Tipo</label>
+          <select value={fTipo} onChange={(e) => setFTipo(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="todos">Todos</option><option value="compra">Solicitud de compra</option><option value="servicio">Orden de servicio/trabajo</option></select>
         </div>
         <div>
           <label className="text-[11px] font-medium text-slate-500">Fecha de registro — desde</label>
