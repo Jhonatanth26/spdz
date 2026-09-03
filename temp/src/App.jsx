@@ -4,9 +4,10 @@ import * as XLSX from "xlsx";
 import { useAuth } from "./hooks/useAuth";
 import { useSupabaseTable } from "./hooks/useSupabaseTable";
 import { useSolicitudes } from "./hooks/useSolicitudes";
-import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_MB, subirArchivoPublico } from "./lib/storage";
+import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_MB, subirArchivoPublico, subirBytes } from "./lib/storage";
 import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
+import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import {
@@ -2266,6 +2267,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
 --------------------------------------------------------- */
 function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar }) {
   const [firmandoIdx, setFirmandoIdx] = useState(null);
+  const [generandoIdx, setGenerandoIdx] = useState(null);
   if (solicitud.status !== "orden") return null;
 
   const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
@@ -2277,6 +2279,32 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
   const actualizarOrden = (idx, cambios) => {
     const copia = ordenes.map((o, i) => (i === idx ? { ...o, ...cambios } : o));
     onGuardar({ ordenesProveedor: copia });
+  };
+
+  // el sistema contable (Zeus) no genera órdenes de servicio/trabajo, así que para ese tipo
+  // el propio sistema arma el PDF a partir de los ítems adjudicados a este proveedor.
+  const generarOrdenAutomatica = async (idx) => {
+    const orden = ordenes[idx];
+    setGenerandoIdx(idx);
+    try {
+      const itemsDelProveedor = solicitud.items.filter((it) => {
+        if (!it.cotizaciones.length) return false;
+        const sel = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad);
+        const cot = it.cotizaciones[sel];
+        return cot && mismoProveedor({ proveedorId: cot.proveedorId, proveedorNombre: cot.proveedorNombre }, orden);
+      });
+      const baseItems = itemsDelProveedor.length ? itemsDelProveedor : solicitud.items;
+      const itemsParaPdf = baseItems.map((it) => { const d = desgloseItem(it); const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0; return { nombre: it.nombre, cantidad: it.cantidad, unidad: it.unidad, valorUnitario: unitario, total: d.subtotal }; });
+      const totales = baseItems.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
+      const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre: orden.proveedorNombre, items: itemsParaPdf, ...totales });
+      const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
+      if (ruta) actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "" });
+      else alert("No se pudo generar el documento. Intenta de nuevo.");
+    } catch (e) {
+      console.error("Error generando la orden de servicio:", e);
+      alert("No se pudo generar el documento.");
+    }
+    setGenerandoIdx(null);
   };
 
   const firmarOrden = async (idx) => {
@@ -2306,12 +2334,19 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
       <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Firma y envío de la orden al proveedor</div>
-      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud. Sube aquí la orden generada en el sistema contable de cada uno; se envía a <b>Dirección Financiera</b> para su firma digital. Al marcar "OC enviada al proveedor", la orden ya firmada se envía automáticamente por correo a cada proveedor <b>que tenga correo registrado en el Catálogo</b> — si alguno no lo tiene, tendrás que enviársela tú manualmente.</div>
+      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud. {solicitud.tipo === "servicio" ? <>Como el sistema contable no genera órdenes de servicio/trabajo, el propio sistema arma el documento por ti.</> : <>Sube aquí la orden generada en el sistema contable de cada uno.</>} El documento se envía a <b>Dirección Financiera</b> para su firma digital. Al marcar "OC enviada al proveedor", la orden ya firmada se envía automáticamente por correo a cada proveedor <b>que tenga correo registrado en el Catálogo</b> — si alguno no lo tiene, tendrás que enviársela tú manualmente.</div>
 
       {ordenes.map((o, i) => (
         <div key={i} className="border border-slate-200 rounded-lg p-3 space-y-2">
           <div className="text-sm font-medium text-slate-700 flex items-center gap-2"><Truck size={13} /> {o.proveedorNombre}</div>
-          <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" soloPdf />
+          {solicitud.tipo === "servicio" ? (
+            <div className="flex items-center gap-2 flex-wrap">
+              <button onClick={() => generarOrdenAutomatica(i)} disabled={generandoIdx === i} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50 flex items-center gap-1"><FileText size={12} /> {generandoIdx === i ? "Generando..." : o.archivoOriginalUrl ? "Volver a generar la orden" : "Generar orden de servicio (automático)"}</button>
+              {o.archivoOriginalUrl && !o.archivoFirmadoUrl && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Documento generado, listo para firmar.</span>}
+            </div>
+          ) : (
+            <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" soloPdf />
+          )}
           {o.archivoOriginalUrl && (
             o.archivoFirmadoUrl ? (
               <div className="text-xs text-emerald-700 flex items-center gap-2"><CheckCircle2 size={13} /> Firmada por {o.usuario} el {o.fecha}. <EnlacePrivado path={o.archivoFirmadoUrl} className="underline">Ver PDF firmado</EnlacePrivado></div>
@@ -2702,12 +2737,18 @@ function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
   const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
+  // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
+  // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
+  const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
+  const elegir = (tipo) => set({ recibidoSatisfaccion: true, tipoRecepcion: tipo });
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
       <div className="font-medium text-slate-700 flex items-center gap-2">
         <PackageCheck size={16} /> Recepción
-        {r.recibidoSatisfaccion ? <Badge tone="green">Recibida</Badge> : <Badge tone="amber">Pendiente de recepción</Badge>}
+        {estado === "satisfaccion" && <Badge tone="green">Recibida a satisfacción</Badge>}
+        {estado === "observaciones" && <Badge tone="amber">Recibida con observaciones</Badge>}
+        {!estado && <Badge tone="amber">Pendiente de recepción</Badge>}
       </div>
       <div>
         <label className="text-xs font-medium text-slate-500 mb-1 block">Soportes de recepción (puedes adjuntar varios)</label>
@@ -2721,10 +2762,15 @@ function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
           <AdjuntarArchivo nombre={null} label={r.archivos.length ? "Adjuntar otro archivo (PDF/foto)" : "Adjuntar soporte de recepción (PDF/foto)"} onSeleccionar={agregarArchivo} />
         </div>
       </div>
-      <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Comentarios (opcional)</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
-      <label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={r.recibidoSatisfaccion} onChange={(e) => set({ recibidoSatisfaccion: e.target.checked })} /> Recibo a satisfacción</label>
-      {!r.recibidoSatisfaccion && <div className="text-[11px] text-amber-600">Marca "Recibo a satisfacción" para que Compras pueda hacer la evaluación y finalizar la solicitud.</div>}
-      {r.recibidoSatisfaccion && <div className="text-[11px] text-emerald-600">✓ Recibida — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
+      <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Comentarios {estado === "observaciones" ? "(describe las observaciones)" : "(opcional)"}</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
+      <div className="flex gap-4">
+        <label className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name={`recepcion-${solicitud.id}`} checked={estado === "satisfaccion"} onChange={() => elegir("satisfaccion")} /> Recibido a satisfacción</label>
+        <label className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name={`recepcion-${solicitud.id}`} checked={estado === "observaciones"} onChange={() => elegir("observaciones")} /> Recibido con observaciones</label>
+      </div>
+      {estado === "observaciones" && !r.comentario.trim() && <div className="text-[11px] text-amber-600">Describe en los comentarios cuáles fueron las observaciones.</div>}
+      {!estado && <div className="text-[11px] text-amber-600">Marca cómo se recibió para que Compras pueda hacer la evaluación y finalizar la solicitud.</div>}
+      {estado === "satisfaccion" && <div className="text-[11px] text-emerald-600">✓ Recibida a satisfacción — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
+      {estado === "observaciones" && <div className="text-[11px] text-amber-600">✓ Recibida con observaciones — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
     </div>
   );
 }
@@ -2871,7 +2917,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
               <div key={i} className="text-slate-600">{o.proveedorNombre}: {o.archivoFirmadoUrl ? `firmada por ${o.usuario} · ${o.fecha}` : "sin firmar"}</div>
             )) : <div className="text-slate-600">—</div>}
           </div>
-          <div><div className="font-medium text-slate-500 mb-0.5">Recepción</div><div className="text-slate-600">{solicitud.recepcion.recibidoSatisfaccion ? "Recibido a satisfacción" : "Pendiente"}{solicitud.recepcion.archivos?.length > 0 && ` · ${solicitud.recepcion.archivos.length} archivo(s) adjunto(s)`}{solicitud.recepcion.comentario && <div className="italic">"{solicitud.recepcion.comentario}"</div>}</div></div>
+          <div><div className="font-medium text-slate-500 mb-0.5">Recepción</div><div className="text-slate-600">{solicitud.recepcion.recibidoSatisfaccion ? (solicitud.recepcion.tipoRecepcion === "observaciones" ? "Recibido con observaciones" : "Recibido a satisfacción") : "Pendiente"}{solicitud.recepcion.archivos?.length > 0 && ` · ${solicitud.recepcion.archivos.length} archivo(s) adjunto(s)`}{solicitud.recepcion.comentario && <div className="italic">"{solicitud.recepcion.comentario}"</div>}</div></div>
         </div>
       )}
 
@@ -2993,6 +3039,22 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     if (revision) cambios.revisionCompras = { estado: "pendiente", observacion: "", usuario: "", fecha: "" };
     patch(cambios);
   };
+
+  // el solicitante confirma que ya corrigió y avisa por correo a quien le toca aprobar ahora
+  const reenviarParaAprobacion = () => {
+    const responsable = usuarios.find((u) => solicitud.status === "aprobacion_jefe"
+      ? (["Jefe de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, solicitud.areaId))
+      : (["Director de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, solicitud.areaId)));
+    if (responsable?.email) {
+      enviarCorreo(
+        responsable.email,
+        `Solicitud corregida y lista para tu aprobación: ${solicitud.folio}`,
+        `<p>Hola ${responsable.nombre},</p><p>${currentUser.nombre} corrigió la solicitud <b>${solicitud.folio}</b> y quedó lista de nuevo para tu aprobación.</p><p><b>Objetivo:</b> ${solicitud.objetivo}</p>`
+      );
+    }
+    patch({ notificaciones: notificar(responsable?.email ? `${currentUser.nombre} reenvió la solicitud corregida. Correo enviado a ${responsable.nombre} (${responsable.email}).` : `${currentUser.nombre} reenvió la solicitud corregida. No hay un responsable con correo configurado para notificar.`) });
+    alert(responsable?.email ? `Se avisó a ${responsable.nombre} por correo.` : "Se registró el reenvío, pero no hay un responsable con correo configurado para notificar.");
+  };
   const empujarHistorial = (status) => [...solicitud.historialEstados, { status, fecha: ahoraISO() }];
   const notificar = (mensaje) => [...solicitud.notificaciones, { fecha: ahoraISO(), mensaje }];
 
@@ -3062,13 +3124,19 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       });
       const detalleProveedores = ordenesConCorreo.length ? ` Se envió a: ${ordenesConCorreo.map((o) => `${o.prov.nombre} (${correosDe(o.prov).join(", ")})`).join(", ")}.` : "";
       const avisoSinCorreo = ordenesSinCorreo.length ? ` ⚠ Sin correo registrado, NO se envió a: ${ordenesSinCorreo.map((o) => o.proveedorNombre).join(", ")} — usa "Reenviar orden(es) firmada(s)" para escribirlo y enviarlo.` : "";
-      patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}).${detalleProveedores}${avisoSinCorreo}`) });
+      patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}) con copia de la orden.${detalleProveedores}${avisoSinCorreo}`) });
       if (solicitante?.email) {
-        enviarCorreo(
-          solicitante.email,
-          `Tu orden ${solicitud.folio} fue enviada al proveedor`,
-          `<p>Hola ${solicitante.nombre},</p><p>La orden <b>${solicitud.folio}</b> ya fue enviada al proveedor y quedó lista para recepción.</p>`
-        );
+        // arma los enlaces firmados de cada orden ya firmada, para que el solicitante también reciba su copia
+        Promise.all(
+          (solicitud.ocEnviada.ordenesProveedor || []).filter((o) => o.archivoFirmadoUrl).map(async (o) => ({ nombre: o.proveedorNombre, url: await obtenerUrlFirmada(o.archivoFirmadoUrl, 604800) }))
+        ).then((enlaces) => {
+          const listaEnlaces = enlaces.filter((e) => e.url).map((e) => `<li><a href="${e.url}">${e.nombre} — ver / descargar orden firmada</a></li>`).join("");
+          enviarCorreo(
+            solicitante.email,
+            `Tu orden ${solicitud.folio} fue enviada al proveedor`,
+            `<p>Hola ${solicitante.nombre},</p><p>La orden <b>${solicitud.folio}</b> ya fue enviada al proveedor y quedó lista para recepción. Adjuntamos tu copia:</p><ul>${listaEnlaces}</ul><p>Estos enlaces estarán disponibles por 7 días.</p>`
+          );
+        });
       }
       // envía la orden firmada por correo a cada proveedor que sí tenga correo registrado (hasta 2 correos por proveedor)
       ordenesConCorreo.forEach(({ orden, prov }) => {
@@ -3138,7 +3206,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
-            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone="green">Recibida</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{currentUser.rol === "Administrador" && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> Eliminar solicitud</button>}</div>
+            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone={solicitud.recepcion.tipoRecepcion === "observaciones" ? "amber" : "green"}>{solicitud.recepcion.tipoRecepcion === "observaciones" ? "Recibida con observaciones" : "Recibida"}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{currentUser.rol === "Administrador" && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> Eliminar solicitud</button>}</div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
           </div>
           <div className="text-right">
@@ -3235,6 +3303,13 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <PagosSugeridosEditor solicitud={solicitud} total={total} onGuardar={(sug) => patch({ pagosSugeridos: sug })} />
       )}
 
+      {currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && solicitud.historialEstados.some((h) => h.status === "rechazada") && (
+        <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
+          <div className="text-sm text-indigo-700">Cuando termines de corregir, avísale a quien debe aprobarla — le llega un correo directo.</div>
+          <button onClick={reenviarParaAprobacion} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium shrink-0 flex items-center gap-1"><Send size={13} /> Reenviar para aprobación</button>
+        </div>
+      )}
+
       {solicitud.status === "cotizando" && puedeVerHistorico(currentUser) && (
         <RevisionCompras solicitud={solicitud} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onGuardarItems={guardarItemsRevision} onDecision={decidirRevisionCompras} />
       )}
@@ -3271,6 +3346,17 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
+
+      {(solicitud.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl) && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
+          <div className="font-medium text-slate-700 flex items-center gap-2"><FileText size={16} /> Copia de la orden enviada al proveedor</div>
+          {(solicitud.ocEnviada.ordenesProveedor || []).filter((o) => o.archivoFirmadoUrl).map((o, i) => (
+            <div key={i} className="text-sm text-slate-600 flex items-center gap-2">
+              <Truck size={13} className="text-slate-400" /> {o.proveedorNombre} — <EnlacePrivado path={o.archivoFirmadoUrl} className="text-indigo-600 underline">Ver / descargar PDF firmado</EnlacePrivado>
+            </div>
+          ))}
+        </div>
+      )}
 
       <ReenviarOrdenesPanel solicitud={solicitud} proveedores={proveedores} guardarProveedor={guardarProveedor} empresa={empresa} currentUser={currentUser} />
 
@@ -3327,7 +3413,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             if (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !solicitud.pagosConfirmados) motivos.push("Falta confirmar el plan de pagos.");
             if (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) motivos.push("Falta que Dirección Financiera firme la orden de uno o más proveedores.");
             if (solicitud.status === "recepcion") {
-              if (!solicitud.recepcion.recibidoSatisfaccion) motivos.push("Falta marcar \"Recibo a satisfacción\" en el panel de Recepción.");
+              if (!solicitud.recepcion.recibidoSatisfaccion) motivos.push("Falta marcar cómo se recibió (a satisfacción o con observaciones) en el panel de Recepción.");
               if (!evaluacionCompleta(solicitud)) motivos.push("Falta completar la evaluación del proveedor (14 criterios).");
             }
             return motivos.length > 0 && (
