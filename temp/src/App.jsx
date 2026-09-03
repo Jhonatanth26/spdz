@@ -1630,6 +1630,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     setPagosSugeridos({ ...pagosSugeridos, [campo]: { ...pagosSugeridos[campo], fecha: val } });
   };
   const totalGeneral = items.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
+  // si el total cambia (ej. se agrega otro ítem) mientras está en modo "pago único", se mantiene sincronizado
+  useEffect(() => {
+    if (pagosSugeridos.tipoPago === "contado" && pagosSugeridos.pagoUnico.valor !== totalGeneral.total) {
+      setPagosSugeridos((prev) => ({ ...prev, pagoUnico: { ...prev.pagoUnico, valor: totalGeneral.total } }));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalGeneral.total, pagosSugeridos.tipoPago]);
 
   // aplica una misma cotización (proveedor + archivo) a varios ítems seleccionados de una sola vez,
   // cada uno con su propio precio dentro del mismo documento
@@ -1824,11 +1831,12 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         {!(totalGeneral.total > 0) && <div className="text-[11px] text-amber-600 mb-2">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
         <div className="flex gap-2 mb-3">
           <button type="button" disabled={!(totalGeneral.total > 0)} onClick={() => setPagosSugeridos({ ...pagosSugeridos, tipoPago: "plan" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagosSugeridos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas</button>
-          <button type="button" disabled={!(totalGeneral.total > 0)} onClick={() => setPagosSugeridos({ ...pagosSugeridos, tipoPago: "contado" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagosSugeridos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
+          <button type="button" disabled={!(totalGeneral.total > 0)} onClick={() => setPagosSugeridos({ ...pagosSugeridos, tipoPago: "contado", pagoUnico: { ...pagosSugeridos.pagoUnico, valor: totalGeneral.total } })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagosSugeridos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
         </div>
         {pagosSugeridos.tipoPago === "contado" ? (
           <div className="max-w-[220px]">
-            <InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Valor total" value={pagosSugeridos.pagoUnico.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, pagoUnico: { ...pagosSugeridos.pagoUnico, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" />
+            <div className="text-[11px] text-slate-400 mb-1">Valor (= total de la solicitud)</div>
+            <div className="w-full border border-slate-200 bg-slate-50 rounded-md px-2 py-1.5 text-xs mb-1 text-slate-600">{fmt(totalGeneral.total)}</div>
             <InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.pagoUnico.fecha} onChange={(v) => setFechaSugerida("pagoUnico", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" />
           </div>
         ) : (
@@ -2205,7 +2213,15 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
     const copy = { ...pagos, [campo]: { ...pagos[campo], [sub]: val } }; setPagos(copy); onProgramar(copy);
   };
   const usarSugerencia = () => { setPagos(sug); onProgramar(sug); };
-  const setTipoPago = (tipo) => { const copy = { ...pagos, tipoPago: tipo }; setPagos(copy); onProgramar(copy); };
+  const setTipoPago = (tipo) => { const copy = { ...pagos, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...pagos.pagoUnico, valor: total } : pagos.pagoUnico }; setPagos(copy); onProgramar(copy); };
+  // si el total cambia mientras está en "pago único", se mantiene sincronizado
+  useEffect(() => {
+    if (pagos.tipoPago === "contado" && pagos.pagoUnico.valor !== total) {
+      const copy = { ...pagos, pagoUnico: { ...pagos.pagoUnico, valor: total } };
+      setPagos(copy); onProgramar(copy);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total, pagos.tipoPago]);
 
   const confirmar = () => {
     if (Math.abs(restante) > 0.5) {
@@ -2258,8 +2274,8 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
 
       {pagos.tipoPago === "contado" ? (
         <div className="border border-slate-200 rounded-lg p-3 max-w-xs">
-          <div className="text-xs font-medium text-slate-500 mb-2">Pago único</div>
-          <InputMiles disabled={!editable} placeholder="Valor total" value={pagos.pagoUnico.valor} onChange={(v) => set("pagoUnico", "valor", v)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <div className="text-xs font-medium text-slate-500 mb-2">Pago único (= total de la solicitud)</div>
+          <div className="w-full mb-1.5 border border-slate-200 bg-slate-50 rounded-md px-2 py-1.5 text-sm text-slate-600">{fmt(total)}</div>
           <InputFecha disabled={!editable} value={pagos.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
           <div className="text-[11px] text-slate-400 mt-1">Fecha del pago</div>
         </div>
@@ -2551,37 +2567,54 @@ function descargarExcelEvaluacion(ev, solicitud) {
 // permite corregir/agregar el plan de pagos sugerido después de reabrir una solicitud rechazada
 // (el mismo Sí/No y campos que existen al crearla, pero editable desde el detalle)
 function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
-  const sug = { ...planPagosVacio(), ...solicitud.pagosSugeridos };
+  const [sug, setSug] = useState({ ...planPagosVacio(), ...solicitud.pagosSugeridos });
+  useEffect(() => { setSug({ ...planPagosVacio(), ...solicitud.pagosSugeridos }); }, [solicitud.id]);
   const tienePlan = parseFloat(sug.pagoUnico.valor) > 0 || parseFloat(sug.anticipo.valor) > 0 || parseFloat(sug.intermedio.valor) > 0 || parseFloat(sug.final.valor) > 0;
   const [mostrar, setMostrar] = useState(tienePlan);
 
+  // escribe local al instante (fluido) y guarda en segundo plano, sin bloquear la escritura
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) {
       const error = validarOrdenFechas(sug, campo, val);
       if (error) { alert(error); return; }
     }
-    onGuardar({ ...sug, [campo]: { ...sug[campo], [sub]: val } });
+    const copy = { ...sug, [campo]: { ...sug[campo], [sub]: val } };
+    setSug(copy); onGuardar(copy);
+  };
+  // pago único: siempre debe ser exactamente el total, así que se llena solo y no se puede escribir a mano
+  const setTipoPago = (tipo) => {
+    const copy = { ...sug, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...sug.pagoUnico, valor: total } : sug.pagoUnico };
+    setSug(copy); onGuardar(copy);
   };
   const restante = total - totalPagado(sug);
   const faltaFecha = sug.tipoPago === "contado" ? !sug.pagoUnico.fecha : (!sug.anticipo.fecha || !sug.final.fecha || (sug.intermedio.activo && !sug.intermedio.fecha));
+  // si el total cambia (ej. Compras cargó una cotización distinta) mientras está en "pago único", se mantiene sincronizado
+  useEffect(() => {
+    if (sug.tipoPago === "contado" && sug.pagoUnico.valor !== total) {
+      const copy = { ...sug, pagoUnico: { ...sug.pagoUnico, valor: total } };
+      setSug(copy); onGuardar(copy);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total, sug.tipoPago]);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
       <div className="text-sm font-medium text-slate-700 flex items-center gap-2"><CalendarClock size={15} /> ¿Esta solicitud cuenta con plan de pagos?</div>
       <div className="flex gap-2">
         <button type="button" onClick={() => setMostrar(true)} className={`px-3 py-1.5 rounded-md text-xs font-medium border ${mostrar ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Sí</button>
-        <button type="button" onClick={() => { setMostrar(false); onGuardar(planPagosVacio()); }} className={`px-3 py-1.5 rounded-md text-xs font-medium border ${!mostrar ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>No</button>
+        <button type="button" onClick={() => { setMostrar(false); setSug(planPagosVacio()); onGuardar(planPagosVacio()); }} className={`px-3 py-1.5 rounded-md text-xs font-medium border ${!mostrar ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>No</button>
       </div>
       {mostrar && (
         <>
           {!(total > 0) && <div className="text-[11px] text-amber-600">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
           <div className="flex gap-2">
-            <button type="button" disabled={!(total > 0)} onClick={() => onGuardar({ ...sug, tipoPago: "plan" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas</button>
-            <button type="button" disabled={!(total > 0)} onClick={() => onGuardar({ ...sug, tipoPago: "contado" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
+            <button type="button" disabled={!(total > 0)} onClick={() => setTipoPago("plan")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas</button>
+            <button type="button" disabled={!(total > 0)} onClick={() => setTipoPago("contado")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
           </div>
           {sug.tipoPago === "contado" ? (
             <div className="max-w-[220px]">
-              <InputMiles disabled={!(total > 0)} placeholder="Valor total" value={sug.pagoUnico.valor} onChange={(v) => set("pagoUnico", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" />
+              <div className="text-[11px] text-slate-400 mb-1">Valor (= total de la solicitud)</div>
+              <div className="w-full border border-slate-200 bg-slate-50 rounded-md px-2 py-1.5 text-xs mb-1 text-slate-600">{fmt(total)}</div>
               <InputFecha disabled={!(total > 0)} value={sug.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" />
             </div>
           ) : (
