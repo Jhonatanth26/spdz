@@ -856,6 +856,7 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
   const [seleccionados, setSeleccionados] = useState([]);
   const [vista, setVista] = useState("lista");
   const [mesActual, setMesActual] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  const [diaExpandido, setDiaExpandido] = useState(null);
 
   // arma una fila por cada pago confirmado (anticipo / intermedio / final) de cada solicitud tipo servicio;
   // las que no tienen plan de pagos (compras, o servicios sin confirmar) usan su fecha estimada de entrega
@@ -960,10 +961,14 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
               const esHoy = fechaDia === hoy();
               const hayVencido = pagosDia.some((f) => !f.pagado && f.dias < 0);
               return (
-                <div key={idx} className={`min-h-[76px] rounded-md border p-1 text-left ${esHoy ? "border-indigo-400 bg-indigo-50/40" : "border-slate-100"}`}>
+                <div
+                  key={idx}
+                  onClick={() => pagosDia.length > 0 && setDiaExpandido(diaExpandido === fechaDia ? null : fechaDia)}
+                  className={`min-h-[76px] rounded-md border p-1 text-left ${pagosDia.length > 0 ? "cursor-pointer hover:border-indigo-300" : ""} ${diaExpandido === fechaDia ? "border-indigo-500 ring-1 ring-indigo-300" : esHoy ? "border-indigo-400 bg-indigo-50/40" : "border-slate-100"}`}
+                >
                   <div className={`text-[11px] mb-1 ${esHoy ? "font-semibold text-indigo-600" : "text-slate-400"}`}>{dia}</div>
                   {pagosDia.slice(0, 2).map((f) => (
-                    <button key={f.id} onClick={() => onAbrir?.(f.solicitudId)} title={`${f.folio} — ${f.tipo} — ${fmt(f.valor)}`} className={`block w-full text-left text-[10px] truncate rounded px-1 py-0.5 mb-0.5 ${f.pagado ? "bg-slate-100 text-slate-400" : hayVencido ? "bg-rose-100 text-rose-700" : "bg-indigo-100 text-indigo-700"}`}>
+                    <button key={f.id} onClick={(e) => { e.stopPropagation(); onAbrir?.(f.solicitudId); }} title={`${f.folio} — ${f.tipo} — ${fmt(f.valor)}`} className={`block w-full text-left text-[10px] truncate rounded px-1 py-0.5 mb-0.5 ${f.pagado ? "bg-slate-100 text-slate-400" : hayVencido ? "bg-rose-100 text-rose-700" : "bg-indigo-100 text-indigo-700"}`}>
                       {f.folio}
                     </button>
                   ))}
@@ -973,6 +978,30 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
               );
             })}
           </div>
+
+          {diaExpandido && pagosPorDia[diaExpandido] && (
+            <div className="mt-4 border-t border-slate-100 pt-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-sm font-medium text-slate-700">Pagos del {diaExpandido}</div>
+                <button onClick={() => setDiaExpandido(null)} className="text-slate-400 hover:text-slate-600 text-xs">✕ Cerrar</button>
+              </div>
+              <div className="space-y-1.5">
+                {pagosPorDia[diaExpandido].map((f) => (
+                  <div key={f.id} onClick={() => onAbrir?.(f.solicitudId)} className={`flex items-center justify-between border rounded-md px-3 py-2 cursor-pointer hover:bg-slate-50 ${f.pagado ? "opacity-50 border-slate-100" : "border-slate-200"}`}>
+                    <div className="flex items-center gap-3">
+                      <span className="text-sm font-medium text-indigo-600">{f.folio}</span>
+                      <span className="text-xs text-slate-500">{f.proveedor}</span>
+                      <span className="text-xs text-slate-400">{f.tipo}</span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs font-medium ${colorDias(f.dias, f.pagado)}`}>{textoDias(f.dias, f.pagado)}</span>
+                      <span className="text-sm font-medium text-slate-700">{fmt(f.valor)}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
