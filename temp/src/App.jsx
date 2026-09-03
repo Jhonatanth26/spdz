@@ -2205,6 +2205,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
     const copy = { ...pagos, [campo]: { ...pagos[campo], [sub]: val } }; setPagos(copy); onProgramar(copy);
   };
   const usarSugerencia = () => { setPagos(sug); onProgramar(sug); };
+  const setTipoPago = (tipo) => { const copy = { ...pagos, tipoPago: tipo }; setPagos(copy); onProgramar(copy); };
 
   const confirmar = () => {
     if (Math.abs(restante) > 0.5) {
@@ -2251,8 +2252,8 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       {!editable && !solicitud.pagosConfirmados && <div className="text-[11px] text-slate-400 mb-3">Solo Dirección Financiera puede editar y confirmar este plan.</div>}
 
       <div className="flex gap-2 mb-3">
-        <button type="button" disabled={!editable} onClick={() => set("tipoPago", null, "plan")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas (máx. 3)</button>
-        <button type="button" disabled={!editable} onClick={() => set("tipoPago", null, "contado")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
+        <button type="button" disabled={!editable} onClick={() => setTipoPago("plan")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas (máx. 3)</button>
+        <button type="button" disabled={!editable} onClick={() => setTipoPago("contado")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
       </div>
 
       {pagos.tipoPago === "contado" ? (
@@ -2575,8 +2576,8 @@ function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
         <>
           {!(total > 0) && <div className="text-[11px] text-amber-600">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
           <div className="flex gap-2">
-            <button type="button" disabled={!(total > 0)} onClick={() => set("tipoPago", null, "plan")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas</button>
-            <button type="button" disabled={!(total > 0)} onClick={() => set("tipoPago", null, "contado")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
+            <button type="button" disabled={!(total > 0)} onClick={() => onGuardar({ ...sug, tipoPago: "plan" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas</button>
+            <button type="button" disabled={!(total > 0)} onClick={() => onGuardar({ ...sug, tipoPago: "contado" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
           </div>
           {sug.tipoPago === "contado" ? (
             <div className="max-w-[220px]">
