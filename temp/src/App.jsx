@@ -683,12 +683,42 @@ function PerfilUsuario({ currentUser, onGuardar }) {
 /* ---------------------------------------------------------
    DASHBOARD
 --------------------------------------------------------- */
-function Dashboard({ areas, solicitudes }) {
+function Dashboard({ areas, solicitudes, proveedores, currentUser, onAbrir, onVerCalendario }) {
   const gastoPorArea = useMemo(() => {
     const map = {}; areas.forEach((a) => (map[a.id] = 0));
     solicitudes.forEach((s) => { if (!["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)) map[s.areaId] = (map[s.areaId] || 0) + totalSolicitud(s); });
     return map;
   }, [areas, solicitudes]);
+
+  // mismo cálculo que "Calendario de pagos", pero solo los 5 más próximos sin pagar
+  const proximosPagos = useMemo(() => {
+    if (!puedeVerCalendarioPagos(currentUser)) return [];
+    const filas = [];
+    solicitudes.forEach((s) => {
+      if (["completada", "rechazada"].includes(s.status)) return;
+      const prov = proveedoresAdjudicados(s, proveedores);
+      if (s.tipo === "servicio" && s.pagosConfirmados) {
+        const tramos = [
+          { tipo: "Anticipo", ...s.pagos.anticipo },
+          ...(s.pagos.intermedio.activo ? [{ tipo: "Intermedio", ...s.pagos.intermedio }] : []),
+          { tipo: "Final", ...s.pagos.final },
+        ];
+        tramos.forEach((t) => {
+          if (!(parseFloat(t.valor) > 0) || !t.fecha || t.pagado) return;
+          const dias = Math.round((new Date(t.fecha + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
+          filas.push({ id: `${s.id}-${t.tipo}`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: t.tipo, valor: parseFloat(t.valor), fecha: t.fecha, dias });
+        });
+      } else if (s.fechaEstimada) {
+        const total = totalSolicitud(s);
+        if (total > 0) {
+          const dias = Math.round((new Date(s.fechaEstimada + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
+          filas.push({ id: `${s.id}-estimado`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: "Sin plan de pagos", valor: total, fecha: s.fechaEstimada, dias });
+        }
+      }
+    });
+    filas.sort((a, b) => a.fecha.localeCompare(b.fecha));
+    return filas.slice(0, 5);
+  }, [solicitudes, proveedores, currentUser]);
 
   return (
     <div className="space-y-6">
@@ -697,6 +727,33 @@ function Dashboard({ areas, solicitudes }) {
         <div className="bg-white rounded-xl border border-slate-200 p-5"><div className="flex items-center gap-2 text-slate-500 text-sm mb-1"><Clock size={16} /> Pendientes de aprobación</div><div className="text-2xl font-semibold text-slate-800">{solicitudes.filter((s) => ["aprobacion_jefe", "aprobacion_financiera", "aprobacion_gerencia"].includes(s.status)).length}</div></div>
         <div className="bg-white rounded-xl border border-slate-200 p-5"><div className="flex items-center gap-2 text-slate-500 text-sm mb-1"><DollarSign size={16} /> Comprometido este mes (con IVA)</div><div className="text-2xl font-semibold text-slate-800">{fmt(Object.values(gastoPorArea).reduce((a, b) => a + b, 0))}</div></div>
       </div>
+
+      {puedeVerCalendarioPagos(currentUser) && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+            <div className="font-medium text-slate-700 flex items-center gap-2"><CalendarClock size={16} /> Próximos pagos</div>
+            {onVerCalendario && <button onClick={onVerCalendario} className="text-xs text-indigo-600 font-medium">Ver calendario completo →</button>}
+          </div>
+          {proximosPagos.length === 0 ? (
+            <div className="px-5 py-6 text-sm text-slate-400 text-center">No hay pagos programados por vencer.</div>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs"><tr><th className="text-left px-5 py-2 font-medium">Fecha</th><th className="text-left px-5 py-2 font-medium">Días</th><th className="text-left px-5 py-2 font-medium">Consecutivo</th><th className="text-left px-5 py-2 font-medium">Proveedor</th><th className="text-left px-5 py-2 font-medium">Tipo</th><th className="text-right px-5 py-2 font-medium">Valor</th></tr></thead>
+              <tbody>{proximosPagos.map((f) => (
+                <tr key={f.id} onClick={() => onAbrir?.(f.solicitudId)} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
+                  <td className="px-5 py-2.5 whitespace-nowrap">{f.fecha}</td>
+                  <td className={`px-5 py-2.5 whitespace-nowrap font-medium ${f.dias < 0 ? "text-rose-600" : f.dias <= 3 ? "text-amber-600" : "text-slate-500"}`}>{f.dias < 0 ? `Vencido ${Math.abs(f.dias)}d` : f.dias === 0 ? "Hoy" : `${f.dias}d`}</td>
+                  <td className="px-5 py-2.5 font-medium text-slate-700">{f.folio}</td>
+                  <td className="px-5 py-2.5 text-slate-600 max-w-[200px] truncate" title={f.proveedor}>{f.proveedor}</td>
+                  <td className="px-5 py-2.5 text-slate-600">{f.tipo}</td>
+                  <td className="px-5 py-2.5 text-right font-medium">{fmt(f.valor)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      )}
+
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 font-medium text-slate-700">Presupuesto mensual por área</div>
         <table className="w-full text-sm">
@@ -3841,7 +3898,7 @@ export default function App() {
         ) : solicitudAbierta ? (
           <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} />
         ) : tab === "dashboard" ? (
-          <Dashboard areas={areas} solicitudes={solicitudesVisibles} />
+          <Dashboard areas={areas} solicitudes={solicitudesVisibles} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onVerCalendario={() => setTab("calendarioPagos")} />
         ) : tab === "misPendientes" && puedeVerMisPendientes(currentUser) ? (
           <div className="space-y-4">
             <div>
