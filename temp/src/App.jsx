@@ -854,6 +854,8 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
 
 function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
   const [seleccionados, setSeleccionados] = useState([]);
+  const [vista, setVista] = useState("lista");
+  const [mesActual, setMesActual] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), 1); });
 
   // arma una fila por cada pago confirmado (anticipo / intermedio / final) de cada solicitud tipo servicio;
   // las que no tienen plan de pagos (compras, o servicios sin confirmar) usan su fecha estimada de entrega
@@ -905,6 +907,15 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
     XLSX.writeFile(libro, `Calendario_pagos_${hoy()}.xlsx`);
   };
 
+  // ---- vista de calendario (cuadrícula del mes) ----
+  const nombreMes = mesActual.toLocaleDateString("es-CO", { month: "long", year: "numeric" });
+  const primerDiaSemana = (mesActual.getDay() + 6) % 7; // que la semana empiece en lunes
+  const diasDelMes = new Date(mesActual.getFullYear(), mesActual.getMonth() + 1, 0).getDate();
+  const fechaISO = (dia) => `${mesActual.getFullYear()}-${String(mesActual.getMonth() + 1).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+  const pagosPorDia = {};
+  filas.forEach((f) => { (pagosPorDia[f.fecha] = pagosPorDia[f.fecha] || []).push(f); });
+  const celdas = [...Array(primerDiaSemana).fill(null), ...Array.from({ length: diasDelMes }, (_, i) => i + 1)];
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -912,7 +923,13 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
           <h2 className="text-lg font-semibold text-slate-800">Calendario de pagos</h2>
           <p className="text-xs text-slate-400 mt-1">Pagos con plan confirmado, y solicitudes sin plan de pagos (usan su fecha estimada de entrega) — ordenados del más antiguo al más reciente.</p>
         </div>
-        <button onClick={descargar} disabled={!filas.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
+        <div className="flex items-center gap-2">
+          <div className="flex border border-slate-200 rounded-md overflow-hidden">
+            <button onClick={() => setVista("lista")} className={`text-xs px-3 py-1.5 font-medium ${vista === "lista" ? "bg-indigo-600 text-white" : "bg-white text-slate-600"}`}>Lista</button>
+            <button onClick={() => setVista("calendario")} className={`text-xs px-3 py-1.5 font-medium ${vista === "calendario" ? "bg-indigo-600 text-white" : "bg-white text-slate-600"}`}>Calendario</button>
+          </div>
+          <button onClick={descargar} disabled={!filas.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
+        </div>
       </div>
 
       {seleccionados.length > 0 && (
@@ -924,6 +941,39 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
 
       {filas.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay pagos programados con plan confirmado todavía.</div>
+      ) : vista === "calendario" ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <div className="flex items-center justify-between mb-3">
+            <button onClick={() => setMesActual(new Date(mesActual.getFullYear(), mesActual.getMonth() - 1, 1))} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500"><ChevronRight size={16} className="rotate-180" /></button>
+            <div className="text-sm font-medium text-slate-700 capitalize">{nombreMes}</div>
+            <button onClick={() => setMesActual(new Date(mesActual.getFullYear(), mesActual.getMonth() + 1, 1))} className="p-1.5 rounded-md hover:bg-slate-100 text-slate-500"><ChevronRight size={16} /></button>
+          </div>
+          <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-medium text-slate-400 mb-1">
+            {["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"].map((d) => <div key={d}>{d}</div>)}
+          </div>
+          <div className="grid grid-cols-7 gap-1">
+            {celdas.map((dia, idx) => {
+              if (!dia) return <div key={idx} />;
+              const fechaDia = fechaISO(dia);
+              const pagosDia = pagosPorDia[fechaDia] || [];
+              const totalDia = pagosDia.reduce((a, f) => a + f.valor, 0);
+              const esHoy = fechaDia === hoy();
+              const hayVencido = pagosDia.some((f) => !f.pagado && f.dias < 0);
+              return (
+                <div key={idx} className={`min-h-[76px] rounded-md border p-1 text-left ${esHoy ? "border-indigo-400 bg-indigo-50/40" : "border-slate-100"}`}>
+                  <div className={`text-[11px] mb-1 ${esHoy ? "font-semibold text-indigo-600" : "text-slate-400"}`}>{dia}</div>
+                  {pagosDia.slice(0, 2).map((f) => (
+                    <button key={f.id} onClick={() => onAbrir?.(f.solicitudId)} title={`${f.folio} — ${f.tipo} — ${fmt(f.valor)}`} className={`block w-full text-left text-[10px] truncate rounded px-1 py-0.5 mb-0.5 ${f.pagado ? "bg-slate-100 text-slate-400" : hayVencido ? "bg-rose-100 text-rose-700" : "bg-indigo-100 text-indigo-700"}`}>
+                      {f.folio}
+                    </button>
+                  ))}
+                  {pagosDia.length > 2 && <div className="text-[9px] text-slate-400">+{pagosDia.length - 2} más</div>}
+                  {pagosDia.length > 0 && <div className="text-[9px] font-medium text-slate-500 mt-0.5">{fmt(totalDia)}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm">
