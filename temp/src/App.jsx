@@ -195,7 +195,17 @@ function totalSolicitud(s) { return desgloseSolicitud(s).total; }
 function requiereDireccion(m) { return m >= UMBRAL_DIRECCION; }
 function requiereGerencia(m) { return m >= UMBRAL_GERENCIA; }
 function totalPagado(pagos) {
+  if (pagos?.tipoPago === "contado") return parseFloat(pagos?.pagoUnico?.valor) || 0;
   return (parseFloat(pagos?.anticipo?.valor) || 0) + (pagos?.intermedio?.activo ? (parseFloat(pagos.intermedio.valor) || 0) : 0) + (parseFloat(pagos?.final?.valor) || 0);
+}
+// arma la lista de tramos de pago (uno solo si es "de contado", o hasta 3 si es plan por etapas)
+function tramosDePago(pagos) {
+  if (pagos?.tipoPago === "contado") return [{ tipo: "Pago único", ...pagos.pagoUnico }];
+  return [
+    { tipo: "Anticipo", ...pagos.anticipo },
+    ...(pagos.intermedio?.activo ? [{ tipo: "Intermedio", ...pagos.intermedio }] : []),
+    { tipo: "Final", ...pagos.final },
+  ];
 }
 // valida que las fechas del plan de pagos queden en orden creciente: anticipo ≤ intermedio (si aplica) ≤ final
 // devuelve un mensaje de error, o null si está bien
@@ -349,7 +359,7 @@ const puedeVerHistorico = (u) => tienePermiso(u.rol, "ver_historico");
 /* ---------------------------------------------------------
    DATOS SEMILLA
 --------------------------------------------------------- */
-function planPagosVacio() { return { anticipo: { valor: "", fecha: "" }, intermedio: { activo: false, valor: "", fecha: "" }, final: { valor: "", fecha: "" } }; }
+function planPagosVacio() { return { tipoPago: "plan", pagoUnico: { valor: "", fecha: "" }, anticipo: { valor: "", fecha: "" }, intermedio: { activo: false, valor: "", fecha: "" }, final: { valor: "", fecha: "" } }; }
 
 function datosSemilla() {
   const s1 = {
@@ -699,11 +709,7 @@ function Dashboard({ areas, solicitudes, proveedores, currentUser, onAbrir, onVe
       if (["completada", "rechazada"].includes(s.status)) return;
       const prov = proveedoresAdjudicados(s, proveedores);
       if (s.tipo === "servicio" && s.pagosConfirmados) {
-        const tramos = [
-          { tipo: "Anticipo", ...s.pagos.anticipo },
-          ...(s.pagos.intermedio.activo ? [{ tipo: "Intermedio", ...s.pagos.intermedio }] : []),
-          { tipo: "Final", ...s.pagos.final },
-        ];
+        const tramos = tramosDePago(s.pagos);
         tramos.forEach((t) => {
           if (!(parseFloat(t.valor) > 0) || !t.fecha || t.pagado) return;
           const dias = Math.round((new Date(t.fecha + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
@@ -866,11 +872,7 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
     if (["completada", "rechazada"].includes(s.status)) return;
     const prov = proveedoresAdjudicados(s, proveedores);
     if (s.tipo === "servicio" && s.pagosConfirmados) {
-      const tramos = [
-        { tipo: "Anticipo", ...s.pagos.anticipo },
-        ...(s.pagos.intermedio.activo ? [{ tipo: "Intermedio", ...s.pagos.intermedio }] : []),
-        { tipo: "Final", ...s.pagos.final },
-      ];
+      const tramos = tramosDePago(s.pagos);
       tramos.forEach((t) => {
         if (!(parseFloat(t.valor) > 0) || !t.fecha) return;
         const dias = Math.round((new Date(t.fecha + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
@@ -1644,15 +1646,16 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     if (!items.length || items.some((i) => !i.nombre.trim()) || !objetivo.trim() || !justificacion.trim()) return;
     // si el solicitante empezó a llenar el plan de pagos sugerido, debe cuadrar exacto con el total —
     // si lo dejó completamente vacío, no pasa nada, es opcional
-    const algoDelPlanLlenado = parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0;
+    const algoDelPlanLlenado = parseFloat(pagosSugeridos.pagoUnico.valor) > 0 || parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0;
     if (algoDelPlanLlenado) {
       const restantePlan = totalGeneral.total - totalPagado(pagosSugeridos);
       if (Math.abs(restantePlan) > 0.5) {
         alert(restantePlan > 0 ? `El plan de pagos sugerido no cubre el total: faltan ${fmt(restantePlan)}. Complétalo o déjalo completamente vacío si no quieres sugerir uno.` : `El plan de pagos sugerido supera el total en ${fmt(-restantePlan)}. Ajústalo antes de enviar.`);
         return;
       }
-      if (!pagosSugeridos.anticipo.fecha || !pagosSugeridos.final.fecha || (pagosSugeridos.intermedio.activo && !pagosSugeridos.intermedio.fecha)) {
-        alert("Falta poner la fecha de uno o más pagos del plan sugerido antes de enviar.");
+      const faltaFecha = pagosSugeridos.tipoPago === "contado" ? !pagosSugeridos.pagoUnico.fecha : (!pagosSugeridos.anticipo.fecha || !pagosSugeridos.final.fecha || (pagosSugeridos.intermedio.activo && !pagosSugeridos.intermedio.fecha));
+      if (faltaFecha) {
+        alert("Falta poner la fecha del plan sugerido antes de enviar.");
         return;
       }
     }
@@ -1819,20 +1822,31 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         {tienePlanPagos && (
           <>
         {!(totalGeneral.total > 0) && <div className="text-[11px] text-amber-600 mb-2">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
+        <div className="flex gap-2 mb-3">
+          <button type="button" disabled={!(totalGeneral.total > 0)} onClick={() => setPagosSugeridos({ ...pagosSugeridos, tipoPago: "plan" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagosSugeridos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas</button>
+          <button type="button" disabled={!(totalGeneral.total > 0)} onClick={() => setPagosSugeridos({ ...pagosSugeridos, tipoPago: "contado" })} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagosSugeridos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
+        </div>
+        {pagosSugeridos.tipoPago === "contado" ? (
+          <div className="max-w-[220px]">
+            <InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Valor total" value={pagosSugeridos.pagoUnico.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, pagoUnico: { ...pagosSugeridos.pagoUnico, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" />
+            <InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.pagoUnico.fecha} onChange={(v) => setFechaSugerida("pagoUnico", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" />
+          </div>
+        ) : (
         <div className="grid grid-cols-3 gap-2">
           <div><label className="text-[11px] mb-1 invisible block">Anticipo</label><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Anticipo" value={pagosSugeridos.anticipo.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, anticipo: { ...pagosSugeridos.anticipo, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.anticipo.fecha} onChange={(v) => setFechaSugerida("anticipo", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
           <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" disabled={!(totalGeneral.total > 0)} checked={pagosSugeridos.intermedio.activo} onChange={(e) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, activo: e.target.checked } })} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, intermedio: { ...pagosSugeridos.intermedio, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0) || !pagosSugeridos.intermedio.activo} value={pagosSugeridos.intermedio.fecha} onChange={(v) => setFechaSugerida("intermedio", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
           <div><label className="text-[11px] mb-1 invisible block">Pago final</label><InputMiles disabled={!(totalGeneral.total > 0)} placeholder="Pago final" value={pagosSugeridos.final.valor} onChange={(v) => setPagosSugeridos({ ...pagosSugeridos, final: { ...pagosSugeridos.final, valor: v } })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(totalGeneral.total > 0)} value={pagosSugeridos.final.fecha} onChange={(v) => setFechaSugerida("final", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
         </div>
-        {totalGeneral.total > 0 && (parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0) && (() => {
+        )}
+        {totalGeneral.total > 0 && (parseFloat(pagosSugeridos.pagoUnico.valor) > 0 || parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0) && (() => {
           const restantePlan = totalGeneral.total - totalPagado(pagosSugeridos);
-          const faltaFecha = !pagosSugeridos.anticipo.fecha || !pagosSugeridos.final.fecha || (pagosSugeridos.intermedio.activo && !pagosSugeridos.intermedio.fecha);
+          const faltaFecha = pagosSugeridos.tipoPago === "contado" ? !pagosSugeridos.pagoUnico.fecha : (!pagosSugeridos.anticipo.fecha || !pagosSugeridos.final.fecha || (pagosSugeridos.intermedio.activo && !pagosSugeridos.intermedio.fecha));
           return (
             <>
             <div className={`text-[11px] mt-2 ${Math.abs(restantePlan) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
               {Math.abs(restantePlan) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restantePlan))} ${restantePlan > 0 ? "por programar" : "de más"}` : "✓ El plan cuadra exacto con el total"}
             </div>
-            {faltaFecha && <div className="text-[11px] text-amber-600">Falta poner la fecha de uno o más pagos.</div>}
+            {faltaFecha && <div className="text-[11px] text-amber-600">Falta poner la fecha de{pagosSugeridos.tipoPago === "contado" ? "l pago" : " uno o más pagos"}.</div>}
             </>
           );
         })()}
@@ -2170,7 +2184,7 @@ function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGu
    PAGOS: sugeridos por solicitante + confirmados por Dirección Financiera
 --------------------------------------------------------- */
 function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConfirmar, onEditarDeNuevo }) {
-  const [pagos, setPagos] = useState(solicitud.pagos);
+  const [pagos, setPagos] = useState({ ...planPagosVacio(), ...solicitud.pagos });
   // una vez la orden ya se envió al proveedor, las condiciones de pago quedan fijas — ya no se pueden tocar
   const ocYaEnviada = ["oc_enviada", "recepcion", "completada"].includes(solicitud.status);
   // sin precios (ni cotización ni estimado), no hay contra qué cuadrar el plan — se habilita cuando Compras cargue precios
@@ -2178,9 +2192,10 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
   const editable = puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados && !ocYaEnviada && !sinPrecio;
   const pagado = totalPagado(pagos);
   const restante = total - pagado;
-  const sug = solicitud.pagosSugeridos;
-  const hasSugerencia = parseFloat(sug?.anticipo?.valor) > 0 || parseFloat(sug?.final?.valor) > 0;
+  const sug = { ...planPagosVacio(), ...solicitud.pagosSugeridos };
+  const hasSugerencia = parseFloat(sug?.pagoUnico?.valor) > 0 || parseFloat(sug?.anticipo?.valor) > 0 || parseFloat(sug?.final?.valor) > 0;
   const descuadrado = solicitud.pagosConfirmados && Math.abs(restante) > 0.5;
+  const faltaFecha = pagos.tipoPago === "contado" ? !pagos.pagoUnico.fecha : (!pagos.anticipo.fecha || !pagos.final.fecha || (pagos.intermedio.activo && !pagos.intermedio.fecha));
 
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) {
@@ -2196,7 +2211,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       alert(restante > 0 ? `El plan de pagos no cubre el total: faltan ${fmt(restante)} por programar.` : `El plan de pagos supera el total en ${fmt(-restante)}. Ajusta los valores antes de confirmar.`);
       return;
     }
-    if (!pagos.anticipo.fecha || !pagos.final.fecha || (pagos.intermedio.activo && !pagos.intermedio.fecha)) {
+    if (faltaFecha) {
       alert("Falta poner la fecha de uno o más pagos antes de confirmar.");
       return;
     }
@@ -2206,7 +2221,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
       <div className="flex items-center justify-between mb-1">
-        <div className="flex items-center gap-2 text-slate-700 font-medium"><CalendarClock size={16} /> Plan de pagos (máx. 3)</div>
+        <div className="flex items-center gap-2 text-slate-700 font-medium"><CalendarClock size={16} /> Plan de pagos</div>
         <div className="flex items-center gap-2">
           {solicitud.pagosConfirmados ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado por Dirección Financiera</Badge> : <Badge tone="amber">Pendiente de confirmación</Badge>}
           {solicitud.pagosConfirmados && !ocYaEnviada && puedeEditarPagos(currentUser) && <button onClick={onEditarDeNuevo} className="text-[11px] text-indigo-600 underline">Editar de nuevo</button>}
@@ -2229,11 +2244,25 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       )}
       {hasSugerencia && !solicitud.pagosConfirmados && (
         <div className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 mb-2 flex items-center justify-between">
-          <span>El solicitante sugirió: anticipo {fmt(sug.anticipo.valor)} ({sug.anticipo.fecha || "sin fecha"}){sug.intermedio.activo ? `, intermedio ${fmt(sug.intermedio.valor)}` : ""}, final {fmt(sug.final.valor)} ({sug.final.fecha || "sin fecha"})</span>
+          <span>{sug.tipoPago === "contado" ? `El solicitante sugirió: pago único ${fmt(sug.pagoUnico.valor)} (${sug.pagoUnico.fecha || "sin fecha"})` : `El solicitante sugirió: anticipo ${fmt(sug.anticipo.valor)} (${sug.anticipo.fecha || "sin fecha"})${sug.intermedio.activo ? `, intermedio ${fmt(sug.intermedio.valor)}` : ""}, final ${fmt(sug.final.valor)} (${sug.final.fecha || "sin fecha"})`}</span>
           {editable && <button onClick={usarSugerencia} className="text-indigo-600 font-medium ml-2 shrink-0">Usar sugerencia</button>}
         </div>
       )}
       {!editable && !solicitud.pagosConfirmados && <div className="text-[11px] text-slate-400 mb-3">Solo Dirección Financiera puede editar y confirmar este plan.</div>}
+
+      <div className="flex gap-2 mb-3">
+        <button type="button" disabled={!editable} onClick={() => set("tipoPago", null, "plan")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas (máx. 3)</button>
+        <button type="button" disabled={!editable} onClick={() => set("tipoPago", null, "contado")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
+      </div>
+
+      {pagos.tipoPago === "contado" ? (
+        <div className="border border-slate-200 rounded-lg p-3 max-w-xs">
+          <div className="text-xs font-medium text-slate-500 mb-2">Pago único</div>
+          <InputMiles disabled={!editable} placeholder="Valor total" value={pagos.pagoUnico.valor} onChange={(v) => set("pagoUnico", "valor", v)} className="w-full mb-1.5 border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <InputFecha disabled={!editable} value={pagos.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+          <div className="text-[11px] text-slate-400 mt-1">Fecha del pago</div>
+        </div>
+      ) : (
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mt-2">
         <div className="border border-slate-200 rounded-lg p-3">
           <div className="text-xs font-medium text-slate-500 mb-2">Anticipo</div>
@@ -2253,6 +2282,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
           <div className="text-[11px] text-slate-400 mt-1">Fecha pago final</div>
         </div>
       </div>
+      )}
       <div className="flex items-center justify-between mt-3">
         <div className="text-sm text-slate-500">Total orden: <b className="text-slate-700">{fmt(total)}</b> · Programado: <b className="text-slate-700">{fmt(pagado)}</b> · Restante: <b className={restante > 0.5 ? "text-amber-600" : restante < -0.5 ? "text-rose-600" : "text-emerald-600"}>{fmt(restante)}</b></div>
         {editable && <button onClick={confirmar} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar plan de pagos</button>}
@@ -2520,8 +2550,8 @@ function descargarExcelEvaluacion(ev, solicitud) {
 // permite corregir/agregar el plan de pagos sugerido después de reabrir una solicitud rechazada
 // (el mismo Sí/No y campos que existen al crearla, pero editable desde el detalle)
 function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
-  const sug = solicitud.pagosSugeridos || planPagosVacio();
-  const tienePlan = parseFloat(sug.anticipo.valor) > 0 || parseFloat(sug.intermedio.valor) > 0 || parseFloat(sug.final.valor) > 0;
+  const sug = { ...planPagosVacio(), ...solicitud.pagosSugeridos };
+  const tienePlan = parseFloat(sug.pagoUnico.valor) > 0 || parseFloat(sug.anticipo.valor) > 0 || parseFloat(sug.intermedio.valor) > 0 || parseFloat(sug.final.valor) > 0;
   const [mostrar, setMostrar] = useState(tienePlan);
 
   const set = (campo, sub, val) => {
@@ -2532,6 +2562,7 @@ function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
     onGuardar({ ...sug, [campo]: { ...sug[campo], [sub]: val } });
   };
   const restante = total - totalPagado(sug);
+  const faltaFecha = sug.tipoPago === "contado" ? !sug.pagoUnico.fecha : (!sug.anticipo.fecha || !sug.final.fecha || (sug.intermedio.activo && !sug.intermedio.fecha));
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
@@ -2543,18 +2574,29 @@ function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
       {mostrar && (
         <>
           {!(total > 0) && <div className="text-[11px] text-amber-600">Pon un precio estimado en al menos un ítem para poder sugerir un plan de pagos.</div>}
+          <div className="flex gap-2">
+            <button type="button" disabled={!(total > 0)} onClick={() => set("tipoPago", null, "plan")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas</button>
+            <button type="button" disabled={!(total > 0)} onClick={() => set("tipoPago", null, "contado")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${sug.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único (de contado)</button>
+          </div>
+          {sug.tipoPago === "contado" ? (
+            <div className="max-w-[220px]">
+              <InputMiles disabled={!(total > 0)} placeholder="Valor total" value={sug.pagoUnico.valor} onChange={(v) => set("pagoUnico", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" />
+              <InputFecha disabled={!(total > 0)} value={sug.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" />
+            </div>
+          ) : (
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
             <div><label className="text-[11px] mb-1 invisible block">Anticipo</label><InputMiles disabled={!(total > 0)} placeholder="Anticipo" value={sug.anticipo.valor} onChange={(v) => set("anticipo", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(total > 0)} value={sug.anticipo.fecha} onChange={(v) => set("anticipo", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
             <div><label className="text-[11px] flex items-center gap-1 mb-1"><input type="checkbox" disabled={!(total > 0)} checked={sug.intermedio.activo} onChange={(e) => set("intermedio", "activo", e.target.checked)} /> Intermedio</label><InputMiles placeholder="Valor" disabled={!(total > 0) || !sug.intermedio.activo} value={sug.intermedio.valor} onChange={(v) => set("intermedio", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(total > 0) || !sug.intermedio.activo} value={sug.intermedio.fecha} onChange={(v) => set("intermedio", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
             <div><label className="text-[11px] mb-1 invisible block">Pago final</label><InputMiles disabled={!(total > 0)} placeholder="Pago final" value={sug.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs mb-1 disabled:bg-slate-100" /><InputFecha disabled={!(total > 0)} value={sug.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs disabled:bg-slate-100" /></div>
           </div>
+          )}
           {total > 0 && tienePlan && (
             <div className={`text-[11px] ${Math.abs(restante) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
               {Math.abs(restante) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restante))} ${restante > 0 ? "por programar" : "de más"}` : "✓ El plan cuadra exacto con el total"}
             </div>
           )}
-          {total > 0 && tienePlan && (!sug.anticipo.fecha || !sug.final.fecha || (sug.intermedio.activo && !sug.intermedio.fecha)) && (
-            <div className="text-[11px] text-amber-600">Falta poner la fecha de uno o más pagos.</div>
+          {total > 0 && tienePlan && faltaFecha && (
+            <div className="text-[11px] text-amber-600">Falta poner la fecha de{sug.tipoPago === "contado" ? "l pago" : " uno o más pagos"}.</div>
           )}
         </>
       )}
@@ -2892,17 +2934,23 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
 
       {/* PLAN DE PAGOS (solo servicio) */}
       {pagoActivo && (() => {
-        const usaSugerido = !solicitud.pagosConfirmados && !(solicitud.pagos.anticipo.valor > 0 || solicitud.pagos.final.valor > 0);
-        const p = usaSugerido ? solicitud.pagosSugeridos : solicitud.pagos;
+        const usaSugerido = !solicitud.pagosConfirmados && !(solicitud.pagos.pagoUnico?.valor > 0 || solicitud.pagos.anticipo.valor > 0 || solicitud.pagos.final.valor > 0);
+        const p = { ...planPagosVacio(), ...(usaSugerido ? solicitud.pagosSugeridos : solicitud.pagos) };
         return (
           <div>
             <div className="text-xs font-medium text-slate-500 mb-1">Plan de pagos {solicitud.pagosConfirmados ? "(confirmado por Dirección Financiera)" : usaSugerido ? "(sugerido por el solicitante — pendiente de confirmar)" : "(sin confirmar)"}</div>
             <table className="w-full text-[11px]">
               <thead className="text-slate-400 border-b border-slate-100"><tr><th className="text-left py-0.5">Pago</th><th className="text-right py-0.5">Valor</th><th className="text-right py-0.5">Fecha</th><th className="text-center py-0.5">Pagado</th></tr></thead>
               <tbody>
-                <tr className="border-t border-slate-50"><td className="py-0.5">Anticipo</td><td className="py-0.5 text-right">{fmt(p.anticipo.valor)}</td><td className="py-0.5 text-right">{p.anticipo.fecha || "—"}</td><td className="py-0.5 text-center">{p.anticipo.pagado ? "✓" : ""}</td></tr>
-                {p.intermedio.activo && <tr className="border-t border-slate-50"><td className="py-0.5">Intermedio</td><td className="py-0.5 text-right">{fmt(p.intermedio.valor)}</td><td className="py-0.5 text-right">{p.intermedio.fecha || "—"}</td><td className="py-0.5 text-center">{p.intermedio.pagado ? "✓" : ""}</td></tr>}
-                <tr className="border-t border-slate-50"><td className="py-0.5">Final</td><td className="py-0.5 text-right">{fmt(p.final.valor)}</td><td className="py-0.5 text-right">{p.final.fecha || "—"}</td><td className="py-0.5 text-center">{p.final.pagado ? "✓" : ""}</td></tr>
+                {p.tipoPago === "contado" ? (
+                  <tr className="border-t border-slate-50"><td className="py-0.5">Pago único (de contado)</td><td className="py-0.5 text-right">{fmt(p.pagoUnico.valor)}</td><td className="py-0.5 text-right">{p.pagoUnico.fecha || "—"}</td><td className="py-0.5 text-center">{p.pagoUnico.pagado ? "✓" : ""}</td></tr>
+                ) : (
+                  <>
+                    <tr className="border-t border-slate-50"><td className="py-0.5">Anticipo</td><td className="py-0.5 text-right">{fmt(p.anticipo.valor)}</td><td className="py-0.5 text-right">{p.anticipo.fecha || "—"}</td><td className="py-0.5 text-center">{p.anticipo.pagado ? "✓" : ""}</td></tr>
+                    {p.intermedio.activo && <tr className="border-t border-slate-50"><td className="py-0.5">Intermedio</td><td className="py-0.5 text-right">{fmt(p.intermedio.valor)}</td><td className="py-0.5 text-right">{p.intermedio.fecha || "—"}</td><td className="py-0.5 text-center">{p.intermedio.pagado ? "✓" : ""}</td></tr>}
+                    <tr className="border-t border-slate-50"><td className="py-0.5">Final</td><td className="py-0.5 text-right">{fmt(p.final.valor)}</td><td className="py-0.5 text-right">{p.final.fecha || "—"}</td><td className="py-0.5 text-center">{p.final.pagado ? "✓" : ""}</td></tr>
+                  </>
+                )}
               </tbody>
             </table>
           </div>
