@@ -1918,14 +1918,25 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
           {items.map((it, idx) => {
             const d = desgloseItem(it);
             if (!(d.subtotal > 0)) return null;
-            return <div key={it.id} className="flex justify-between text-slate-500"><span className="truncate pr-2">{idx + 1}. {it.nombre || "(sin nombre)"}</span><span className="shrink-0 text-slate-700">{fmt(d.total)}</span></div>;
+            return <div key={it.id} className="flex justify-between text-slate-500"><span className="truncate pr-2">{idx + 1}. {it.nombre || "(sin nombre)"}</span><span className="shrink-0 text-slate-700">{fmt(tipo === "servicio" ? d.subtotal : d.total)}</span></div>;
           })}
         </div>
-        <div className="border-t border-slate-200 pt-3 space-y-1">
-          <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span>{fmt(totalGeneral.subtotal)}</span></div>
-          <div className="flex justify-between text-xs text-slate-500"><span>IVA</span><span>{fmt(totalGeneral.iva)}</span></div>
-          <div className="flex justify-between text-sm font-semibold text-slate-800 pt-1"><span>Total</span><span>{fmt(totalGeneral.total)}</span></div>
-        </div>
+        {tipo === "servicio" ? (
+          <div className="border-t border-slate-200 pt-3 space-y-1">
+            <div className="flex justify-between text-xs text-slate-500"><span>Costo Directo</span><span>{fmt(totalGeneral.costoDirecto)}</span></div>
+            <div className="flex justify-between text-xs text-slate-500"><span>Administración ({aiu.administracionPct || 0}%)</span><span>{fmt(totalGeneral.administracion)}</span></div>
+            <div className="flex justify-between text-xs text-slate-500"><span>Utilidad ({aiu.utilidadPct || 0}%)</span><span>{fmt(totalGeneral.utilidad)}</span></div>
+            <div className="flex justify-between text-xs text-slate-500"><span>Imprevistos ({aiu.imprevistosPct || 0}%)</span><span>{fmt(totalGeneral.imprevistos)}</span></div>
+            <div className="flex justify-between text-xs text-slate-500"><span>IVA sobre Utilidad</span><span>{fmt(totalGeneral.ivaUtilidad)}</span></div>
+            <div className="flex justify-between text-sm font-semibold text-slate-800 pt-1"><span>Total</span><span>{fmt(totalGeneral.total)}</span></div>
+          </div>
+        ) : (
+          <div className="border-t border-slate-200 pt-3 space-y-1">
+            <div className="flex justify-between text-xs text-slate-500"><span>Subtotal</span><span>{fmt(totalGeneral.subtotal)}</span></div>
+            <div className="flex justify-between text-xs text-slate-500"><span>IVA</span><span>{fmt(totalGeneral.iva)}</span></div>
+            <div className="flex justify-between text-sm font-semibold text-slate-800 pt-1"><span>Total</span><span>{fmt(totalGeneral.total)}</span></div>
+          </div>
+        )}
         {requiereGerencia(totalGeneral.total) && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Este monto requerirá aprobación de Gerencia.</div>}
         {!requiereGerencia(totalGeneral.total) && requiereDireccion(totalGeneral.total) && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Este monto requerirá aprobación de Dirección Financiera.</div>}
       </div>
