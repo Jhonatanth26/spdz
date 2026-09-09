@@ -232,6 +232,15 @@ function validarOrdenFechas(pagos, campo, nuevaFecha) {
   if (hayIntermedio && intermedio && final && intermedio > final) return "La fecha del pago intermedio no puede ser posterior a la del pago final.";
   return null;
 }
+// evita porcentajes negativos o absurdamente altos (ej. AIU) — deja vacío o cualquier número entre 0 y 100
+function pctValido(val) {
+  if (val === "") return "";
+  const n = parseFloat(val);
+  if (isNaN(n)) return "";
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return val;
+}
 // duración legible entre dos timestamps ISO
 function duracion(iniISO, finISO) {
   if (!iniISO || !finISO) return "—";
@@ -1839,9 +1848,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div className="mb-5 bg-slate-50 rounded-lg p-3 border border-slate-200">
           <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><DollarSign size={13} /> Costos indirectos (AIU) — porcentajes que te dio el proveedor (Compras los validará y podrá ajustarlos)</div>
           <div className="grid grid-cols-3 gap-2">
-            <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input type="number" min="0" step="0.1" placeholder="0" value={aiu.administracionPct} onChange={(e) => setAiu({ ...aiu, administracionPct: e.target.value })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
-            <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input type="number" min="0" step="0.1" placeholder="0" value={aiu.utilidadPct} onChange={(e) => setAiu({ ...aiu, utilidadPct: e.target.value })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
-            <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input type="number" min="0" step="0.1" placeholder="0" value={aiu.imprevistosPct} onChange={(e) => setAiu({ ...aiu, imprevistosPct: e.target.value })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={aiu.administracionPct} onChange={(e) => setAiu({ ...aiu, administracionPct: pctValido(e.target.value) })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={aiu.utilidadPct} onChange={(e) => setAiu({ ...aiu, utilidadPct: pctValido(e.target.value) })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={aiu.imprevistosPct} onChange={(e) => setAiu({ ...aiu, imprevistosPct: pctValido(e.target.value) })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
           </div>
           <div className="text-[11px] text-slate-400 mt-2">El IVA (19%) se calcula automáticamente solo sobre la Utilidad — no se cobra IVA por ítem en las órdenes de servicio/trabajo.</div>
           {(parseFloat(aiu.administracionPct) > 0 || parseFloat(aiu.utilidadPct) > 0 || parseFloat(aiu.imprevistosPct) > 0) && totalGeneral.costoDirecto > 0 && (
@@ -2188,16 +2197,16 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
 function AiuEditor({ solicitud, onGuardar, editable }) {
   const [aiu, setAiu] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "", ...solicitud.aiu });
   useEffect(() => { setAiu({ administracionPct: "", utilidadPct: "", imprevistosPct: "", ...solicitud.aiu }); }, [solicitud.id]);
-  const set = (campo, val) => { const copy = { ...aiu, [campo]: val }; setAiu(copy); onGuardar(copy); };
+  const set = (campo, val) => { const copy = { ...aiu, [campo]: pctValido(val) }; setAiu(copy); onGuardar(copy); };
   const d = desgloseSolicitud(solicitud);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
       <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
       <div className="grid grid-cols-3 gap-2 mb-3">
-        <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input disabled={!editable} type="number" min="0" step="0.1" value={aiu.administracionPct} onChange={(e) => set("administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
-        <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input disabled={!editable} type="number" min="0" step="0.1" value={aiu.utilidadPct} onChange={(e) => set("utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
-        <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input disabled={!editable} type="number" min="0" step="0.1" value={aiu.imprevistosPct} onChange={(e) => set("imprevistosPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
+        <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.administracionPct} onChange={(e) => set("administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
+        <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.utilidadPct} onChange={(e) => set("utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
+        <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.imprevistosPct} onChange={(e) => set("imprevistosPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
       </div>
       <div className="text-[11px] text-slate-400 mb-2">El IVA (19%) se calcula automáticamente solo sobre la Utilidad.</div>
       <div className="space-y-0.5 text-xs text-slate-500 max-w-xs">
