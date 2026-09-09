@@ -50,6 +50,7 @@ const haciaFila = (s) => ({
     notificaciones: s.notificaciones,
     prioridad: s.prioridad,
     evaluacionProveedor: s.evaluacionProveedor,
+    aiu: s.aiu,
   },
 })
 

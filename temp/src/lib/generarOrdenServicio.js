@@ -3,7 +3,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 // Genera el PDF de la Orden de Servicio/Trabajo desde los datos de la solicitud —
 // se usa cuando el sistema contable (Zeus) no genera este tipo de orden.
 // Devuelve los bytes del PDF (Uint8Array), listos para subir a Storage y luego firmar.
-export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre, items, total, subtotal, iva }) {
+export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre, items, costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, aiuPcts }) {
   const pdfDoc = await PDFDocument.create()
   const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
@@ -101,10 +101,17 @@ export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNom
   pagina.drawLine({ start: { x: colValor - 10, y }, end: { x: anchoPagina - margen, y }, thickness: 0.5, color: rgb(0.9, 0.9, 0.93) })
   y -= 16
 
-  // ---------- TOTALES ----------
-  texto('Subtotal', colValor, 10); texto(fmt_(subtotal), colTotal, 10)
+  // ---------- TOTALES (Costo Directo + AIU) ----------
+  saltoSiHaceFalta(120)
+  texto('Costo Directo', colValor, 10); texto(fmt_(costoDirecto), colTotal, 10)
   y -= 15
-  texto('IVA', colValor, 10); texto(fmt_(iva), colTotal, 10)
+  texto(`Administración (${aiuPcts?.administracionPct || 0}%)`, colValor, 10); texto(fmt_(administracion), colTotal, 10)
+  y -= 15
+  texto(`Utilidad (${aiuPcts?.utilidadPct || 0}%)`, colValor, 10); texto(fmt_(utilidad), colTotal, 10)
+  y -= 15
+  texto(`Imprevistos (${aiuPcts?.imprevistosPct || 0}%)`, colValor, 10); texto(fmt_(imprevistos), colTotal, 10)
+  y -= 15
+  texto('IVA sobre la Utilidad (19%)', colValor, 10); texto(fmt_(ivaUtilidad), colTotal, 10)
   y -= 17
   texto('Total', colValor, 11, { bold: true }); texto(fmt_(total), colTotal, 11, { bold: true })
   y -= 26

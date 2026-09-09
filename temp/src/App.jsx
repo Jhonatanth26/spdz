@@ -186,10 +186,23 @@ function desgloseItem(item) {
   return cot ? desgloseCotizacion(cot, item.cantidad) : { subtotal: 0, iva: 0, total: 0 };
 }
 function desgloseSolicitud(solicitud) {
+  if (solicitud.tipo === "servicio") return desgloseSolicitudServicio(solicitud);
   return solicitud.items.reduce((acc, item) => {
     const d = desgloseItem(item);
     return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total };
   }, { subtotal: 0, iva: 0, total: 0 });
+}
+// órdenes de servicio/trabajo: Costo Directo + AIU (Administración, Imprevistos, Utilidad) + IVA solo sobre la Utilidad —
+// no llevan IVA por ítem, ese campo queda deshabilitado para este tipo de solicitud.
+function desgloseSolicitudServicio(solicitud) {
+  const costoDirecto = solicitud.items.reduce((acc, item) => acc + desgloseItem(item).subtotal, 0);
+  const aiu = solicitud.aiu || {};
+  const administracion = costoDirecto * (parseFloat(aiu.administracionPct) || 0) / 100;
+  const utilidad = costoDirecto * (parseFloat(aiu.utilidadPct) || 0) / 100;
+  const imprevistos = costoDirecto * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+  const ivaUtilidad = utilidad * 0.19;
+  const total = costoDirecto + administracion + utilidad + imprevistos + ivaUtilidad;
+  return { costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, subtotal: costoDirecto, iva: ivaUtilidad };
 }
 function totalSolicitud(s) { return desgloseSolicitud(s).total; }
 function requiereDireccion(m) { return m >= UMBRAL_DIRECCION; }
@@ -1605,6 +1618,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const [pagosSugeridos, setPagosSugeridos] = useState(planPagosVacio());
   const [tienePlanPagos, setTienePlanPagos] = useState(false);
+  const [aiu, setAiu] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "" });
 
   const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
@@ -1629,7 +1643,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     }
     setPagosSugeridos({ ...pagosSugeridos, [campo]: { ...pagosSugeridos[campo], fecha: val } });
   };
-  const totalGeneral = items.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
+  const totalGeneral = tipo === "servicio" ? desgloseSolicitud({ tipo, items, aiu }) : items.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
   // si el total cambia (ej. se agrega otro ítem) mientras está en modo "pago único", se mantiene sincronizado
   useEffect(() => {
     if (pagosSugeridos.tipoPago === "contado" && pagosSugeridos.pagoUnico.valor !== totalGeneral.total) {
@@ -1687,8 +1701,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCostoId, conceptoGastoId, solicitanteId: currentUser.id,
       fechaCreacion: hoy(), fechaEstimada, objetivo, justificacion,
       status: statusInicial,
+      aiu: tipo === "servicio" ? aiu : { administracionPct: "", utilidadPct: "", imprevistosPct: "" },
       revisionCompras: tipo === "compra" ? { estado: "pendiente", observacion: "", usuario: "", fecha: "" } : { estado: "no_aplica", observacion: "", usuario: "", fecha: "" },
-      items: items.map((i) => ({ ...i, cotizacionSeleccionada: null, observacionSeleccion: "" })),
+      items: items.map((i) => ({ ...i, ivaEstimado: tipo === "servicio" ? 0 : i.ivaEstimado, cotizacionSeleccionada: null, observacionSeleccion: "" })),
       firmas: {
         solicitante: { nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), fotoUrl: currentUser.firmaFotoUrl || null },
         jefe: esJefeDeSuPropiaArea
@@ -1797,7 +1812,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               ) : (
                 <input type="number" min="0" placeholder="Descuento en %" value={it.descuentoValor} onChange={(e) => updateItem(it.id, "descuentoValor", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               )}
-              <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
+              {tipo !== "servicio" && <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
             {parseFloat(it.precioEstimado) > 0 && (() => {
@@ -1810,15 +1825,37 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               return (
                 <div className="text-[11px] text-slate-500 pl-1 space-y-0.5">
                   {ahorro > 0 && <div>Precio inicial: {simbolo}{inicial.toLocaleString("es-CO")} · Descuento: -{simbolo}{ahorro.toLocaleString("es-CO", { maximumFractionDigits: 2 })} · Precio con descuento: <b>{simbolo}{conDescuento.toLocaleString("es-CO", { maximumFractionDigits: 2 })}</b></div>}
-                  <div>Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b></div>
+                  {tipo === "servicio" ? <div>Subtotal (Costo Directo de este ítem): <b>{fmt(d.subtotal)}</b></div> : <div>Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b></div>}
                 </div>
               );
             })()}
             {/* el solicitante puede adjuntar hasta 3 cotizaciones desde ya, opcional */}
-            <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" />
+            <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" sinIva={tipo === "servicio"} />
           </div>
         ))}
       </div>
+
+      {tipo === "servicio" && (
+        <div className="mb-5 bg-slate-50 rounded-lg p-3 border border-slate-200">
+          <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><DollarSign size={13} /> Costos indirectos (AIU) — porcentajes que te dio el proveedor (Compras los validará y podrá ajustarlos)</div>
+          <div className="grid grid-cols-3 gap-2">
+            <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input type="number" min="0" step="0.1" placeholder="0" value={aiu.administracionPct} onChange={(e) => setAiu({ ...aiu, administracionPct: e.target.value })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input type="number" min="0" step="0.1" placeholder="0" value={aiu.utilidadPct} onChange={(e) => setAiu({ ...aiu, utilidadPct: e.target.value })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
+            <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input type="number" min="0" step="0.1" placeholder="0" value={aiu.imprevistosPct} onChange={(e) => setAiu({ ...aiu, imprevistosPct: e.target.value })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
+          </div>
+          <div className="text-[11px] text-slate-400 mt-2">El IVA (19%) se calcula automáticamente solo sobre la Utilidad — no se cobra IVA por ítem en las órdenes de servicio/trabajo.</div>
+          {(parseFloat(aiu.administracionPct) > 0 || parseFloat(aiu.utilidadPct) > 0 || parseFloat(aiu.imprevistosPct) > 0) && totalGeneral.costoDirecto > 0 && (
+            <div className="text-[11px] text-slate-500 mt-2 space-y-0.5">
+              <div className="flex justify-between max-w-xs"><span>Costo Directo</span><span>{fmt(totalGeneral.costoDirecto)}</span></div>
+              <div className="flex justify-between max-w-xs"><span>Administración</span><span>{fmt(totalGeneral.administracion)}</span></div>
+              <div className="flex justify-between max-w-xs"><span>Utilidad</span><span>{fmt(totalGeneral.utilidad)}</span></div>
+              <div className="flex justify-between max-w-xs"><span>Imprevistos</span><span>{fmt(totalGeneral.imprevistos)}</span></div>
+              <div className="flex justify-between max-w-xs"><span>IVA sobre Utilidad</span><span>{fmt(totalGeneral.ivaUtilidad)}</span></div>
+              <div className="flex justify-between max-w-xs font-medium text-slate-700"><span>Total</span><span>{fmt(totalGeneral.total)}</span></div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="mb-5 bg-slate-50 rounded-lg p-3 border border-slate-200">
         <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><CalendarClock size={13} /> ¿Esta solicitud cuenta con plan de pagos?</div>
@@ -1900,7 +1937,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 /* ---------------------------------------------------------
    COTIZACIONES Y COMPARATIVO
 --------------------------------------------------------- */
-function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo }) {
+function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo, sinIva }) {
   const [abierto, setAbierto] = useState(!compacto);
   const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
   const [guardadoMsg, setGuardadoMsg] = useState(false);
@@ -1915,7 +1952,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
     else alert("No se pudo obtener la tasa de cambio automática. Ingrésala manualmente.");
   };
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
-  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: item.ivaEstimado ?? 19, archivoNombre: "" }]);
+  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
 
   // guarda automáticamente lo que ya se alcanzó a escribir (incluido el archivo adjunto), sin depender
@@ -2003,10 +2040,12 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                 <label className="text-[10px] text-slate-400">Precio final neg.</label>
                 <InputMiles value={c.precioFinal} onChange={(v) => update(i, "precioFinal", v)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
               </div>
+              {!sinIva && (
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">IVA</label>
                 <select value={c.ivaPct} onChange={(e) => update(i, "ivaPct", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>
               </div>
+              )}
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Días entrega</label>
                 <div className="flex gap-1"><input type="number" value={c.diasEntrega} onChange={(e) => update(i, "diasEntrega", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />{cots.length > 1 && <button onClick={() => removeCot(i)} className="text-slate-400 hover:text-rose-500 shrink-0"><Trash2 size={13} /></button>}</div>
@@ -2056,8 +2095,8 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                   <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-slate-600 space-y-0.5">
                     {factor !== 1 && <div>1 {c.unidadCotizada} = {factor} {item.unidad} → {fmt(precioFinalEfectivo(c) * (c.moneda && c.moneda !== "COP" ? (parseFloat(c.tasaCambio) || 1) : 1))} ÷ {factor} = <b>{fmt(precioPorUnidad)}</b> por {item.unidad}</div>}
                     <div>{item.cantidad} {item.unidad} × {fmt(precioPorUnidad)} = Subtotal <b>{fmt(d.subtotal)}</b></div>
-                    <div>+ IVA {c.ivaPct}%: <b>{fmt(d.iva)}</b></div>
-                    <div className="text-emerald-700 font-semibold text-sm pt-0.5 border-t border-emerald-200 mt-1">= Total: {fmt(d.total)}</div>
+                    {!sinIva && <div>+ IVA {c.ivaPct}%: <b>{fmt(d.iva)}</b></div>}
+                    <div className="text-emerald-700 font-semibold text-sm pt-0.5 border-t border-emerald-200 mt-1">= Total: {fmt(sinIva ? d.subtotal : d.total)}</div>
                   </div>
                 );
               })()}
@@ -2075,7 +2114,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
   );
 }
 
-function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, soloLectura }) {
+function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, soloLectura, sinIva }) {
   const scored = calcularScores(item.cotizaciones, item.cantidad);
   const bestIdx = mejorCotizacionIdx(item.cotizaciones, item.cantidad);
   const elegidaIdx = seleccionada ?? bestIdx;
@@ -2098,7 +2137,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
         {soloLectura && <span className="text-[11px] text-slate-400 flex items-center gap-1"><Lock size={11} /> Bloqueado (orden ya generada)</span>}
       </div>
       <table className="w-full text-xs">
-        <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">Total (COP)</th><th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
+        <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">{sinIva ? "Costo Directo" : "Total (COP)"}</th><th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
         <tbody>{scored.map((c, i) => (
           <tr key={i} className={`border-t border-slate-100 ${i === bestIdx ? "bg-emerald-50/60" : ""}`}>
             <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
@@ -2106,7 +2145,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
             <td className="px-3 py-2 text-right">{c.descuentoValor ? (c.descuentoTipo === "valor" ? `-${Number(c.descuentoValor).toLocaleString("es-CO")}` : `-${c.descuentoValor}%`) : "—"}</td>
             <td className="px-3 py-2 text-right">{c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}</td>
             <td className="px-3 py-2 text-right text-slate-400">× {item.cantidad}</td>
-            <td className="px-3 py-2 text-right font-medium">{fmt(c.total)}</td>
+            <td className="px-3 py-2 text-right font-medium">{fmt(sinIva ? c.subtotal : c.total)}</td>
             <td className="px-3 py-2 text-right">{c.diasEntrega} días</td>
             <td className="px-3 py-2 text-right font-medium">{(c.score * 100).toFixed(0)}%</td>
             <td className="px-3 py-2 text-right"><button disabled={soloLectura} onClick={() => clickElegir(i)} className={`text-[11px] px-2 py-1 rounded-md border font-medium disabled:opacity-40 ${elegidaIdx === i ? "bg-indigo-600 text-white border-indigo-600" : "border-slate-200 text-slate-600"}`}>{elegidaIdx === i ? "Seleccionada" : "Elegir"}</button></td>
@@ -2123,14 +2162,62 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
           </div>
         </div>
       )}
-      {elegida && <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-600 flex justify-end gap-4"><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></div>}
+      {elegida && (
+        <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-600 flex justify-end gap-4">
+          {sinIva ? <span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span> : (<><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></>)}
+        </div>
+      )}
       {item.observacionSeleccion && <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-amber-700 italic bg-amber-50/50">Justificación de selección no sugerida: "{item.observacionSeleccion}"</div>}
+    </div>
+  );
+}
+
+// Compras (u otro rol con permiso) valida y ajusta los % de AIU que el solicitante estimó,
+// una vez el proveedor ya entregó su cotización real — solo aplica a órdenes de servicio/trabajo.
+function AiuEditor({ solicitud, onGuardar, editable }) {
+  const [aiu, setAiu] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "", ...solicitud.aiu });
+  useEffect(() => { setAiu({ administracionPct: "", utilidadPct: "", imprevistosPct: "", ...solicitud.aiu }); }, [solicitud.id]);
+  const set = (campo, val) => { const copy = { ...aiu, [campo]: val }; setAiu(copy); onGuardar(copy); };
+  const d = desgloseSolicitud(solicitud);
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5">
+      <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input disabled={!editable} type="number" min="0" step="0.1" value={aiu.administracionPct} onChange={(e) => set("administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
+        <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input disabled={!editable} type="number" min="0" step="0.1" value={aiu.utilidadPct} onChange={(e) => set("utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
+        <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input disabled={!editable} type="number" min="0" step="0.1" value={aiu.imprevistosPct} onChange={(e) => set("imprevistosPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
+      </div>
+      <div className="text-[11px] text-slate-400 mb-2">El IVA (19%) se calcula automáticamente solo sobre la Utilidad.</div>
+      <div className="space-y-0.5 text-xs text-slate-500 max-w-xs">
+        <div className="flex justify-between"><span>Costo Directo</span><span>{fmt(d.costoDirecto)}</span></div>
+        <div className="flex justify-between"><span>Administración</span><span>{fmt(d.administracion)}</span></div>
+        <div className="flex justify-between"><span>Utilidad</span><span>{fmt(d.utilidad)}</span></div>
+        <div className="flex justify-between"><span>Imprevistos</span><span>{fmt(d.imprevistos)}</span></div>
+        <div className="flex justify-between"><span>IVA sobre Utilidad</span><span>{fmt(d.ivaUtilidad)}</span></div>
+        <div className="flex justify-between font-medium text-slate-700 border-t border-slate-100 pt-1 mt-1"><span>Total</span><span>{fmt(d.total)}</span></div>
+      </div>
     </div>
   );
 }
 
 function ResumenTotales({ solicitud }) {
   const d = desgloseSolicitud(solicitud);
+  if (solicitud.tipo === "servicio") {
+    return (
+      <div className="bg-white rounded-xl border border-slate-200 p-5">
+        <div className="font-medium text-slate-700 mb-3 text-sm">Totales de la solicitud (Costo Directo + AIU)</div>
+        <div className="flex flex-col items-end gap-1 text-sm max-w-xs ml-auto">
+          <div className="flex justify-between w-full"><span className="text-slate-500">Costo Directo</span><span className="text-slate-700">{fmt(d.costoDirecto)}</span></div>
+          <div className="flex justify-between w-full"><span className="text-slate-500">Administración ({solicitud.aiu?.administracionPct || 0}%)</span><span className="text-slate-700">{fmt(d.administracion)}</span></div>
+          <div className="flex justify-between w-full"><span className="text-slate-500">Utilidad ({solicitud.aiu?.utilidadPct || 0}%)</span><span className="text-slate-700">{fmt(d.utilidad)}</span></div>
+          <div className="flex justify-between w-full"><span className="text-slate-500">Imprevistos ({solicitud.aiu?.imprevistosPct || 0}%)</span><span className="text-slate-700">{fmt(d.imprevistos)}</span></div>
+          <div className="flex justify-between w-full"><span className="text-slate-500">IVA sobre la Utilidad (19%)</span><span className="text-slate-700">{fmt(d.ivaUtilidad)}</span></div>
+          <div className="flex justify-between w-full border-t border-slate-200 pt-1 mt-1"><span className="font-medium text-slate-800">Total solicitud</span><span className="font-semibold text-slate-900">{fmt(d.total)}</span></div>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5">
       <div className="font-medium text-slate-700 mb-3 text-sm">Totales de la solicitud</div>
@@ -2342,7 +2429,14 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       });
       const baseItems = itemsDelProveedor.length ? itemsDelProveedor : solicitud.items;
       const itemsParaPdf = baseItems.map((it) => { const d = desgloseItem(it); const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0; return { nombre: it.nombre, cantidad: it.cantidad, unidad: it.unidad, valorUnitario: unitario, total: d.subtotal }; });
-      const totales = baseItems.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
+      const costoDirecto = baseItems.reduce((acc, it) => acc + desgloseItem(it).subtotal, 0);
+      const aiuPcts = solicitud.aiu || {};
+      const administracion = costoDirecto * (parseFloat(aiuPcts.administracionPct) || 0) / 100;
+      const utilidad = costoDirecto * (parseFloat(aiuPcts.utilidadPct) || 0) / 100;
+      const imprevistos = costoDirecto * (parseFloat(aiuPcts.imprevistosPct) || 0) / 100;
+      const ivaUtilidad = utilidad * 0.19;
+      const total = costoDirecto + administracion + utilidad + imprevistos + ivaUtilidad;
+      const totales = { costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, aiuPcts };
       const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre: orden.proveedorNombre, items: itemsParaPdf, ...totales });
       const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
       if (ruta) actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "" });
@@ -2934,12 +3028,23 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       )}
 
       {/* TOTALES */}
-      <div className="flex justify-end text-sm border-t border-slate-200 pt-2">
-        <div className="text-right">
-          <div className="text-xs text-slate-500">Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)}</div>
-          <div><span className="text-slate-500">Total: </span><b className="text-slate-800">{fmt(d.total)}</b></div>
+      {solicitud.tipo === "servicio" ? (
+        <div className="flex justify-end text-sm border-t border-slate-200 pt-2">
+          <div className="text-right space-y-0.5">
+            <div className="text-xs text-slate-500">Costo Directo: {fmt(d.costoDirecto)}</div>
+            <div className="text-xs text-slate-500">Administración ({solicitud.aiu?.administracionPct || 0}%): {fmt(d.administracion)} · Utilidad ({solicitud.aiu?.utilidadPct || 0}%): {fmt(d.utilidad)}</div>
+            <div className="text-xs text-slate-500">Imprevistos ({solicitud.aiu?.imprevistosPct || 0}%): {fmt(d.imprevistos)} · IVA sobre Utilidad (19%): {fmt(d.ivaUtilidad)}</div>
+            <div><span className="text-slate-500">Total: </span><b className="text-slate-800">{fmt(d.total)}</b></div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <div className="flex justify-end text-sm border-t border-slate-200 pt-2">
+          <div className="text-right">
+            <div className="text-xs text-slate-500">Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)}</div>
+            <div><span className="text-slate-500">Total: </span><b className="text-slate-800">{fmt(d.total)}</b></div>
+          </div>
+        </div>
+      )}
 
       {/* REVISIÓN DE COMPRAS */}
       {solicitud.tipo === "compra" && solicitud.revisionCompras.estado !== "no_aplica" && (
@@ -3409,7 +3514,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           {mostrarCotGeneralCompras && (
             <CotizacionGeneralForm items={solicitud.items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneralCompras} onCerrar={() => setMostrarCotGeneralCompras(false)} />
           )}
-          {solicitud.items.map((it) => <CotizacionForm key={it.id} item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} />)}
+          {solicitud.items.map((it) => <CotizacionForm key={it.id} item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} sinIva={solicitud.tipo === "servicio"} />)}
         </div>
       )}
 
@@ -3417,11 +3522,15 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <div className="font-medium text-slate-700 flex items-center gap-2"><TrendingUp size={16} /> Cuadro comparativo (sugerencia automática)</div>
           {["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && <div className="text-xs text-slate-400">Cotizaciones que el solicitante adjuntó al crear la solicitud — Compras podrá completar y ajustar esto más adelante.</div>}
-          {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} item={it} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} />)}
+          {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} item={it} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} />)}
         </div>
       )}
 
-      {["aprobacion_jefe", "aprobacion_director", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && <ResumenTotales solicitud={solicitud} />}
+      {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
+        solicitud.tipo === "servicio"
+          ? <AiuEditor solicitud={solicitud} onGuardar={(aiu) => patch({ aiu })} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
+          : <ResumenTotales solicitud={solicitud} />
+      )}
 
       {solicitud.tipo === "servicio" && ["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
         <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
