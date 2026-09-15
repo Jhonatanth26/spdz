@@ -194,12 +194,23 @@ function desgloseSolicitud(solicitud) {
 }
 // órdenes de servicio/trabajo: Costo Directo + AIU (Administración, Imprevistos, Utilidad) + IVA solo sobre la Utilidad —
 // no llevan IVA por ítem, ese campo queda deshabilitado para este tipo de solicitud.
+// El AIU es por cotización/proveedor (cada proveedor puede tener % distintos); mientras no haya
+// cotización todavía, se usa el AIU estimado por el solicitante al crear la solicitud.
 function desgloseSolicitudServicio(solicitud) {
-  const costoDirecto = solicitud.items.reduce((acc, item) => acc + desgloseItem(item).subtotal, 0);
-  const aiu = solicitud.aiu || {};
-  const administracion = costoDirecto * (parseFloat(aiu.administracionPct) || 0) / 100;
-  const utilidad = costoDirecto * (parseFloat(aiu.utilidadPct) || 0) / 100;
-  const imprevistos = costoDirecto * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+  let costoDirecto = 0, administracion = 0, utilidad = 0, imprevistos = 0;
+  solicitud.items.forEach((item) => {
+    const dItem = desgloseItem(item);
+    costoDirecto += dItem.subtotal;
+    let aiu = solicitud.aiu || {};
+    if (item.cotizaciones?.length) {
+      const sel = item.cotizacionSeleccionada ?? mejorCotizacionIdx(item.cotizaciones, item.cantidad);
+      const cot = item.cotizaciones[sel];
+      if (cot?.aiu) aiu = cot.aiu;
+    }
+    administracion += dItem.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
+    utilidad += dItem.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
+    imprevistos += dItem.subtotal * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+  });
   const ivaUtilidad = utilidad * 0.19;
   const total = costoDirecto + administracion + utilidad + imprevistos + ivaUtilidad;
   return { costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, subtotal: costoDirecto, iva: ivaUtilidad };
@@ -1500,6 +1511,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   const [proveedorId, setProveedorId] = useState("");
   const [proveedorNombre, setProveedorNombre] = useState("");
   const [proveedorEmailNuevo, setProveedorEmailNuevo] = useState("");
+  const [proveedorNitNuevo, setProveedorNitNuevo] = useState("");
   const [archivoNombre, setArchivoNombre] = useState(null);
   const [moneda, setMoneda] = useState("COP");
   const [tasaCambio, setTasaCambio] = useState(1);
@@ -1520,7 +1532,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
       const existente = proveedores.find((p) => p.nombre.trim().toLowerCase() === proveedorNombre.trim().toLowerCase());
       if (existente) idFinal = existente.id;
       else {
-        const creado = await guardarProveedor({ nombre: proveedorNombre.trim(), nit: "", actividadEconomica: "", contacto: "", email: proveedorEmailNuevo.trim() });
+        const creado = await guardarProveedor({ nombre: proveedorNombre.trim(), nit: proveedorNitNuevo.trim(), actividadEconomica: "", contacto: "", email: proveedorEmailNuevo.trim() });
         if (creado?.id) idFinal = creado.id;
       }
     }
@@ -1577,7 +1589,10 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
         </div>
       </div>
       {!proveedorId && proveedorNombre.trim() && (
-        <input type="email" placeholder="Correo del proveedor (opcional)" value={proveedorEmailNuevo} onChange={(e) => setProveedorEmailNuevo(e.target.value)} className="w-full max-w-xs border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+        <div className="flex gap-2 max-w-xs">
+          <input type="text" placeholder="NIT / RUT (opcional)" value={proveedorNitNuevo} onChange={(e) => setProveedorNitNuevo(e.target.value)} className="w-1/2 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+          <input type="email" placeholder="Correo del proveedor (opcional)" value={proveedorEmailNuevo} onChange={(e) => setProveedorEmailNuevo(e.target.value)} className="w-1/2 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+        </div>
       )}
       {moneda !== "COP" && (
         <input type="number" placeholder={`Tasa ${moneda}→COP`} value={tasaCambio} onChange={(e) => setTasaCambio(e.target.value)} className="w-40 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
@@ -1962,6 +1977,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
   const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
   const [guardadoMsg, setGuardadoMsg] = useState(false);
   const update = (i, field, val) => setCots((prev) => prev.map((c, idx) => (idx === i ? { ...c, [field]: val } : c)));
+  const updateAiu = (i, campo, val) => setCots((prev) => prev.map((c, idx) => (idx === i ? { ...c, aiu: { ...(c.aiu || {}), [campo]: pctValido(val) } } : c)));
   const [cargandoTasa, setCargandoTasa] = useState(null);
   const actualizarTasaAutomatica = async (i, moneda) => {
     if (!moneda || moneda === "COP") return;
@@ -1972,7 +1988,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
     else alert("No se pudo obtener la tasa de cambio automática. Ingrésala manualmente.");
   };
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
-  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), archivoNombre: "" }]);
+  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
 
   // guarda automáticamente lo que ya se alcanzó a escribir (incluido el archivo adjunto), sin depender
@@ -1994,9 +2010,10 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
         if (!esValida || c.proveedorId || !c.proveedorNombre?.trim()) continue;
         const nombreLimpio = c.proveedorNombre.trim();
         const emailNuevo = (c.proveedorEmailNuevo || "").trim();
+        const nitNuevo = (c.proveedorNitNuevo || "").trim();
         const existente = proveedores.find((p) => p.nombre.trim().toLowerCase() === nombreLimpio.toLowerCase());
         if (!existente) {
-          const creado = await guardarProveedor({ nombre: nombreLimpio, nit: "", actividadEconomica: "", contacto: "", email: emailNuevo });
+          const creado = await guardarProveedor({ nombre: nombreLimpio, nit: nitNuevo, actividadEconomica: "", contacto: "", email: emailNuevo });
           if (creado?.id) listaCots[idx] = { ...c, proveedorId: creado.id, proveedorNombre: "" };
         } else {
           if (emailNuevo && !existente.email) await guardarProveedor({ ...existente, email: emailNuevo });
@@ -2073,9 +2090,15 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
             </div>
 
             {!c.proveedorId && c.proveedorNombre?.trim() && (
-              <div className="flex flex-col gap-0.5 max-w-xs">
-                <label className="text-[10px] text-slate-400">Correo del proveedor (opcional)</label>
-                <input type="email" value={c.proveedorEmailNuevo || ""} onChange={(e) => update(i, "proveedorEmailNuevo", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              <div className="flex gap-2 max-w-xs">
+                <div className="flex flex-col gap-0.5 w-1/2">
+                  <label className="text-[10px] text-slate-400">NIT / RUT (opcional)</label>
+                  <input type="text" value={c.proveedorNitNuevo || ""} onChange={(e) => update(i, "proveedorNitNuevo", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
+                <div className="flex flex-col gap-0.5 w-1/2">
+                  <label className="text-[10px] text-slate-400">Correo del proveedor (opcional)</label>
+                  <input type="email" value={c.proveedorEmailNuevo || ""} onChange={(e) => update(i, "proveedorEmailNuevo", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
               </div>
             )}
 
@@ -2106,17 +2129,41 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             </div>
 
+            {sinIva && (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] text-slate-400">Admón. % (este proveedor)</label>
+                  <input type="number" min="0" max="100" step="0.1" placeholder="0" value={c.aiu?.administracionPct || ""} onChange={(e) => updateAiu(i, "administracionPct", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] text-slate-400">Utilidad %</label>
+                  <input type="number" min="0" max="100" step="0.1" placeholder="0" value={c.aiu?.utilidadPct || ""} onChange={(e) => updateAiu(i, "utilidadPct", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] text-slate-400">Imprevistos %</label>
+                  <input type="number" min="0" max="100" step="0.1" placeholder="0" value={c.aiu?.imprevistosPct || ""} onChange={(e) => updateAiu(i, "imprevistosPct", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
+              </div>
+            )}
+
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <AdjuntarArchivo small nombre={c.archivoNombre} label="Adjuntar cotización (PDF/foto)" onSeleccionar={(n) => update(i, "archivoNombre", n)} />
               {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (() => {
                 const factor = parseFloat(c.factorConversion) || 1;
                 const precioPorUnidad = precioEquivalente(c);
+                const aiuC = c.aiu || {};
+                const admC = d.subtotal * (parseFloat(aiuC.administracionPct) || 0) / 100;
+                const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
+                const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
+                const ivaUtilC = utilC * 0.19;
+                const totalConAiu = d.subtotal + admC + utilC + imprevC + ivaUtilC;
                 return (
                   <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-slate-600 space-y-0.5">
                     {factor !== 1 && <div>1 {c.unidadCotizada} = {factor} {item.unidad} → {fmt(precioFinalEfectivo(c) * (c.moneda && c.moneda !== "COP" ? (parseFloat(c.tasaCambio) || 1) : 1))} ÷ {factor} = <b>{fmt(precioPorUnidad)}</b> por {item.unidad}</div>}
-                    <div>{item.cantidad} {item.unidad} × {fmt(precioPorUnidad)} = Subtotal <b>{fmt(d.subtotal)}</b></div>
+                    <div>{item.cantidad} {item.unidad} × {fmt(precioPorUnidad)} = Costo Directo <b>{fmt(d.subtotal)}</b></div>
                     {!sinIva && <div>+ IVA {c.ivaPct}%: <b>{fmt(d.iva)}</b></div>}
-                    <div className="text-emerald-700 font-semibold text-sm pt-0.5 border-t border-emerald-200 mt-1">= Total: {fmt(sinIva ? d.subtotal : d.total)}</div>
+                    {sinIva && (admC > 0 || utilC > 0 || imprevC > 0) && <div>+ AIU: <b>{fmt(admC + utilC + imprevC + ivaUtilC)}</b></div>}
+                    <div className="text-emerald-700 font-semibold text-sm pt-0.5 border-t border-emerald-200 mt-1">= Total: {fmt(sinIva ? totalConAiu : d.total)}</div>
                   </div>
                 );
               })()}
@@ -2142,6 +2189,14 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
   const [pendienteIdx, setPendienteIdx] = useState(null);
   const [obsTemp, setObsTemp] = useState("");
   const nombreProv = (c) => proveedores.find((p) => p.id === c.proveedorId)?.nombre || c.proveedorNombre || "—";
+  // total incluyendo el AIU propio de esa cotización (cada proveedor puede tener % distintos)
+  const totalConAiu = (c) => {
+    const aiu = c.aiu || {};
+    const adm = c.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
+    const util = c.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
+    const imprev = c.subtotal * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+    return c.subtotal + adm + util + imprev + util * 0.19;
+  };
 
   const clickElegir = (i) => {
     if (soloLectura) return;
@@ -2157,7 +2212,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
         {soloLectura && <span className="text-[11px] text-slate-400 flex items-center gap-1"><Lock size={11} /> Bloqueado (orden ya generada)</span>}
       </div>
       <table className="w-full text-xs">
-        <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">{sinIva ? "Costo Directo" : "Total (COP)"}</th><th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
+        <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">{sinIva ? "Costo Directo" : "Total (COP)"}</th>{sinIva && <th className="text-right px-3 py-2">Total c/AIU</th>}<th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
         <tbody>{scored.map((c, i) => (
           <tr key={i} className={`border-t border-slate-100 ${i === bestIdx ? "bg-emerald-50/60" : ""}`}>
             <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
@@ -2166,6 +2221,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
             <td className="px-3 py-2 text-right">{c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}</td>
             <td className="px-3 py-2 text-right text-slate-400">× {item.cantidad}</td>
             <td className="px-3 py-2 text-right font-medium">{fmt(sinIva ? c.subtotal : c.total)}</td>
+            {sinIva && <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmt(totalConAiu(c))}</td>}
             <td className="px-3 py-2 text-right">{c.diasEntrega} días</td>
             <td className="px-3 py-2 text-right font-medium">{(c.score * 100).toFixed(0)}%</td>
             <td className="px-3 py-2 text-right"><button disabled={soloLectura} onClick={() => clickElegir(i)} className={`text-[11px] px-2 py-1 rounded-md border font-medium disabled:opacity-40 ${elegidaIdx === i ? "bg-indigo-600 text-white border-indigo-600" : "border-slate-200 text-slate-600"}`}>{elegidaIdx === i ? "Seleccionada" : "Elegir"}</button></td>
@@ -2184,7 +2240,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
       )}
       {elegida && (
         <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-600 flex justify-end gap-4">
-          {sinIva ? <span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span> : (<><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></>)}
+          {sinIva ? <><span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span><span>Total con AIU: <b>{fmt(totalConAiu(elegida))}</b></span></> : (<><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></>)}
         </div>
       )}
       {item.observacionSeleccion && <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-amber-700 italic bg-amber-50/50">Justificación de selección no sugerida: "{item.observacionSeleccion}"</div>}
@@ -2300,16 +2356,20 @@ function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGu
 --------------------------------------------------------- */
 function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConfirmar, onEditarDeNuevo }) {
   const [pagos, setPagos] = useState({ ...planPagosVacio(), ...solicitud.pagos });
+  const [corrigiendo, setCorrigiendo] = useState(false);
   // una vez la orden ya se envió al proveedor, las condiciones de pago quedan fijas — ya no se pueden tocar
   const ocYaEnviada = ["oc_enviada", "recepcion", "completada"].includes(solicitud.status);
   // sin precios (ni cotización ni estimado), no hay contra qué cuadrar el plan — se habilita cuando Compras cargue precios
   const sinPrecio = !(total > 0);
-  const editable = puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados && !ocYaEnviada && !sinPrecio;
   const pagado = totalPagado(pagos);
   const restante = total - pagado;
   const sug = { ...planPagosVacio(), ...solicitud.pagosSugeridos };
   const hasSugerencia = parseFloat(sug?.pagoUnico?.valor) > 0 || parseFloat(sug?.anticipo?.valor) > 0 || parseFloat(sug?.final?.valor) > 0;
   const descuadrado = solicitud.pagosConfirmados && Math.abs(restante) > 0.5;
+  // si el plan quedó confirmado descuadrado (de antes de esta validación), Director/Gerencia puede
+  // destrabarlo y corregirlo aunque la orden ya se haya enviado — es la única excepción a ese bloqueo
+  const puedeCorregirDirectorGerencia = ["Director de Área", "Jefe de Área y Director", "Gerencia"].includes(currentUser.rol) && descuadrado;
+  const editable = (puedeCorregirDirectorGerencia && corrigiendo) || (puedeEditarPagos(currentUser) && !solicitud.pagosConfirmados && !ocYaEnviada && !sinPrecio);
   const faltaFecha = pagos.tipoPago === "contado" ? !pagos.pagoUnico.fecha : (!pagos.anticipo.fecha || !pagos.final.fecha || (pagos.intermedio.activo && !pagos.intermedio.fecha));
 
   const set = (campo, sub, val) => {
@@ -2340,6 +2400,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       return;
     }
     onConfirmar();
+    setCorrigiendo(false);
   };
 
   return (
@@ -2362,8 +2423,12 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
         </div>
       )}
       {descuadrado && (
-        <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2 mb-2">
-          ⚠ Este plan quedó confirmado con un descuadre de <b>{fmt(Math.abs(restante))}</b> ({restante > 0 ? "falta programar" : "programado de más"}) — probablemente de antes de esta validación. Usa "Editar de nuevo" para corregirlo.
+        <div className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-md px-3 py-2 mb-2 space-y-1.5">
+          <div>⚠ Este plan quedó confirmado con un descuadre de <b>{fmt(Math.abs(restante))}</b> ({restante > 0 ? "falta programar" : "programado de más"}) — probablemente de antes de esta validación.</div>
+          {puedeEditarPagos(currentUser) && !ocYaEnviada && <div>Usa "Editar de nuevo" para corregirlo.</div>}
+          {puedeCorregirDirectorGerencia && !corrigiendo && (
+            <button onClick={() => setCorrigiendo(true)} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium">Aprobar plan de pagos</button>
+          )}
         </div>
       )}
       {hasSugerencia && !solicitud.pagosConfirmados && (
@@ -2409,7 +2474,10 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       )}
       <div className="flex items-center justify-between mt-3">
         <div className="text-sm text-slate-500">Total orden: <b className="text-slate-700">{fmt(total)}</b> · Programado: <b className="text-slate-700">{fmt(pagado)}</b> · Restante: <b className={restante > 0.5 ? "text-amber-600" : restante < -0.5 ? "text-rose-600" : "text-emerald-600"}>{fmt(restante)}</b></div>
-        {editable && <button onClick={confirmar} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar plan de pagos</button>}
+        <div className="flex items-center gap-2">
+          {corrigiendo && <button onClick={() => { setPagos({ ...planPagosVacio(), ...solicitud.pagos }); setCorrigiendo(false); }} className="text-xs text-slate-500">Cancelar</button>}
+          {editable && <button onClick={confirmar} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar plan de pagos</button>}
+        </div>
       </div>
       {editable && Math.abs(restante) > 0.5 && <div className="text-[11px] text-amber-600 mt-1">El plan debe cubrir exactamente el total de la orden para poder confirmarse.</div>}
     </div>
@@ -2423,6 +2491,9 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
   const [firmandoIdx, setFirmandoIdx] = useState(null);
   const [generandoIdx, setGenerandoIdx] = useState(null);
   if (solicitud.status !== "orden") return null;
+  // gestionar y generar la orden es tarea exclusiva de Compras (o Administrador) — nadie más debería
+  // ver este panel en absoluto, ni siquiera en solo lectura, para evitar que alguien la regenere sin querer
+  if (!puedeGestionarCotizaciones(currentUser)) return null;
 
   const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
   const ordenes = necesarios.map((n) => {
@@ -2439,6 +2510,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
   // el propio sistema arma el PDF a partir de los ítems adjudicados a este proveedor.
   const generarOrdenAutomatica = async (idx) => {
     const orden = ordenes[idx];
+    if (orden.archivoFirmadoUrl) return; // ya firmada — no se puede regenerar (invalidaría la firma)
     setGenerandoIdx(idx);
     try {
       const itemsDelProveedor = solicitud.items.filter((it) => {
@@ -2449,13 +2521,25 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       });
       const baseItems = itemsDelProveedor.length ? itemsDelProveedor : solicitud.items;
       const itemsParaPdf = baseItems.map((it) => { const d = desgloseItem(it); const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0; return { nombre: it.nombre, cantidad: it.cantidad, unidad: it.unidad, valorUnitario: unitario, total: d.subtotal }; });
-      const costoDirecto = baseItems.reduce((acc, it) => acc + desgloseItem(it).subtotal, 0);
-      const aiuPcts = solicitud.aiu || {};
-      const administracion = costoDirecto * (parseFloat(aiuPcts.administracionPct) || 0) / 100;
-      const utilidad = costoDirecto * (parseFloat(aiuPcts.utilidadPct) || 0) / 100;
-      const imprevistos = costoDirecto * (parseFloat(aiuPcts.imprevistosPct) || 0) / 100;
+      // usa el AIU de la cotización de este proveedor específicamente (cada uno puede tener % distintos)
+      let costoDirecto = 0, administracion = 0, utilidad = 0, imprevistos = 0;
+      baseItems.forEach((it) => {
+        const dIt = desgloseItem(it);
+        costoDirecto += dIt.subtotal;
+        let aiu = solicitud.aiu || {};
+        if (it.cotizaciones?.length) {
+          const sel = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad);
+          const cot = it.cotizaciones[sel];
+          if (cot?.aiu) aiu = cot.aiu;
+        }
+        administracion += dIt.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
+        utilidad += dIt.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
+        imprevistos += dIt.subtotal * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+      });
       const ivaUtilidad = utilidad * 0.19;
       const total = costoDirecto + administracion + utilidad + imprevistos + ivaUtilidad;
+      const primerCot = baseItems[0]?.cotizaciones?.[baseItems[0].cotizacionSeleccionada ?? mejorCotizacionIdx(baseItems[0].cotizaciones, baseItems[0].cantidad)];
+      const aiuPcts = primerCot?.aiu || solicitud.aiu || {};
       const totales = { costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, aiuPcts };
       const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre: orden.proveedorNombre, items: itemsParaPdf, ...totales });
       const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
@@ -2502,8 +2586,14 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
           <div className="text-sm font-medium text-slate-700 flex items-center gap-2"><Truck size={13} /> {o.proveedorNombre}</div>
           {solicitud.tipo === "servicio" ? (
             <div className="flex items-center gap-2 flex-wrap">
-              <button onClick={() => generarOrdenAutomatica(i)} disabled={generandoIdx === i} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50 flex items-center gap-1"><FileText size={12} /> {generandoIdx === i ? "Generando..." : o.archivoOriginalUrl ? "Volver a generar la orden" : "Generar orden de servicio (automático)"}</button>
-              {o.archivoOriginalUrl && !o.archivoFirmadoUrl && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Documento generado, listo para firmar.</span>}
+              {o.archivoFirmadoUrl ? (
+                <span className="text-[11px] text-slate-400 flex items-center gap-1"><Lock size={12} /> Ya firmada — no se puede volver a generar.</span>
+              ) : (
+                <>
+                  <button onClick={() => generarOrdenAutomatica(i)} disabled={generandoIdx === i} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50 flex items-center gap-1"><FileText size={12} /> {generandoIdx === i ? "Generando..." : o.archivoOriginalUrl ? "Volver a generar la orden" : "Generar orden de servicio (automático)"}</button>
+                  {o.archivoOriginalUrl && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Documento generado, listo para firmar.</span>}
+                </>
+              )}
             </div>
           ) : (
             <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" soloPdf />
@@ -2768,29 +2858,32 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
   const setDoc = (key, val) => { const copy = { ...ev, documentos: { ...ev.documentos, [key]: val } }; setEv(copy); onGuardar(copy); };
   const setCriterio = (key, val) => { const copy = { ...ev, criterios: { ...ev.criterios, [key]: val } }; setEv(copy); onGuardar(copy); };
 
+  // rellena todos los campos con los datos de un proveedor del catálogo — se usa tanto en la
+  // detección automática como cuando Compras lo elige manualmente (respaldo si la detección falla)
+  const aplicarProveedor = (proveedor) => {
+    const fechaComparativo = solicitud.historialEstados?.find((h) => h.status === "comparativo")?.fecha;
+    const copy = {
+      ...ev,
+      proveedorId: proveedor.id,
+      proveedorNombre: proveedor.nombre,
+      tipoProveedor: proveedor.tipoProveedor || solicitud.tipo,
+      nit: proveedor.nit || "",
+      ciudad: proveedor.ciudad || "",
+      direccion: proveedor.direccion || "",
+      telefono: proveedor.telefono || "",
+      representanteLegal: proveedor.representanteLegal || "",
+      email: proveedor.email || "",
+      fechaSeleccion: ev.fechaSeleccion || (fechaComparativo ? fechaComparativo.slice(0, 10) : solicitud.fechaCreacion) || "",
+      fechaEvaluacion: ev.fechaEvaluacion || hoy(),
+      serviciosPresta: ev.serviciosPresta || proveedor.actividadEconomica || "",
+      descripcion: ev.descripcion || solicitud.items.map((it) => it.nombre).join(", "),
+    };
+    setEv(copy);
+    onGuardar(copy);
+  };
+
   useEffect(() => {
-    if (esCompras && !ev.completada && !ev.proveedorId && proveedorSugerido) {
-      // fecha en que quedó adjudicado el proveedor (paso "comparativo" del historial), si existe
-      const fechaComparativo = solicitud.historialEstados?.find((h) => h.status === "comparativo")?.fecha;
-      const copy = {
-        ...ev,
-        proveedorId: proveedorSugerido.id,
-        proveedorNombre: proveedorSugerido.nombre,
-        tipoProveedor: proveedorSugerido.tipoProveedor || solicitud.tipo,
-        nit: proveedorSugerido.nit || "",
-        ciudad: proveedorSugerido.ciudad || "",
-        direccion: proveedorSugerido.direccion || "",
-        telefono: proveedorSugerido.telefono || "",
-        representanteLegal: proveedorSugerido.representanteLegal || "",
-        email: proveedorSugerido.email || "",
-        fechaSeleccion: ev.fechaSeleccion || (fechaComparativo ? fechaComparativo.slice(0, 10) : solicitud.fechaCreacion) || "",
-        fechaEvaluacion: ev.fechaEvaluacion || hoy(),
-        serviciosPresta: ev.serviciosPresta || proveedorSugerido.actividadEconomica || "",
-        descripcion: ev.descripcion || solicitud.items.map((it) => it.nombre).join(", "),
-      };
-      setEv(copy);
-      onGuardar(copy);
-    }
+    if (esCompras && !ev.completada && !ev.proveedorId && proveedorSugerido) aplicarProveedor(proveedorSugerido);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [proveedorSugerido?.id, esCompras]);
 
@@ -2837,6 +2930,16 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
       {esRegistroViejoVacio && !reevaluando && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
           Esta solicitud se completó antes de este formato de evaluación, así que quedó sin diligenciar. Usa "Diligenciar ahora" para llenarla con la información disponible.
+        </div>
+      )}
+
+      {!disabled && (
+        <div>
+          <label className="text-xs text-slate-500 block mb-1">Proveedor a evaluar (elígelo si no se detectó solo)</label>
+          <select disabled={disabled} value={ev.proveedorId || ""} onChange={(e) => { const p = proveedores.find((x) => x.id === e.target.value); if (p) aplicarProveedor(p); }} className="w-full max-w-sm border border-slate-200 rounded-md px-2 py-1.5 text-sm">
+            <option value="">— Elegir del catálogo —</option>
+            {proveedores.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+          </select>
         </div>
       )}
 
@@ -2922,15 +3025,28 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
 }
 
 
-function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
+function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar }) {
   const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []) });
-  const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); };
+  const [enviado, setEnviado] = useState(false);
+  const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); setEnviado(false); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
   const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
   // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
   // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
   const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
   const elegir = (tipo) => set({ recibidoSatisfaccion: true, tipoRecepcion: tipo });
+
+  const enviarACompras = () => {
+    const equipoCompras = usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol) && u.email);
+    if (equipoCompras.length) {
+      enviarCorreo(
+        equipoCompras.map((u) => u.email),
+        `Recepción con observaciones: ${solicitud.folio}`,
+        `<p>Hola,</p><p>${currentUser.nombre} registró la recepción de la solicitud <b>${solicitud.folio}</b> con observaciones:</p><p><i>"${r.comentario}"</i></p><p>Queda pendiente de revisión.</p>`
+      );
+    }
+    setEnviado(true);
+  };
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
@@ -2958,6 +3074,12 @@ function RecepcionPanel({ solicitud, currentUser, onGuardar }) {
         <label className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name={`recepcion-${solicitud.id}`} checked={estado === "observaciones"} onChange={() => elegir("observaciones")} /> Recibido con observaciones</label>
       </div>
       {estado === "observaciones" && !r.comentario.trim() && <div className="text-[11px] text-amber-600">Describe en los comentarios cuáles fueron las observaciones.</div>}
+      {estado === "observaciones" && r.comentario.trim() && (
+        <div className="flex items-center gap-2">
+          <button onClick={enviarACompras} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Send size={13} /> Enviar a Compras</button>
+          {enviado && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Enviado</span>}
+        </div>
+      )}
       {!estado && <div className="text-[11px] text-amber-600">Marca cómo se recibió para que Compras pueda hacer la evaluación y finalizar la solicitud.</div>}
       {estado === "satisfaccion" && <div className="text-[11px] text-emerald-600">✓ Recibida a satisfacción — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
       {estado === "observaciones" && <div className="text-[11px] text-amber-600">✓ Recibida con observaciones — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
@@ -3398,10 +3520,6 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     aprobacion_director: ["Director de Área", "Jefe de Área y Director"],
     aprobacion_financiera: ["Dirección Financiera"],
     aprobacion_gerencia: ["Gerencia"],
-    cotizando: ["Compras"],
-    comparativo: ["Compras"],
-    orden: ["Dirección Financiera"],
-    recepcion: ["Compras"],
   };
   const pasoLeConcierne = (ROLES_RELEVANTES_POR_PASO[solicitud.status] || []).includes(currentUser.rol);
 
@@ -3571,7 +3689,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <ReenviarOrdenesPanel solicitud={solicitud} proveedores={proveedores} guardarProveedor={guardarProveedor} empresa={empresa} currentUser={currentUser} />
 
-      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} onGuardar={(r) => patch({ recepcion: r })} />}
+      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} usuarios={usuarios} onGuardar={(r) => patch({ recepcion: r })} />}
 
       {["recepcion", "completada"].includes(solicitud.status) && (
         <EvaluacionPanel
