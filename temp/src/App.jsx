@@ -2810,22 +2810,23 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
    EVALUACIÓN POSTERIOR A LA RECEPCIÓN (obligatoria para completar)
 --------------------------------------------------------- */
 function CalificacionSelect({ value, onChange, disabled }) {
+  const val = value || 1;
+  const pct = ((val - 1) / 9) * 100;
   return (
-    <div className="flex items-center gap-0.5">
-      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
-        <button
-          key={n}
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange(value === n ? null : n)}
-          title={`Calificar ${n}`}
-          className={`w-5 h-5 rounded text-[10px] font-medium border shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ${
-            value === n ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300"
-          }`}
-        >
-          {n}
-        </button>
-      ))}
+    <div className="flex items-center gap-2 w-full max-w-[190px] shrink-0">
+      <input
+        type="range"
+        min="1"
+        max="10"
+        step="1"
+        value={val}
+        disabled={disabled}
+        onChange={(e) => onChange(Number(e.target.value))}
+        title={value ? `Calificación: ${value}` : "Desliza para calificar"}
+        className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed accent-indigo-600"
+        style={{ background: `linear-gradient(to right, #4f46e5 ${value ? pct : 0}%, #e2e8f0 ${value ? pct : 0}%)` }}
+      />
+      <span className={`text-xs font-semibold w-4 text-center shrink-0 ${value ? "text-indigo-600" : "text-slate-300"}`}>{value || "—"}</span>
     </div>
   );
 }
@@ -3082,14 +3083,26 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
       </div>
 
       {/* DOCUMENTOS */}
-      <div className="border border-slate-200 rounded-lg p-3 space-y-1.5">
+      <div className="border border-slate-200 rounded-lg p-3 space-y-2">
         <div className="text-sm font-medium text-slate-700 mb-1">Documentos anexos</div>
         {DOCUMENTOS_EVALUACION.map((d) => (
-          <div key={d.key} className="flex items-center justify-between text-xs gap-2">
-            <span className="text-slate-600">{d.label}</span>
-            <select disabled={disabled} value={ev.documentos?.[d.key] || ""} onChange={(e) => setDoc(d.key, e.target.value)} className="border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50 shrink-0">
-              <option value="">—</option><option value="si">Sí</option><option value="no">No</option><option value="no_aplica">No aplica</option>
-            </select>
+          <div key={d.key} className="flex items-center justify-between text-xs gap-2 flex-wrap">
+            <span className="text-slate-600 flex-1">{d.label}</span>
+            <div className="flex gap-1.5 shrink-0">
+              {[{ v: "si", l: "Sí" }, { v: "no", l: "No" }, { v: "no_aplica", l: "No aplica" }].map((op) => (
+                <button
+                  key={op.v}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setDoc(d.key, ev.documentos?.[d.key] === op.v ? "" : op.v)}
+                  className={`px-2 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
+                    ev.documentos?.[d.key] === op.v ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300"
+                  }`}
+                >
+                  {op.l}
+                </button>
+              ))}
+            </div>
           </div>
         ))}
       </div>
