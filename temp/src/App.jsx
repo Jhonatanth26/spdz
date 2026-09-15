@@ -194,18 +194,18 @@ function desgloseSolicitud(solicitud) {
 }
 // órdenes de servicio/trabajo: Costo Directo + AIU (Administración, Imprevistos, Utilidad) + IVA solo sobre la Utilidad —
 // no llevan IVA por ítem, ese campo queda deshabilitado para este tipo de solicitud.
-// El AIU es por cotización/proveedor (cada proveedor puede tener % distintos); mientras no haya
-// cotización todavía, se usa el AIU estimado por el solicitante al crear la solicitud.
+// El AIU es por ítem (independiente del proveedor que finalmente se adjudique) — el solicitante lo estima
+// al crear la solicitud; una vez hay cotización seleccionada, el AIU propio de esa cotización lo reemplaza.
 function desgloseSolicitudServicio(solicitud) {
   let costoDirecto = 0, administracion = 0, utilidad = 0, imprevistos = 0;
   solicitud.items.forEach((item) => {
     const dItem = desgloseItem(item);
     costoDirecto += dItem.subtotal;
-    let aiu = solicitud.aiu || {};
+    let aiu = item.aiu || solicitud.aiu || {};
     if (item.cotizaciones?.length) {
       const sel = item.cotizacionSeleccionada ?? mejorCotizacionIdx(item.cotizaciones, item.cantidad);
       const cot = item.cotizaciones[sel];
-      if (cot?.aiu) aiu = cot.aiu;
+      if (cot?.aiu && (parseFloat(cot.aiu.administracionPct) || parseFloat(cot.aiu.utilidadPct) || parseFloat(cot.aiu.imprevistosPct))) aiu = cot.aiu;
     }
     administracion += dItem.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
     utilidad += dItem.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
@@ -230,6 +230,21 @@ function tramosDePago(pagos) {
     ...(pagos.intermedio?.activo ? [{ tipo: "Intermedio", ...pagos.intermedio }] : []),
     { tipo: "Final", ...pagos.final },
   ];
+}
+// cuando cambia el total (ej. se ajustó el AIU), reescala proporcionalmente los valores ya puestos
+// en el plan para que la suma siga cuadrando exacto con el nuevo total, sin perder las proporciones
+function reescalarPlanPago(pagos, totalNuevo) {
+  if (pagos.tipoPago === "contado") return { ...pagos, pagoUnico: { ...pagos.pagoUnico, valor: totalNuevo } };
+  const programado = totalPagado(pagos);
+  if (!(programado > 0)) return pagos;
+  const factor = totalNuevo / programado;
+  if (!isFinite(factor) || factor <= 0) return pagos;
+  return {
+    ...pagos,
+    anticipo: { ...pagos.anticipo, valor: pagos.anticipo.valor ? Math.round(parseFloat(pagos.anticipo.valor) * factor) : pagos.anticipo.valor },
+    intermedio: { ...pagos.intermedio, valor: pagos.intermedio.valor ? Math.round(parseFloat(pagos.intermedio.valor) * factor) : pagos.intermedio.valor },
+    final: { ...pagos.final, valor: pagos.final.valor ? Math.round(parseFloat(pagos.final.valor) * factor) : pagos.final.valor },
+  };
 }
 // valida que las fechas del plan de pagos queden en orden creciente: anticipo ≤ intermedio (si aplica) ≤ final
 // devuelve un mensaje de error, o null si está bien
@@ -1639,14 +1654,15 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const [fechaEstimada, setFechaEstimada] = useState("");
   const [objetivo, setObjetivo] = useState("");
   const [justificacion, setJustificacion] = useState("");
-  const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
+  const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [] }]);
   const [pagosSugeridos, setPagosSugeridos] = useState(planPagosVacio());
   const [tienePlanPagos, setTienePlanPagos] = useState(false);
   const [aiu, setAiu] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "" });
 
-  const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, cotizaciones: [] }]);
+  const addItem = () => setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [] }]);
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
   const updateItem = (id, field, val) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
+  const updateItemAiu = (id, campo, val) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, aiu: { ...(i.aiu || {}), [campo]: pctValido(val) } } : i)));
   const [cargandoTasaItem, setCargandoTasaItem] = useState(null);
   const actualizarTasaItem = async (id, moneda) => {
     if (!moneda || moneda === "COP") return;
@@ -1839,6 +1855,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               {tipo !== "servicio" && <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
+            {tipo === "servicio" && (
+              <div className="grid grid-cols-3 gap-2 pl-1">
+                <div><label className="text-[10px] text-slate-400 block mb-0.5">Admón. % (este ítem)</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={it.aiu?.administracionPct || ""} onChange={(e) => updateItemAiu(it.id, "administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs" /></div>
+                <div><label className="text-[10px] text-slate-400 block mb-0.5">Utilidad %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={it.aiu?.utilidadPct || ""} onChange={(e) => updateItemAiu(it.id, "utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs" /></div>
+                <div><label className="text-[10px] text-slate-400 block mb-0.5">Imprevistos %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={it.aiu?.imprevistosPct || ""} onChange={(e) => updateItemAiu(it.id, "imprevistosPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs" /></div>
+              </div>
+            )}
             {parseFloat(it.precioEstimado) > 0 && (() => {
               const d = desgloseItem(it);
               const inicial = parseFloat(it.precioEstimado) || 0;
@@ -1859,25 +1882,18 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         ))}
       </div>
 
-      {tipo === "servicio" && (
+      {tipo === "servicio" && totalGeneral.costoDirecto > 0 && (
         <div className="mb-5 bg-slate-50 rounded-lg p-3 border border-slate-200">
-          <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><DollarSign size={13} /> Costos indirectos (AIU) — porcentajes que te dio el proveedor (Compras los validará y podrá ajustarlos)</div>
-          <div className="grid grid-cols-3 gap-2">
-            <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={aiu.administracionPct} onChange={(e) => setAiu({ ...aiu, administracionPct: pctValido(e.target.value) })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
-            <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={aiu.utilidadPct} onChange={(e) => setAiu({ ...aiu, utilidadPct: pctValido(e.target.value) })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
-            <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input type="number" min="0" max="100" step="0.1" placeholder="0" value={aiu.imprevistosPct} onChange={(e) => setAiu({ ...aiu, imprevistosPct: pctValido(e.target.value) })} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm" /></div>
+          <div className="text-xs font-medium text-slate-500 mb-2 flex items-center gap-1"><DollarSign size={13} /> Total con costos indirectos (AIU de cada ítem)</div>
+          <div className="text-[11px] text-slate-400 mb-2">El IVA (19%) se calcula automáticamente solo sobre la Utilidad — no se cobra IVA por ítem en las órdenes de servicio/trabajo. Cada ítem tiene sus propios % arriba.</div>
+          <div className="text-[11px] text-slate-500 space-y-0.5">
+            <div className="flex justify-between max-w-xs"><span>Costo Directo</span><span>{fmt(totalGeneral.costoDirecto)}</span></div>
+            <div className="flex justify-between max-w-xs"><span>Administración</span><span>{fmt(totalGeneral.administracion)}</span></div>
+            <div className="flex justify-between max-w-xs"><span>Utilidad</span><span>{fmt(totalGeneral.utilidad)}</span></div>
+            <div className="flex justify-between max-w-xs"><span>Imprevistos</span><span>{fmt(totalGeneral.imprevistos)}</span></div>
+            <div className="flex justify-between max-w-xs"><span>IVA sobre Utilidad</span><span>{fmt(totalGeneral.ivaUtilidad)}</span></div>
+            <div className="flex justify-between max-w-xs font-medium text-slate-700"><span>Total</span><span>{fmt(totalGeneral.total)}</span></div>
           </div>
-          <div className="text-[11px] text-slate-400 mt-2">El IVA (19%) se calcula automáticamente solo sobre la Utilidad — no se cobra IVA por ítem en las órdenes de servicio/trabajo.</div>
-          {(parseFloat(aiu.administracionPct) > 0 || parseFloat(aiu.utilidadPct) > 0 || parseFloat(aiu.imprevistosPct) > 0) && totalGeneral.costoDirecto > 0 && (
-            <div className="text-[11px] text-slate-500 mt-2 space-y-0.5">
-              <div className="flex justify-between max-w-xs"><span>Costo Directo</span><span>{fmt(totalGeneral.costoDirecto)}</span></div>
-              <div className="flex justify-between max-w-xs"><span>Administración</span><span>{fmt(totalGeneral.administracion)}</span></div>
-              <div className="flex justify-between max-w-xs"><span>Utilidad</span><span>{fmt(totalGeneral.utilidad)}</span></div>
-              <div className="flex justify-between max-w-xs"><span>Imprevistos</span><span>{fmt(totalGeneral.imprevistos)}</span></div>
-              <div className="flex justify-between max-w-xs"><span>IVA sobre Utilidad</span><span>{fmt(totalGeneral.ivaUtilidad)}</span></div>
-              <div className="flex justify-between max-w-xs font-medium text-slate-700"><span>Total</span><span>{fmt(totalGeneral.total)}</span></div>
-            </div>
-          )}
         </div>
       )}
 
@@ -1972,6 +1988,56 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 /* ---------------------------------------------------------
    COTIZACIONES Y COMPARATIVO
 --------------------------------------------------------- */
+// plan de pagos opcional propio de una cotización/proveedor específico — cubre tanto "por cotización"
+// como "por ítem" (ya que cada cotización pertenece a un ítem). Si no se activa, no aplica nada
+// especial: se sigue usando el plan general de la solicitud como siempre.
+function PlanPagoCotizacion({ pagos, total, onChange }) {
+  const [abierto, setAbierto] = useState(!!pagos);
+  const p = { ...planPagosVacio(), ...pagos };
+  const restante = total - totalPagado(p);
+  const faltaFecha = p.tipoPago === "contado" ? !p.pagoUnico.fecha : (!p.anticipo.fecha || !p.final.fecha || (p.intermedio.activo && !p.final.fecha));
+
+  const set = (campo, sub, val) => {
+    if (sub === "fecha" && val) { const error = validarOrdenFechas(p, campo, val); if (error) { alert(error); return; } }
+    onChange({ ...p, [campo]: { ...p[campo], [sub]: val } });
+  };
+  const setTipoPago = (tipo) => onChange({ ...p, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...p.pagoUnico, valor: total } : p.pagoUnico });
+
+  if (!abierto) {
+    return <button type="button" onClick={() => setAbierto(true)} className="text-[11px] text-indigo-600 underline">+ Definir plan de pagos propio de este proveedor (opcional)</button>;
+  }
+
+  return (
+    <div className="border border-indigo-100 bg-indigo-50/30 rounded-lg p-2 space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-medium text-slate-600">Plan de pagos de este proveedor</span>
+        <button type="button" onClick={() => { onChange(null); setAbierto(false); }} className="text-[10px] text-slate-400 hover:text-rose-500">Quitar</button>
+      </div>
+      <div className="flex gap-1.5">
+        <button type="button" onClick={() => setTipoPago("plan")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por etapas</button>
+        <button type="button" onClick={() => setTipoPago("contado")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único</button>
+      </div>
+      {p.tipoPago === "contado" ? (
+        <div className="flex gap-2 items-center">
+          <span className="text-[10px] text-slate-500">Valor (= total): {fmt(total)}</span>
+          <InputFecha value={p.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="border border-slate-200 rounded-md px-2 py-1 text-xs" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-3 gap-1.5">
+          <div><InputMiles placeholder="Anticipo" value={p.anticipo.valor} onChange={(v) => set("anticipo", "valor", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px] mb-1" /><InputFecha value={p.anticipo.fecha} onChange={(v) => set("anticipo", "fecha", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px]" /></div>
+          <div><label className="text-[10px] flex items-center gap-1"><input type="checkbox" checked={p.intermedio.activo} onChange={(e) => set("intermedio", "activo", e.target.checked)} /> Interm.</label><InputMiles placeholder="Valor" disabled={!p.intermedio.activo} value={p.intermedio.valor} onChange={(v) => set("intermedio", "valor", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px] mb-1 disabled:bg-slate-100" /><InputFecha disabled={!p.intermedio.activo} value={p.intermedio.fecha} onChange={(v) => set("intermedio", "fecha", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px] disabled:bg-slate-100" /></div>
+          <div><InputMiles placeholder="Final" value={p.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px] mb-1" /><InputFecha value={p.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px]" /></div>
+        </div>
+      )}
+      {totalPagado(p) > 0 && (
+        <div className={`text-[10px] ${Math.abs(restante) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
+          {Math.abs(restante) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restante))}` : "✓ Cuadra con el total de este proveedor"}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo, sinIva }) {
   const [abierto, setAbierto] = useState(!compacto);
   const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
@@ -1988,7 +2054,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
     else alert("No se pudo obtener la tasa de cambio automática. Ingrésala manualmente.");
   };
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
-  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, archivoNombre: "" }]);
+  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, pagos: null, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
 
   // guarda automáticamente lo que ya se alcanzó a escribir (incluido el archivo adjunto), sin depender
@@ -2146,6 +2212,15 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             )}
 
+            {sinIva && c.precioUnitario && (() => {
+              const aiuC = c.aiu || {};
+              const admC = d.subtotal * (parseFloat(aiuC.administracionPct) || 0) / 100;
+              const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
+              const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
+              const totalCotizacion = d.subtotal + admC + utilC + imprevC + utilC * 0.19;
+              return <PlanPagoCotizacion pagos={c.pagos} total={totalCotizacion} onChange={(pagos) => update(i, "pagos", pagos)} />;
+            })()}
+
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <AdjuntarArchivo small nombre={c.archivoNombre} label="Adjuntar cotización (PDF/foto)" onSeleccionar={(n) => update(i, "archivoNombre", n)} />
               {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (() => {
@@ -2243,6 +2318,14 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
           {sinIva ? <><span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span><span>Total con AIU: <b>{fmt(totalConAiu(elegida))}</b></span></> : (<><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></>)}
         </div>
       )}
+      {elegida?.pagos && (
+        <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-slate-600 bg-indigo-50/30">
+          <span className="font-medium">Plan de pagos propio de {nombreProv(elegida)}: </span>
+          {elegida.pagos.tipoPago === "contado"
+            ? `Pago único ${fmt(elegida.pagos.pagoUnico?.valor)} — ${elegida.pagos.pagoUnico?.fecha || "sin fecha"}`
+            : `Anticipo ${fmt(elegida.pagos.anticipo?.valor)} (${elegida.pagos.anticipo?.fecha || "sin fecha"})${elegida.pagos.intermedio?.activo ? `, Intermedio ${fmt(elegida.pagos.intermedio.valor)} (${elegida.pagos.intermedio.fecha || "sin fecha"})` : ""}, Final ${fmt(elegida.pagos.final?.valor)} (${elegida.pagos.final?.fecha || "sin fecha"})`}
+        </div>
+      )}
       {item.observacionSeleccion && <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-amber-700 italic bg-amber-50/50">Justificación de selección no sugerida: "{item.observacionSeleccion}"</div>}
     </div>
   );
@@ -2250,21 +2333,32 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
 
 // Compras (u otro rol con permiso) valida y ajusta los % de AIU que el solicitante estimó,
 // una vez el proveedor ya entregó su cotización real — solo aplica a órdenes de servicio/trabajo.
-function AiuEditor({ solicitud, onGuardar, editable }) {
-  const [aiu, setAiu] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "", ...solicitud.aiu });
-  useEffect(() => { setAiu({ administracionPct: "", utilidadPct: "", imprevistosPct: "", ...solicitud.aiu }); }, [solicitud.id]);
-  const set = (campo, val) => { const copy = { ...aiu, [campo]: pctValido(val) }; setAiu(copy); onGuardar(copy); };
+function AiuEditor({ solicitud, onGuardarItems, editable }) {
+  const setItemAiu = (itemId, campo, val) => {
+    onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, aiu: { ...(it.aiu || {}), [campo]: pctValido(val) } } : it)));
+  };
   const d = desgloseSolicitud(solicitud);
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5">
-      <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
-      <div className="grid grid-cols-3 gap-2 mb-3">
-        <div><label className="text-[11px] text-slate-500 block mb-1">Administración %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.administracionPct} onChange={(e) => set("administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
-        <div><label className="text-[11px] text-slate-500 block mb-1">Utilidad %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.utilidadPct} onChange={(e) => set("utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
-        <div><label className="text-[11px] text-slate-500 block mb-1">Imprevistos %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.imprevistosPct} onChange={(e) => set("imprevistosPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" /></div>
+    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+      <div className="font-medium text-slate-700 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) por ítem {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
+      <div className="text-[11px] text-slate-400">Cada ítem tiene su propio AIU, independiente del proveedor que finalmente se adjudique. Si el ítem ya tiene una cotización seleccionada, el AIU de esa cotización tiene prioridad sobre el que se ve aquí.</div>
+      <div className="space-y-3">
+        {solicitud.items.map((it) => {
+          const aiu = it.aiu || {};
+          return (
+            <div key={it.id} className="border border-slate-100 rounded-lg p-2.5">
+              <div className="text-xs font-medium text-slate-600 mb-1.5 truncate">{it.nombre}</div>
+              <div className="grid grid-cols-3 gap-2">
+                <div><label className="text-[10px] text-slate-400 block mb-0.5">Admón. %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.administracionPct || ""} onChange={(e) => setItemAiu(it.id, "administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+                <div><label className="text-[10px] text-slate-400 block mb-0.5">Utilidad %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.utilidadPct || ""} onChange={(e) => setItemAiu(it.id, "utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+                <div><label className="text-[10px] text-slate-400 block mb-0.5">Imprevistos %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.imprevistosPct || ""} onChange={(e) => setItemAiu(it.id, "imprevistosPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+              </div>
+            </div>
+          );
+        })}
       </div>
-      <div className="text-[11px] text-slate-400 mb-2">El IVA (19%) se calcula automáticamente solo sobre la Utilidad.</div>
+      <div className="text-[11px] text-slate-400">El IVA (19%) se calcula automáticamente solo sobre la Utilidad.</div>
       <div className="space-y-0.5 text-xs text-slate-500 max-w-xs">
         <div className="flex justify-between"><span>Costo Directo</span><span>{fmt(d.costoDirecto)}</span></div>
         <div className="flex justify-between"><span>Administración</span><span>{fmt(d.administracion)}</span></div>
@@ -2381,12 +2475,19 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
   };
   const usarSugerencia = () => { setPagos(sug); onProgramar(sug); };
   const setTipoPago = (tipo) => { const copy = { ...pagos, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...pagos.pagoUnico, valor: total } : pagos.pagoUnico }; setPagos(copy); onProgramar(copy); };
-  // si el total cambia mientras está en "pago único", se mantiene sincronizado
+  // si el total cambia (ej. cambió el AIU o llegó otra cotización) mientras ya hay un plan programado,
+  // se mantiene sincronizado: en pago único se ajusta solo, y en plan por etapas se reescala
+  // proporcionalmente para que la suma siga cuadrando con el nuevo total
+  const totalAnteriorRef = useRef(total);
   useEffect(() => {
     if (pagos.tipoPago === "contado" && pagos.pagoUnico.valor !== total) {
       const copy = { ...pagos, pagoUnico: { ...pagos.pagoUnico, valor: total } };
       setPagos(copy); onProgramar(copy);
+    } else if (pagos.tipoPago !== "contado" && pagado > 0 && total !== totalAnteriorRef.current && totalAnteriorRef.current > 0) {
+      const copy = reescalarPlanPago(pagos, total);
+      if (copy !== pagos) { setPagos(copy); onProgramar(copy); }
     }
+    totalAnteriorRef.current = total;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [total, pagos.tipoPago]);
 
@@ -2526,11 +2627,11 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       baseItems.forEach((it) => {
         const dIt = desgloseItem(it);
         costoDirecto += dIt.subtotal;
-        let aiu = solicitud.aiu || {};
+        let aiu = it.aiu || solicitud.aiu || {};
         if (it.cotizaciones?.length) {
           const sel = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad);
           const cot = it.cotizaciones[sel];
-          if (cot?.aiu) aiu = cot.aiu;
+          if (cot?.aiu && (parseFloat(cot.aiu.administracionPct) || parseFloat(cot.aiu.utilidadPct) || parseFloat(cot.aiu.imprevistosPct))) aiu = cot.aiu;
         }
         administracion += dIt.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
         utilidad += dIt.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
@@ -2710,10 +2811,22 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
 --------------------------------------------------------- */
 function CalificacionSelect({ value, onChange, disabled }) {
   return (
-    <select value={value || ""} onChange={(e) => onChange(e.target.value ? Number(e.target.value) : null)} disabled={disabled} className="border border-slate-200 rounded-md px-2 py-1 text-xs w-16 disabled:bg-slate-50">
-      <option value="">—</option>
-      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => <option key={n} value={n}>{n}</option>)}
-    </select>
+    <div className="flex items-center gap-0.5">
+      {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+        <button
+          key={n}
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(value === n ? null : n)}
+          title={`Calificar ${n}`}
+          className={`w-5 h-5 rounded text-[10px] font-medium border shrink-0 disabled:opacity-40 disabled:cursor-not-allowed ${
+            value === n ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-500 border-slate-200 hover:border-indigo-300"
+          }`}
+        >
+          {n}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -2792,12 +2905,19 @@ function PagosSugeridosEditor({ solicitud, total, onGuardar }) {
   };
   const restante = total - totalPagado(sug);
   const faltaFecha = sug.tipoPago === "contado" ? !sug.pagoUnico.fecha : (!sug.anticipo.fecha || !sug.final.fecha || (sug.intermedio.activo && !sug.intermedio.fecha));
-  // si el total cambia (ej. Compras cargó una cotización distinta) mientras está en "pago único", se mantiene sincronizado
+  // si el total cambia (ej. Compras cargó una cotización distinta, o cambió el AIU) mientras ya hay
+  // un plan programado, se mantiene sincronizado: en pago único se ajusta solo, y en plan por etapas
+  // se reescala proporcionalmente para que la suma siga cuadrando con el nuevo total
+  const totalAnteriorRef = useRef(total);
   useEffect(() => {
     if (sug.tipoPago === "contado" && sug.pagoUnico.valor !== total) {
       const copy = { ...sug, pagoUnico: { ...sug.pagoUnico, valor: total } };
       setSug(copy); onGuardar(copy);
+    } else if (sug.tipoPago !== "contado" && tienePlan && total !== totalAnteriorRef.current && totalAnteriorRef.current > 0) {
+      const copy = reescalarPlanPago(sug, total);
+      if (copy !== sug) { setSug(copy); onGuardar(copy); }
     }
+    totalAnteriorRef.current = total;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [total, sug.tipoPago]);
 
@@ -3348,6 +3468,8 @@ function accionLabel(solicitud, total) {
 function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver }) {
   const [observacion, setObservacion] = useState("");
   const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
+  const [toast, setToast] = useState(null);
+  const mostrarToast = (mensaje) => { setToast(mensaje); setTimeout(() => setToast(null), 3500); };
   const area = areas.find((a) => a.id === solicitud.areaId);
   const departamento = departamentos.find((d) => d.id === solicitud.departamentoId);
   const empresa = empresas.find((e) => e.id === solicitud.empresaId);
@@ -3427,20 +3549,23 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       if (currentUser.rol === "Jefe de Área y Director") {
         // la misma persona hace ambos roles: se aprueban los dos pasos de una vez, sin duplicar el clic
         patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar(), director: { ...firmar(), observacion: "Aprobado junto con el paso de jefe de área (mismo responsable)." } }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada (jefe y director), lista para cotizar.`) });
+        mostrarToast("✓ Solicitud aprobada como jefe de área y director");
       } else {
         const director = usuarios.find((u) => u.areaId === solicitud.areaId && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
         patch({ status: "aprobacion_director", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("aprobacion_director"), notificaciones: notificar(director?.email ? `Correo enviado a ${director.nombre} (${director.email}): solicitud ${solicitud.folio} pendiente de tu aprobación.` : `Solicitud aprobada por el jefe de área. No hay un director de área con correo configurado para notificar.`) });
+        mostrarToast("✓ Solicitud aprobada como jefe de área");
       }
     }
-    else if (s === "aprobacion_director") patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) });
+    else if (s === "aprobacion_director") { patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); mostrarToast("✓ Solicitud aprobada como director de área"); }
     else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
     else if (s === "comparativo") { const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) }); }
     else if (s === "aprobacion_financiera") {
       if (solicitud.tipo === "servicio" && !solicitud.pagosConfirmados) { alert("Falta confirmar el plan de pagos antes de aprobar y continuar."); return; }
       const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
       patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) });
+      mostrarToast("✓ Solicitud aprobada por Dirección Financiera");
     }
-    else if (s === "aprobacion_gerencia") patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") });
+    else if (s === "aprobacion_gerencia") { patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") }); mostrarToast("✓ Solicitud aprobada por Gerencia"); }
     else if (s === "orden") {
       if (!todasOrdenesFirmadas(solicitud, proveedores)) return;
       const ordenesConCorreo = [];
@@ -3525,6 +3650,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
   return (
     <div className="space-y-5">
+      {toast && (
+        <div className="fixed top-4 right-4 z-50 bg-emerald-600 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2">
+          <CheckCircle2 size={16} /> {toast}
+        </div>
+      )}
       <button onClick={onVolver} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"><ArrowLeft size={15} /> Volver a solicitudes</button>
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -3666,7 +3796,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
         solicitud.tipo === "servicio"
-          ? <AiuEditor solicitud={solicitud} onGuardar={(aiu) => patch({ aiu })} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
+          ? <AiuEditor solicitud={solicitud} onGuardarItems={(items) => patch({ items })} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
           : <ResumenTotales solicitud={solicitud} />
       )}
 
