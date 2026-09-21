@@ -299,6 +299,7 @@ const PERMISOS_DISPONIBLES = [
   { key: "ver_mis_pendientes", label: "Ver la pantalla \"Mis pendientes\"" },
   { key: "ver_calendario_pagos", label: "Ver el Calendario de pagos" },
   { key: "ver_ordenes_enviadas", label: "Ver el reporte de Órdenes enviadas a proveedores" },
+  { key: "ver_plan_inversion", label: "Ver el Plan de inversión" },
   { key: "ver_evaluaciones_proveedores", label: "Ver el reporte de Evaluación de proveedores" },
 ];
 
@@ -341,6 +342,7 @@ const puedeEditarPagos = (u) => tienePermiso(u.rol, "editar_pagos");
 const puedeVerMisPendientes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_mis_pendientes");
 const puedeVerCalendarioPagos = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_calendario_pagos");
 const puedeVerOrdenesEnviadas = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_ordenes_enviadas");
+const puedeVerPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_plan_inversion");
 const puedeVerEvaluaciones = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_evaluaciones_proveedores");
 
 /* ---------------------------------------------------------
@@ -1238,6 +1240,222 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
     </div>
   );
 }
+
+/* ---------------------------------------------------------
+   PLAN DE INVERSIÓN — cronograma editable por proyecto, con
+   distribución por periodos (mes/semana), exportable a Excel y PDF.
+--------------------------------------------------------- */
+function periodoVacio() { return { id: nextId(), mes: "", etiqueta: "Semana", rango: "" }; }
+function proyectoVacio(item) { return { id: nextId(), item, nombre: "", valores: {}, destacado: false }; }
+
+function inversionProyecto(proyecto) {
+  return Object.values(proyecto.valores || {}).reduce((acc, v) => acc + (parseFloat(v) || 0), 0);
+}
+function totalPorPeriodo(proyectos, periodoId) {
+  return proyectos.reduce((acc, p) => acc + (parseFloat(p.valores?.[periodoId]) || 0), 0);
+}
+function totalGeneralPlan(proyectos) {
+  return proyectos.reduce((acc, p) => acc + inversionProyecto(p), 0);
+}
+
+function PlanInversion({ empresas, currentUser }) {
+  const { datos: planes, cargando, guardar: guardarPlanDB, eliminar: eliminarPlanDB } = useSupabaseTable('planes_inversion', {
+    desdeDb: (r) => ({ id: r.id, titulo: r.titulo, empresaId: r.empresa_id, anio: r.anio, periodos: r.datos?.periodos || [], proyectos: r.datos?.proyectos || [] }),
+    haciaDb: (r) => ({ id: r.id, titulo: r.titulo, empresa_id: r.empresaId, anio: r.anio, datos: { periodos: r.periodos || [], proyectos: r.proyectos || [] } }),
+    orderBy: 'anio',
+  });
+  const [planActivoId, setPlanActivoId] = useState(null);
+  const [exportandoPDF, setExportandoPDF] = useState(false);
+  // buffer local: la pantalla se actualiza al instante con cada tecla; el guardado en Supabase
+  // ocurre en segundo plano con un pequeño retraso, para no esperar el viaje de ida y vuelta
+  const [planLocal, setPlanLocal] = useState(null);
+  const guardarTimer = useRef(null);
+
+  useEffect(() => {
+    if (!planActivoId && planes.length) setPlanActivoId(planes[0].id);
+  }, [planes, planActivoId]);
+
+  // sincroniza el buffer local cuando cambia de plan, o cuando llega la primera carga desde la BD
+  useEffect(() => {
+    const planDB = planes.find((p) => p.id === planActivoId);
+    if (planDB && (!planLocal || planLocal.id !== planDB.id)) setPlanLocal(planDB);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planActivoId, planes]);
+
+  useEffect(() => {
+    if (!exportandoPDF) return;
+    const t = setTimeout(() => window.print(), 150);
+    const limpiar = () => setExportandoPDF(false);
+    window.addEventListener("afterprint", limpiar);
+    return () => { clearTimeout(t); window.removeEventListener("afterprint", limpiar); };
+  }, [exportandoPDF]);
+
+  const plan = planLocal;
+  const puedeEditar = ["Administrador", "Gerencia", "Dirección Financiera"].includes(currentUser.rol);
+
+  // actualiza la pantalla al instante, y guarda en Supabase con un pequeño retraso (no en cada
+  // tecla) para no saturar la base de datos en una tabla con tantos campos
+  const actualizarPlan = (cambios) => {
+    const actualizado = { ...plan, ...cambios };
+    setPlanLocal(actualizado);
+    if (guardarTimer.current) clearTimeout(guardarTimer.current);
+    guardarTimer.current = setTimeout(() => guardarPlanDB(actualizado), 600);
+  };
+
+  const crearPlan = async () => {
+    const nuevo = { id: nextId(), titulo: "Cronograma y Plan de Inversión", empresaId: empresas[0]?.id || null, anio: new Date().getFullYear(), periodos: [], proyectos: [] };
+    const creado = await guardarPlanDB(nuevo);
+    if (creado?.id) { setPlanActivoId(creado.id); setPlanLocal(creado); }
+  };
+
+  const agregarPeriodo = () => actualizarPlan({ periodos: [...(plan.periodos || []), periodoVacio()] });
+  const quitarPeriodo = (id) => {
+    const nuevosProyectos = plan.proyectos.map((p) => { const v = { ...p.valores }; delete v[id]; return { ...p, valores: v }; });
+    actualizarPlan({ periodos: plan.periodos.filter((pe) => pe.id !== id), proyectos: nuevosProyectos });
+  };
+  const editarPeriodo = (id, campo, val) => actualizarPlan({ periodos: plan.periodos.map((pe) => (pe.id === id ? { ...pe, [campo]: val } : pe)) });
+
+  const agregarProyecto = () => actualizarPlan({ proyectos: [...(plan.proyectos || []), proyectoVacio((plan.proyectos?.length || 0) + 1)] });
+  const quitarProyecto = (id) => actualizarPlan({ proyectos: plan.proyectos.filter((p) => p.id !== id) });
+  const editarProyecto = (id, campo, val) => actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === id ? { ...p, [campo]: val } : p)) });
+  const editarValor = (proyectoId, periodoId, val) => actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === proyectoId ? { ...p, valores: { ...p.valores, [periodoId]: val } } : p)) });
+
+  const descargarExcel = () => {
+    if (!plan) return;
+    const filas = [];
+    filas.push([plan.titulo?.toUpperCase() || ""]);
+    filas.push([]);
+    filas.push(["ITEM", "PROYECTO", "INVERSIÓN", ...plan.periodos.map((pe) => pe.mes)]);
+    filas.push(["", "", "", ...plan.periodos.map((pe) => pe.etiqueta)]);
+    filas.push(["", "", "", ...plan.periodos.map((pe) => pe.rango)]);
+    plan.proyectos.forEach((p) => {
+      filas.push([p.item, p.nombre, inversionProyecto(p), ...plan.periodos.map((pe) => parseFloat(p.valores?.[pe.id]) || "")]);
+    });
+    filas.push(["", "TOTAL INVERSIÓN", totalGeneralPlan(plan.proyectos), ...plan.periodos.map((pe) => totalPorPeriodo(plan.proyectos, pe.id))]);
+    const hoja = XLSX.utils.aoa_to_sheet(filas);
+    hoja["!cols"] = [{ wch: 6 }, { wch: 45 }, { wch: 16 }, ...plan.periodos.map(() => ({ wch: 14 }))];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Plan de inversión");
+    XLSX.writeFile(libro, `${(plan.titulo || "Plan_inversion").replace(/[^a-zA-Z0-9]/g, "_")}_${plan.anio}.xlsx`);
+  };
+
+  if (cargando) return <div className="text-sm text-slate-400">Cargando...</div>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800">Plan de inversión</h2>
+          <p className="text-xs text-slate-400 mt-1">Cronograma editable por proyecto, con distribución en el tiempo — exportable a Excel y PDF.</p>
+        </div>
+        <div className="flex items-center gap-2 no-print">
+          {planes.length > 0 && (
+            <select value={planActivoId || ""} onChange={(e) => setPlanActivoId(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm">
+              {planes.map((p) => <option key={p.id} value={p.id}>{p.titulo} ({p.anio})</option>)}
+            </select>
+          )}
+          {puedeEditar && <button onClick={crearPlan} className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Plus size={13} /> Nuevo plan</button>}
+          {plan && <button onClick={descargarExcel} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Excel</button>}
+          {plan && <button onClick={() => setExportandoPDF(true)} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> PDF</button>}
+        </div>
+      </div>
+
+      {!plan ? (
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">
+          {puedeEditar ? <>No hay ningún plan de inversión todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear el primero</button></> : "No hay ningún plan de inversión todavía."}
+        </div>
+      ) : (
+        <>
+          {puedeEditar && (
+            <div className="bg-white rounded-xl border border-slate-200 p-4 grid grid-cols-1 md:grid-cols-3 gap-3 no-print">
+              <div><label className="text-[11px] font-medium text-slate-500">Título</label><input value={plan.titulo} onChange={(e) => actualizarPlan({ titulo: e.target.value })} className="w-full mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+              <div><label className="text-[11px] font-medium text-slate-500">Empresa</label><select value={plan.empresaId || ""} onChange={(e) => actualizarPlan({ empresaId: e.target.value })} className="w-full mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="">—</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
+              <div><label className="text-[11px] font-medium text-slate-500">Año</label><input type="number" value={plan.anio} onChange={(e) => actualizarPlan({ anio: e.target.value })} className="w-full mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+            </div>
+          )}
+
+          <style>{`
+            @media print {
+              .print-wrapper-oculto { display: block !important; }
+              body * { visibility: hidden; }
+              #plan-imprimible, #plan-imprimible * { visibility: visible; }
+              #plan-imprimible { position: absolute; left: 0; top: 0; width: 100%; border: none !important; }
+              #plan-imprimible .no-print { display: none !important; }
+              @page { size: landscape; margin: 10mm; }
+            }
+          `}</style>
+          <div id="plan-imprimible" className="bg-white rounded-xl border border-slate-200 p-4 overflow-x-auto">
+            <div className="text-center font-semibold text-slate-800 mb-3 text-sm">{plan.titulo} {plan.anio} {empresas.find((e) => e.id === plan.empresaId)?.nombre || ""}</div>
+            <table className="w-full text-xs border-collapse min-w-[900px]">
+              <thead>
+                <tr className="bg-slate-50">
+                  <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-10">ITEM</th>
+                  <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 min-w-[220px]">PROYECTO</th>
+                  <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-28">INVERSIÓN</th>
+                  {plan.periodos.map((pe) => (
+                    <th key={pe.id} className="border border-slate-200 px-1 py-1 min-w-[110px] relative group">
+                      {puedeEditar ? <input value={pe.mes} onChange={(e) => editarPeriodo(pe.id, "mes", e.target.value)} placeholder="Mes" className="w-full text-center text-xs font-semibold border-0 bg-transparent focus:bg-white" /> : pe.mes}
+                      {puedeEditar && <button onClick={() => quitarPeriodo(pe.id)} className="no-print absolute -top-1 -right-1 text-rose-400 hover:text-rose-600 bg-white rounded-full opacity-0 group-hover:opacity-100"><Trash2 size={11} /></button>}
+                    </th>
+                  ))}
+                  {puedeEditar && <th rowSpan={3} className="no-print border border-slate-200 px-2 py-1.5 w-10"><button onClick={agregarPeriodo} title="Agregar periodo" className="text-indigo-600"><Plus size={14} /></button></th>}
+                </tr>
+                <tr className="bg-slate-50">
+                  {plan.periodos.map((pe) => (
+                    <th key={pe.id} className="border border-slate-200 px-1 py-1">
+                      {puedeEditar ? <input value={pe.etiqueta} onChange={(e) => editarPeriodo(pe.id, "etiqueta", e.target.value)} className="w-full text-center text-[11px] border-0 bg-transparent focus:bg-white" /> : pe.etiqueta}
+                    </th>
+                  ))}
+                </tr>
+                <tr className="bg-slate-50">
+                  {plan.periodos.map((pe) => (
+                    <th key={pe.id} className="border border-slate-200 px-1 py-1">
+                      {puedeEditar ? <input value={pe.rango} onChange={(e) => editarPeriodo(pe.id, "rango", e.target.value)} placeholder="Rango" className="w-full text-center text-[11px] font-normal border-0 bg-transparent focus:bg-white" /> : pe.rango}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {plan.proyectos.map((p) => (
+                  <tr key={p.id} className={p.destacado ? "bg-emerald-100/70" : ""}>
+                    <td className="border border-slate-200 px-2 py-1.5 text-center align-top">
+                      <div className="flex items-center gap-1 justify-center">
+                        {p.item}
+                        {puedeEditar && <button onClick={() => quitarProyecto(p.id)} className="no-print text-slate-300 hover:text-rose-500"><Trash2 size={11} /></button>}
+                      </div>
+                      {puedeEditar && <label className="no-print flex items-center justify-center gap-1 mt-1 text-[9px] text-slate-400"><input type="checkbox" checked={!!p.destacado} onChange={(e) => editarProyecto(p.id, "destacado", e.target.checked)} /> resaltar</label>}
+                    </td>
+                    <td className="border border-slate-200 px-2 py-1.5 align-top">
+                      {puedeEditar ? <textarea value={p.nombre} onChange={(e) => editarProyecto(p.id, "nombre", e.target.value)} rows={p.nombre?.length > 80 ? 4 : 1} className="w-full text-xs border-0 bg-transparent resize-y focus:bg-white" /> : <span className="whitespace-pre-wrap">{p.nombre}</span>}
+                    </td>
+                    <td className="border border-slate-200 px-2 py-1.5 text-right align-top font-medium">{fmt(inversionProyecto(p))}</td>
+                    {plan.periodos.map((pe) => (
+                      <td key={pe.id} className="border border-slate-200 px-1 py-1.5 text-right align-top">
+                        {puedeEditar ? <InputMiles value={p.valores?.[pe.id] || ""} onChange={(v) => editarValor(p.id, pe.id, v)} className="w-full text-right text-xs border-0 bg-transparent focus:bg-white px-1" /> : (parseFloat(p.valores?.[pe.id]) > 0 ? fmt(p.valores[pe.id]) : "")}
+                      </td>
+                    ))}
+                    {puedeEditar && <td className="no-print border border-slate-200"></td>}
+                  </tr>
+                ))}
+                <tr className="bg-slate-100 font-semibold">
+                  <td className="border border-slate-200 px-2 py-1.5 text-center">{plan.proyectos.length}</td>
+                  <td className="border border-slate-200 px-2 py-1.5">TOTAL INVERSIÓN</td>
+                  <td className="border border-slate-200 px-2 py-1.5 text-right">{fmt(totalGeneralPlan(plan.proyectos))}</td>
+                  {plan.periodos.map((pe) => (
+                    <td key={pe.id} className="border border-slate-200 px-2 py-1.5 text-right">{fmt(totalPorPeriodo(plan.proyectos, pe.id))}</td>
+                  ))}
+                  {puedeEditar && <td className="no-print border border-slate-200"></td>}
+                </tr>
+              </tbody>
+            </table>
+            {puedeEditar && <button onClick={agregarProyecto} className="no-print mt-3 text-xs text-indigo-600 font-medium flex items-center gap-1"><Plus size={13} /> Agregar proyecto</button>}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
   const [filtroEmpresa, setFiltroEmpresa] = useState("todas");
@@ -4514,6 +4732,7 @@ export default function App() {
             {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
             {puedeVerCalendarioPagos(currentUser) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
             {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Órdenes enviadas" />}
+            {puedeVerPlanInversion(currentUser) && <NavBtn id="planInversion" icon={TrendingUp} label="Plan de inversión" />}
             {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
           </>
         )}
@@ -4574,6 +4793,8 @@ export default function App() {
           <CalendarioPagos solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
           <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} />
+        ) : tab === "planInversion" && puedeVerPlanInversion(currentUser) ? (
+          <PlanInversion empresas={empresas} currentUser={currentUser} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             currentUser={currentUser}
