@@ -1245,8 +1245,55 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
    PLAN DE INVERSIÓN — cronograma editable por proyecto, con
    distribución por periodos (mes/semana), exportable a Excel y PDF.
 --------------------------------------------------------- */
+const NOMBRES_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+// reconoce el mes de un texto libre como "Abril" o "abril 2026" (sin acentos, sin importar mayúsculas)
+function indiceMesDesdeTexto(texto) {
+  const limpio = (texto || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+  return NOMBRES_MESES.findIndex((m) => limpio.startsWith(m));
+}
+// interpreta un rango de días como "14-18" → {desde: 14, hasta: 18}; si no tiene guion, usa todo el mes
+function parsearRangoDias(rango) {
+  const m = (rango || "").match(/(\d{1,2})\s*-\s*(\d{1,2})/);
+  if (m) return { desde: parseInt(m[1]), hasta: parseInt(m[2]) };
+  return { desde: 1, hasta: 31 };
+}
+// reparte los pagos del plan de una solicitud entre los periodos del plan de inversión, según la
+// fecha de cada pago (anticipo/intermedio/final, o pago único). Si no existe un periodo para el
+// mes de un pago, lo crea automáticamente. Devuelve los periodos (con los nuevos agregados) y los
+// valores a poner en la fila de ese proyecto.
+function distribuirPagosEnPeriodos(solicitud, periodosExistentes) {
+  const pagos = solicitud.pagosConfirmados ? solicitud.pagos : (solicitud.pagosSugeridos?.tipoPago ? solicitud.pagosSugeridos : solicitud.pagos);
+  let tramos = tramosDePago(pagos).filter((t) => parseFloat(t.valor) > 0 && t.fecha);
+  // las solicitudes de compra (y las de servicio sin plan de pagos) no tienen anticipo/final —
+  // se usa la fecha estimada de entrega y el valor total como un solo pago
+  if (!tramos.length) {
+    const total = totalSolicitud(solicitud);
+    if (total > 0 && solicitud.fechaEstimada) tramos = [{ valor: total, fecha: solicitud.fechaEstimada }];
+  }
+  let periodos = [...periodosExistentes];
+  const valores = {};
+  tramos.forEach((t) => {
+    const [anio, mes, dia] = t.fecha.split("-").map(Number);
+    const diaNum = dia;
+    let periodo = periodos.find((pe) => {
+      const idxMes = indiceMesDesdeTexto(pe.mes);
+      if (idxMes !== mes - 1) return false;
+      const { desde, hasta } = parsearRangoDias(pe.rango);
+      return diaNum >= desde && diaNum <= hasta;
+    });
+    if (!periodo) {
+      // no hay ningún periodo para ese mes/rango todavía — se crea uno nuevo automáticamente
+      const nombreMes = NOMBRES_MESES[mes - 1];
+      periodo = { id: nextId(), mes: nombreMes.charAt(0).toUpperCase() + nombreMes.slice(1), etiqueta: "Semana", rango: `${dia}` };
+      periodos.push(periodo);
+    }
+    valores[periodo.id] = (parseFloat(valores[periodo.id]) || 0) + parseFloat(t.valor);
+  });
+  return { periodos, valores };
+}
+
 function periodoVacio() { return { id: nextId(), mes: "", etiqueta: "Semana", rango: "" }; }
-function proyectoVacio(item) { return { id: nextId(), item, nombre: "", valores: {}, destacado: false }; }
+function proyectoVacio(item) { return { id: nextId(), item, nombre: "", valores: {}, destacado: false, solicitudId: null }; }
 
 function inversionProyecto(proyecto) {
   return Object.values(proyecto.valores || {}).reduce((acc, v) => acc + (parseFloat(v) || 0), 0);
@@ -1258,7 +1305,7 @@ function totalGeneralPlan(proyectos) {
   return proyectos.reduce((acc, p) => acc + inversionProyecto(p), 0);
 }
 
-function PlanInversion({ empresas, currentUser }) {
+function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
   const { datos: planes, cargando, guardar: guardarPlanDB, eliminar: eliminarPlanDB } = useSupabaseTable('planes_inversion', {
     desdeDb: (r) => ({ id: r.id, titulo: r.titulo, empresaId: r.empresa_id, anio: r.anio, periodos: r.datos?.periodos || [], proyectos: r.datos?.proyectos || [] }),
     haciaDb: (r) => ({ id: r.id, titulo: r.titulo, empresa_id: r.empresaId, anio: r.anio, datos: { periodos: r.periodos || [], proyectos: r.proyectos || [] } }),
@@ -1319,6 +1366,19 @@ function PlanInversion({ empresas, currentUser }) {
   const quitarProyecto = (id) => actualizarPlan({ proyectos: plan.proyectos.filter((p) => p.id !== id) });
   const editarProyecto = (id, campo, val) => actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === id ? { ...p, [campo]: val } : p)) });
   const editarValor = (proyectoId, periodoId, val) => actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === proyectoId ? { ...p, valores: { ...p.valores, [periodoId]: val } } : p)) });
+
+  // vincula la fila con una solicitud real: trae el objetivo, y reparte cada pago de su plan de
+  // pagos en el periodo (mes) que le corresponda según la fecha — creando periodos nuevos si hace falta
+  const vincularSolicitud = (proyectoId, solicitudId) => {
+    if (!solicitudId) { actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === proyectoId ? { ...p, solicitudId: null } : p)) }); return; }
+    const solicitud = solicitudes.find((s) => s.id === solicitudId);
+    if (!solicitud) return;
+    const { periodos: periodosActualizados, valores } = distribuirPagosEnPeriodos(solicitud, plan.periodos);
+    actualizarPlan({
+      periodos: periodosActualizados,
+      proyectos: plan.proyectos.map((p) => (p.id === proyectoId ? { ...p, solicitudId, nombre: `${solicitud.folio} — ${solicitud.objetivo}`, valores } : p)),
+    });
+  };
 
   const descargarExcel = () => {
     if (!plan) return;
@@ -1426,12 +1486,20 @@ function PlanInversion({ empresas, currentUser }) {
                       {puedeEditar && <label className="no-print flex items-center justify-center gap-1 mt-1 text-[9px] text-slate-400"><input type="checkbox" checked={!!p.destacado} onChange={(e) => editarProyecto(p.id, "destacado", e.target.checked)} /> resaltar</label>}
                     </td>
                     <td className="border border-slate-200 px-2 py-1.5 align-top">
+                      {puedeEditar && (
+                        <select value={p.solicitudId || ""} onChange={(e) => vincularSolicitud(p.id, e.target.value)} className="no-print w-full text-[10px] border border-slate-200 rounded px-1 py-0.5 mb-1 text-slate-500">
+                          <option value="">— Escribir manual, o vincular con una solicitud —</option>
+                          {solicitudes.filter((s) => !["rechazada"].includes(s.status)).map((s) => <option key={s.id} value={s.id}>{s.folio} — {s.objetivo?.slice(0, 40)}</option>)}
+                        </select>
+                      )}
+                      {p.solicitudId && onAbrir && <button onClick={() => onAbrir(p.solicitudId)} className="no-print text-[10px] text-indigo-600 underline mb-1 block">Ver solicitud vinculada →</button>}
+                      {p.solicitudId && <div className="no-print text-[9px] text-slate-400 mb-1">Los valores por periodo vienen del plan de pagos de esa solicitud.</div>}
                       {puedeEditar ? <textarea value={p.nombre} onChange={(e) => editarProyecto(p.id, "nombre", e.target.value)} rows={p.nombre?.length > 80 ? 4 : 1} className="w-full text-xs border-0 bg-transparent resize-y focus:bg-white" /> : <span className="whitespace-pre-wrap">{p.nombre}</span>}
                     </td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right align-top font-medium">{fmt(inversionProyecto(p))}</td>
                     {plan.periodos.map((pe) => (
                       <td key={pe.id} className="border border-slate-200 px-1 py-1.5 text-right align-top">
-                        {puedeEditar ? <InputMiles value={p.valores?.[pe.id] || ""} onChange={(v) => editarValor(p.id, pe.id, v)} className="w-full text-right text-xs border-0 bg-transparent focus:bg-white px-1" /> : (parseFloat(p.valores?.[pe.id]) > 0 ? fmt(p.valores[pe.id]) : "")}
+                        {puedeEditar && !p.solicitudId ? <InputMiles value={p.valores?.[pe.id] || ""} onChange={(v) => editarValor(p.id, pe.id, v)} className="w-full text-right text-xs border-0 bg-transparent focus:bg-white px-1" /> : (parseFloat(p.valores?.[pe.id]) > 0 ? fmt(p.valores[pe.id]) : "")}
                       </td>
                     ))}
                     {puedeEditar && <td className="no-print border border-slate-200"></td>}
@@ -4794,7 +4862,7 @@ export default function App() {
         ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
           <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} />
         ) : tab === "planInversion" && puedeVerPlanInversion(currentUser) ? (
-          <PlanInversion empresas={empresas} currentUser={currentUser} />
+          <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             currentUser={currentUser}
