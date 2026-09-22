@@ -1380,6 +1380,33 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
     });
   };
 
+  // arma automáticamente una fila por cada solicitud real de la empresa/año del plan que todavía
+  // no esté vinculada — no duplica las que ya existen, y no toca las filas manuales que haya
+  const generarDesdeSolicitudes = () => {
+    const yaVinculadas = new Set(plan.proyectos.map((p) => p.solicitudId).filter(Boolean));
+    const anioTieneAlgunPago = (s) => {
+      const pagos = s.pagosConfirmados ? s.pagos : (s.pagosSugeridos?.tipoPago ? s.pagosSugeridos : s.pagos);
+      const fechas = tramosDePago(pagos).filter((t) => parseFloat(t.valor) > 0 && t.fecha).map((t) => t.fecha);
+      if (fechas.length) return fechas.some((f) => f.startsWith(String(plan.anio)));
+      return (s.fechaEstimada || s.fechaCreacion || "").startsWith(String(plan.anio));
+    };
+    const candidatas = solicitudes.filter((s) =>
+      !["rechazada"].includes(s.status) &&
+      (!plan.empresaId || s.empresaId === plan.empresaId) &&
+      anioTieneAlgunPago(s) &&
+      !yaVinculadas.has(s.id)
+    );
+    if (!candidatas.length) { alert("No hay solicitudes nuevas por agregar (de esta empresa y año) que no estén ya en el plan."); return; }
+    let periodos = [...plan.periodos];
+    let siguienteItem = (plan.proyectos.reduce((max, p) => Math.max(max, parseFloat(p.item) || 0), 0)) + 1;
+    const nuevosProyectos = candidatas.map((s) => {
+      const r = distribuirPagosEnPeriodos(s, periodos);
+      periodos = r.periodos;
+      return { id: nextId(), item: siguienteItem++, nombre: `${s.folio} — ${s.objetivo}`, valores: r.valores, destacado: false, solicitudId: s.id };
+    });
+    actualizarPlan({ periodos, proyectos: [...plan.proyectos, ...nuevosProyectos] });
+  };
+
   const descargarExcel = () => {
     if (!plan) return;
     const filas = [];
@@ -1415,6 +1442,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
             </select>
           )}
           {puedeEditar && <button onClick={crearPlan} className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Plus size={13} /> Nuevo plan</button>}
+          {plan && puedeEditar && <button onClick={generarDesdeSolicitudes} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><TrendingUp size={13} /> Generar desde solicitudes</button>}
           {plan && <button onClick={descargarExcel} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Excel</button>}
           {plan && <button onClick={() => setExportandoPDF(true)} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> PDF</button>}
         </div>
