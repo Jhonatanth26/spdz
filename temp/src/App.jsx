@@ -1490,10 +1490,10 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
                 <tr className="bg-slate-50">
                   {puedeEditar && <th rowSpan={3} className="no-print border border-slate-200 px-1 py-1.5 w-6"><input type="checkbox" checked={todosSeleccionados} onChange={alternarTodos} /></th>}
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-10">ITEM</th>
-                  <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 min-w-[220px]">PROYECTO</th>
+                  <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 min-w-[340px]">PROYECTO</th>
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-28">INVERSIÓN</th>
                   {plan.periodos.map((pe) => (
-                    <th key={pe.id} className="border border-slate-200 px-1 py-1 min-w-[110px] relative group">
+                    <th key={pe.id} className="border border-slate-200 px-1 py-1 min-w-[72px] max-w-[80px] relative group">
                       {puedeEditar ? <input value={pe.mes} onChange={(e) => editarPeriodo(pe.id, "mes", e.target.value)} placeholder="Mes" className="w-full text-center text-xs font-semibold border-0 bg-transparent focus:bg-white" /> : pe.mes}
                       {puedeEditar && <button onClick={() => quitarPeriodo(pe.id)} className="no-print absolute -top-1 -right-1 text-rose-400 hover:text-rose-600 bg-white rounded-full opacity-0 group-hover:opacity-100"><Trash2 size={11} /></button>}
                     </th>
