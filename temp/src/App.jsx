@@ -1313,6 +1313,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
   });
   const [planActivoId, setPlanActivoId] = useState(null);
   const [exportandoPDF, setExportandoPDF] = useState(false);
+  const [seleccionados, setSeleccionados] = useState([]);
   // buffer local: la pantalla se actualiza al instante con cada tecla; el guardado en Supabase
   // ocurre en segundo plano con un pequeño retraso, para no esperar el viaje de ida y vuelta
   const [planLocal, setPlanLocal] = useState(null);
@@ -1325,7 +1326,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
   // sincroniza el buffer local cuando cambia de plan, o cuando llega la primera carga desde la BD
   useEffect(() => {
     const planDB = planes.find((p) => p.id === planActivoId);
-    if (planDB && (!planLocal || planLocal.id !== planDB.id)) setPlanLocal(planDB);
+    if (planDB && (!planLocal || planLocal.id !== planDB.id)) { setPlanLocal(planDB); setSeleccionados([]); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planActivoId, planes]);
 
@@ -1364,6 +1365,15 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
 
   const agregarProyecto = () => actualizarPlan({ proyectos: [...(plan.proyectos || []), proyectoVacio((plan.proyectos?.length || 0) + 1)] });
   const quitarProyecto = (id) => actualizarPlan({ proyectos: plan.proyectos.filter((p) => p.id !== id) });
+  const alternarSeleccion = (id) => setSeleccionados((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  const todosSeleccionados = plan?.proyectos.length > 0 && seleccionados.length === plan.proyectos.length;
+  const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : plan.proyectos.map((p) => p.id));
+  const borrarSeleccionados = () => {
+    if (!seleccionados.length) return;
+    if (!confirm(`¿Borrar ${seleccionados.length} proyecto(s) del plan? Esto no se puede deshacer.`)) return;
+    actualizarPlan({ proyectos: plan.proyectos.filter((p) => !seleccionados.includes(p.id)) });
+    setSeleccionados([]);
+  };
   const editarProyecto = (id, campo, val) => actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === id ? { ...p, [campo]: val } : p)) });
   const editarValor = (proyectoId, periodoId, val) => actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === proyectoId ? { ...p, valores: { ...p.valores, [periodoId]: val } } : p)) });
 
@@ -1443,6 +1453,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
           )}
           {puedeEditar && <button onClick={crearPlan} className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Plus size={13} /> Nuevo plan</button>}
           {plan && puedeEditar && <button onClick={generarDesdeSolicitudes} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><TrendingUp size={13} /> Generar desde solicitudes</button>}
+          {plan && puedeEditar && seleccionados.length > 0 && <button onClick={borrarSeleccionados} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Trash2 size={13} /> Borrar seleccionadas ({seleccionados.length})</button>}
           {plan && <button onClick={descargarExcel} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Excel</button>}
           {plan && <button onClick={() => setExportandoPDF(true)} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> PDF</button>}
         </div>
@@ -1477,6 +1488,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
             <table className="w-full text-xs border-collapse min-w-[900px]">
               <thead>
                 <tr className="bg-slate-50">
+                  {puedeEditar && <th rowSpan={3} className="no-print border border-slate-200 px-1 py-1.5 w-6"><input type="checkbox" checked={todosSeleccionados} onChange={alternarTodos} /></th>}
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-10">ITEM</th>
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 min-w-[220px]">PROYECTO</th>
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-28">INVERSIÓN</th>
@@ -1505,7 +1517,8 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
               </thead>
               <tbody>
                 {plan.proyectos.map((p) => (
-                  <tr key={p.id} className={p.destacado ? "bg-emerald-100/70" : ""}>
+                  <tr key={p.id} className={`${p.destacado ? "bg-emerald-100/70" : ""} ${seleccionados.includes(p.id) ? "outline outline-2 outline-indigo-300" : ""}`}>
+                    {puedeEditar && <td className="no-print border border-slate-200 px-1 py-1.5 text-center align-top"><input type="checkbox" checked={seleccionados.includes(p.id)} onChange={() => alternarSeleccion(p.id)} /></td>}
                     <td className="border border-slate-200 px-2 py-1.5 text-center align-top">
                       <div className="flex items-center gap-1 justify-center">
                         {p.item}
@@ -1534,6 +1547,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
                   </tr>
                 ))}
                 <tr className="bg-slate-100 font-semibold">
+                  {puedeEditar && <td className="no-print border border-slate-200"></td>}
                   <td className="border border-slate-200 px-2 py-1.5 text-center">{plan.proyectos.length}</td>
                   <td className="border border-slate-200 px-2 py-1.5">TOTAL INVERSIÓN</td>
                   <td className="border border-slate-200 px-2 py-1.5 text-right">{fmt(totalGeneralPlan(plan.proyectos))}</td>
