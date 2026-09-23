@@ -144,10 +144,23 @@ function desgloseCotizacion(cot, cantidadSolicitada) {
   const iva = subtotal * (ivaPct / 100);
   return { subtotal, iva, total: subtotal + iva };
 }
-function calcularScores(cotizaciones, cantidadSolicitada) {
+function tieneAiuValores(aiu) { return !!aiu && (parseFloat(aiu.administracionPct) || parseFloat(aiu.utilidadPct) || parseFloat(aiu.imprevistosPct)); }
+// total real de una cotización de servicio: usa el AIU propio de esa cotización si lo tiene, si no
+// el del ítem como respaldo — es el mismo criterio que usa el cálculo real de la solicitud
+function totalConAiuCotizacion(desglose, cotizacion, itemAiu) {
+  const aiu = tieneAiuValores(cotizacion?.aiu) ? cotizacion.aiu : (itemAiu || {});
+  const adm = desglose.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
+  const util = desglose.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
+  const imprev = desglose.subtotal * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+  return desglose.subtotal + adm + util + imprev + util * 0.19;
+}
+// sinIva/itemAiu: cuando se pasan (órdenes de servicio), la calificación por precio usa el total
+// CON AIU de cada proveedor, no solo el Costo Directo — si no, se recomendaría mal cuando dos
+// proveedores tienen Costo Directo parecido pero AIU muy distinto
+function calcularScores(cotizaciones, cantidadSolicitada, sinIva, itemAiu) {
   if (!cotizaciones.length) return [];
   const desgloses = cotizaciones.map((c) => desgloseCotizacion(c, cantidadSolicitada));
-  const totales = desgloses.map((d) => d.total);
+  const totales = desgloses.map((d, i) => (sinIva ? totalConAiuCotizacion(d, cotizaciones[i], itemAiu) : d.total));
   const entregas = cotizaciones.map((c) => parseFloat(c.diasEntrega) || 0);
   const condiciones = cotizaciones.map((c) => parseFloat(c.condicionesScore) || 0);
   const minTotal = Math.min(...totales), maxTotal = Math.max(...totales);
@@ -157,11 +170,11 @@ function calcularScores(cotizaciones, cantidadSolicitada) {
     const precioScore = maxTotal === minTotal ? 1 : (maxTotal - totales[i]) / (maxTotal - minTotal);
     const entregaScore = maxEnt === minEnt ? 1 : (maxEnt - entregas[i]) / (maxEnt - minEnt);
     const condScore = maxCond === minCond ? 1 : (condiciones[i] - minCond) / (maxCond - minCond);
-    return { ...c, ...desgloses[i], score: precioScore * 0.6 + entregaScore * 0.25 + condScore * 0.15 };
+    return { ...c, ...desgloses[i], totalConAiu: sinIva ? totales[i] : undefined, score: precioScore * 0.6 + entregaScore * 0.25 + condScore * 0.15 };
   });
 }
-function mejorCotizacionIdx(cotizaciones, cantidadSolicitada) {
-  const scored = calcularScores(cotizaciones, cantidadSolicitada);
+function mejorCotizacionIdx(cotizaciones, cantidadSolicitada, sinIva, itemAiu) {
+  const scored = calcularScores(cotizaciones, cantidadSolicitada, sinIva, itemAiu);
   if (!scored.length) return -1;
   let best = 0;
   scored.forEach((s, i) => { if (s.score > scored[best].score) best = i; });
@@ -488,12 +501,12 @@ function datosSemilla() {
 /* ---------------------------------------------------------
    UI GENÉRICOS
 --------------------------------------------------------- */
-function Badge({ children, tone = "slate" }) {
+function Badge({ children, tone = "slate", title }) {
   const tones = {
     slate: "bg-slate-100 text-slate-700 border-slate-200", green: "bg-emerald-50 text-emerald-700 border-emerald-200",
     amber: "bg-amber-50 text-amber-700 border-amber-200", red: "bg-rose-50 text-rose-700 border-rose-200", blue: "bg-blue-50 text-blue-700 border-blue-200",
   };
-  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border ${tones[tone]}`}>{children}</span>;
+  return <span title={title} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium border cursor-default ${tones[tone]}`}>{children}</span>;
 }
 
 function Stepper({ status }) {
@@ -1292,6 +1305,40 @@ function distribuirPagosEnPeriodos(solicitud, periodosExistentes) {
   return { periodos, valores };
 }
 
+// arma una fecha aproximada (el primer día del rango) para un periodo, usada para poder ordenar
+// los pagos cronológicamente al reconstruir el plan de pagos de la solicitud
+function fechaAproximadaPeriodo(periodo, anio) {
+  const idxMes = indiceMesDesdeTexto(periodo.mes);
+  if (idxMes < 0) return null;
+  const { desde } = parsearRangoDias(periodo.rango);
+  const mesStr = String(idxMes + 1).padStart(2, "0");
+  const diaStr = String(Math.min(Math.max(desde, 1), 28)).padStart(2, "0"); // 28 para no salirse de ningún mes
+  return `${anio}-${mesStr}-${diaStr}`;
+}
+
+// operación inversa a distribuirPagosEnPeriodos: toma los valores que quedaron en la fila del plan
+// de inversión (después de ajustes manuales) y arma un plan de pagos válido para la solicitud —
+// hasta 3 pagos caben como anticipo/intermedio/final; con 1 solo, queda como pago único
+function reconstruirPlanDesdePeriodos(proyecto, periodos, anio) {
+  const conValor = periodos
+    .map((pe) => ({ periodo: pe, valor: parseFloat(proyecto.valores?.[pe.id]) || 0, fecha: fechaAproximadaPeriodo(pe, anio) }))
+    .filter((x) => x.valor > 0)
+    .sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""));
+  if (!conValor.length) return { error: "No hay ningún valor puesto en las columnas de esta fila." };
+  if (conValor.length > 3) return { error: "Esta fila tiene valores en más de 3 periodos — el plan de pagos de una solicitud admite máximo 3 (anticipo, intermedio y final). Consolida los valores en 3 periodos o menos antes de actualizar." };
+  if (conValor.some((x) => !x.fecha)) return { error: "Alguno de los periodos con valor no tiene un mes reconocible — revisa el nombre del mes en el encabezado de esa columna." };
+
+  let pagos = planPagosVacio();
+  if (conValor.length === 1) {
+    pagos = { ...pagos, tipoPago: "contado", pagoUnico: { valor: conValor[0].valor, fecha: conValor[0].fecha } };
+  } else if (conValor.length === 2) {
+    pagos = { ...pagos, tipoPago: "plan", anticipo: { valor: conValor[0].valor, fecha: conValor[0].fecha }, final: { valor: conValor[1].valor, fecha: conValor[1].fecha } };
+  } else {
+    pagos = { ...pagos, tipoPago: "plan", anticipo: { valor: conValor[0].valor, fecha: conValor[0].fecha }, intermedio: { activo: true, valor: conValor[1].valor, fecha: conValor[1].fecha }, final: { valor: conValor[2].valor, fecha: conValor[2].fecha } };
+  }
+  return { pagos };
+}
+
 function periodoVacio() { return { id: nextId(), mes: "", etiqueta: "Semana", rango: "" }; }
 function proyectoVacio(item) { return { id: nextId(), item, nombre: "", valores: {}, destacado: false, solicitudId: null }; }
 
@@ -1305,7 +1352,7 @@ function totalGeneralPlan(proyectos) {
   return proyectos.reduce((acc, p) => acc + inversionProyecto(p), 0);
 }
 
-function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
+function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualizarSolicitud }) {
   const { datos: planes, cargando, guardar: guardarPlanDB, eliminar: eliminarPlanDB } = useSupabaseTable('planes_inversion', {
     desdeDb: (r) => ({ id: r.id, titulo: r.titulo, empresaId: r.empresa_id, anio: r.anio, periodos: r.datos?.periodos || [], proyectos: r.datos?.proyectos || [] }),
     haciaDb: (r) => ({ id: r.id, titulo: r.titulo, empresa_id: r.empresaId, anio: r.anio, datos: { periodos: r.periodos || [], proyectos: r.proyectos || [] } }),
@@ -1415,6 +1462,21 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
       return { id: nextId(), item: siguienteItem++, nombre: `${s.folio} — ${s.objetivo}`, valores: r.valores, destacado: false, solicitudId: s.id };
     });
     actualizarPlan({ periodos, proyectos: [...plan.proyectos, ...nuevosProyectos] });
+  };
+
+  // empuja los valores (ya ajustados a mano) de una fila vinculada de vuelta al plan de pagos
+  // real de la solicitud — deja el plan como "confirmado" ya que viene de un ajuste deliberado
+  const [actualizando, setActualizando] = useState(null);
+  const actualizarPlanDePagos = async (proyecto) => {
+    const solicitud = solicitudes.find((s) => s.id === proyecto.solicitudId);
+    if (!solicitud) return;
+    const { pagos, error } = reconstruirPlanDesdePeriodos(proyecto, plan.periodos, plan.anio);
+    if (error) { alert(error); return; }
+    if (!confirm(`Esto va a reemplazar el plan de pagos de la solicitud ${solicitud.folio} con los valores puestos en esta fila. ¿Confirmas?`)) return;
+    setActualizando(proyecto.id);
+    await onActualizarSolicitud({ ...solicitud, pagos, pagosConfirmados: true });
+    setActualizando(null);
+    alert(`Plan de pagos de ${solicitud.folio} actualizado.`);
   };
 
   const descargarExcel = () => {
@@ -1534,13 +1596,18 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir }) {
                         </select>
                       )}
                       {p.solicitudId && onAbrir && <button onClick={() => onAbrir(p.solicitudId)} className="no-print text-[10px] text-indigo-600 underline mb-1 block">Ver solicitud vinculada →</button>}
-                      {p.solicitudId && <div className="no-print text-[9px] text-slate-400 mb-1">Los valores por periodo vienen del plan de pagos de esa solicitud.</div>}
+                      {p.solicitudId && <div className="no-print text-[9px] text-slate-400 mb-1">Los valores por periodo se trajeron del plan de pagos de esa solicitud — puedes ajustarlos aquí y luego actualizarla.</div>}
+                      {p.solicitudId && puedeEditar && (
+                        <button onClick={() => actualizarPlanDePagos(p)} disabled={actualizando === p.id} className="no-print text-[10px] bg-amber-500 text-white px-2 py-1 rounded font-medium mb-1 flex items-center gap-1 disabled:opacity-50">
+                          <CalendarClock size={11} /> {actualizando === p.id ? "Actualizando..." : "Actualizar plan de pagos"}
+                        </button>
+                      )}
                       {puedeEditar ? <textarea value={p.nombre} onChange={(e) => editarProyecto(p.id, "nombre", e.target.value)} rows={p.nombre?.length > 80 ? 4 : 1} className="w-full text-xs border-0 bg-transparent resize-y focus:bg-white" /> : <span className="whitespace-pre-wrap">{p.nombre}</span>}
                     </td>
                     <td className="border border-slate-200 px-2 py-1.5 text-right align-top font-medium">{fmt(inversionProyecto(p))}</td>
                     {plan.periodos.map((pe) => (
                       <td key={pe.id} className="border border-slate-200 px-1 py-1.5 text-right align-top">
-                        {puedeEditar && !p.solicitudId ? <InputMiles value={p.valores?.[pe.id] || ""} onChange={(v) => editarValor(p.id, pe.id, v)} className="w-full text-right text-xs border-0 bg-transparent focus:bg-white px-1" /> : (parseFloat(p.valores?.[pe.id]) > 0 ? fmt(p.valores[pe.id]) : "")}
+                        {puedeEditar ? <InputMiles value={p.valores?.[pe.id] || ""} onChange={(v) => editarValor(p.id, pe.id, v)} className="w-full text-right text-xs border-0 bg-transparent focus:bg-white px-1" /> : (parseFloat(p.valores?.[pe.id]) > 0 ? fmt(p.valores[pe.id]) : "")}
                       </td>
                     ))}
                     {puedeEditar && <td className="no-print border border-slate-200"></td>}
@@ -2584,17 +2651,23 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
   );
 }
 
-function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, soloLectura, sinIva }) {
-  const scored = calcularScores(item.cotizaciones, item.cantidad);
-  const bestIdx = mejorCotizacionIdx(item.cotizaciones, item.cantidad);
+function ComparativoTabla({ item, numero, proveedores, onSeleccionar, seleccionada, soloLectura, sinIva }) {
+  const scored = calcularScores(item.cotizaciones, item.cantidad, sinIva, item.aiu);
+  const bestIdx = mejorCotizacionIdx(item.cotizaciones, item.cantidad, sinIva, item.aiu);
   const elegidaIdx = seleccionada ?? bestIdx;
   const elegida = scored[elegidaIdx];
   const [pendienteIdx, setPendienteIdx] = useState(null);
   const [obsTemp, setObsTemp] = useState("");
   const nombreProv = (c) => proveedores.find((p) => p.id === c.proveedorId)?.nombre || c.proveedorNombre || "—";
-  // total incluyendo el AIU propio de esa cotización (cada proveedor puede tener % distintos)
+  const tieneAiu = (aiu) => !!aiu && (parseFloat(aiu.administracionPct) || parseFloat(aiu.utilidadPct) || parseFloat(aiu.imprevistosPct));
+  // de dónde sale el AIU que se está aplicando: de esta cotización puntual, o del ítem en general (respaldo)
+  const origenAiu = (c) => (tieneAiu(c.aiu) ? "cotizacion" : tieneAiu(item.aiu) ? "item" : null);
+  const aiuAplicado = (c) => (tieneAiu(c.aiu) ? c.aiu : item.aiu || {});
+  const detalleAiu = (c) => { const a = aiuAplicado(c); return `Admón. ${a.administracionPct || 0}% · Utilidad ${a.utilidadPct || 0}% · Imprevistos ${a.imprevistosPct || 0}%`; };
+  // total incluyendo el AIU propio de esa cotización (cada proveedor puede tener % distintos); si la
+  // cotización no tiene AIU puesto, usa el del ítem como respaldo — igual que en el cálculo real
   const totalConAiu = (c) => {
-    const aiu = c.aiu || {};
+    const aiu = aiuAplicado(c);
     const adm = c.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
     const util = c.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
     const imprev = c.subtotal * (parseFloat(aiu.imprevistosPct) || 0) / 100;
@@ -2611,7 +2684,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
   return (
     <div className="border border-slate-200 rounded-lg overflow-hidden">
       <div className="px-3 py-2 bg-slate-50 text-sm font-medium text-slate-700 flex items-center justify-between">
-        <span>{item.nombre} — {item.cantidad} {item.unidad}</span>
+        <span>{numero ? `${numero}. ` : ""}{item.nombre} — {item.cantidad} {item.unidad}</span>
         {soloLectura && <span className="text-[11px] text-slate-400 flex items-center gap-1"><Lock size={11} /> Bloqueado (orden ya generada)</span>}
       </div>
       <table className="w-full text-xs">
@@ -2624,7 +2697,16 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
             <td className="px-3 py-2 text-right">{c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}</td>
             <td className="px-3 py-2 text-right text-slate-400">× {item.cantidad}</td>
             <td className="px-3 py-2 text-right font-medium">{fmt(sinIva ? c.subtotal : c.total)}</td>
-            {sinIva && <td className="px-3 py-2 text-right font-semibold text-slate-700">{fmt(totalConAiu(c))}</td>}
+            {sinIva && (
+              <td className="px-3 py-2 text-right">
+                <div className="font-semibold text-slate-700">{fmt(totalConAiu(c))}</div>
+                {origenAiu(c) && (
+                  <div title={detalleAiu(c)} className={`inline-block mt-0.5 text-[9px] px-1.5 py-0.5 rounded-full font-medium cursor-help ${origenAiu(c) === "cotizacion" ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-500"}`}>
+                    AIU de {origenAiu(c) === "cotizacion" ? "esta cotización" : "el ítem"}
+                  </div>
+                )}
+              </td>
+            )}
             <td className="px-3 py-2 text-right">{c.diasEntrega} días</td>
             <td className="px-3 py-2 text-right font-medium">{(c.score * 100).toFixed(0)}%</td>
             <td className="px-3 py-2 text-right"><button disabled={soloLectura} onClick={() => clickElegir(i)} className={`text-[11px] px-2 py-1 rounded-md border font-medium disabled:opacity-40 ${elegidaIdx === i ? "bg-indigo-600 text-white border-indigo-600" : "border-slate-200 text-slate-600"}`}>{elegidaIdx === i ? "Seleccionada" : "Elegir"}</button></td>
@@ -2643,7 +2725,7 @@ function ComparativoTabla({ item, proveedores, onSeleccionar, seleccionada, solo
       )}
       {elegida && (
         <div className="px-3 py-2 bg-slate-50 border-t border-slate-100 text-xs text-slate-600 flex justify-end gap-4">
-          {sinIva ? <><span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span><span>Total con AIU: <b>{fmt(totalConAiu(elegida))}</b></span></> : (<><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></>)}
+          {sinIva ? <><span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span><span>Total con AIU: <b>{fmt(totalConAiu(elegida))}</b> {origenAiu(elegida) && <span className="text-[10px] text-slate-400">({detalleAiu(elegida)} — de {origenAiu(elegida) === "cotizacion" ? "esta cotización" : "el ítem"})</span>}</span></> : (<><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></>)}
         </div>
       )}
       {elegida?.pagos && (
@@ -2672,11 +2754,23 @@ function AiuEditor({ solicitud, onGuardarItems, editable }) {
       <div className="font-medium text-slate-700 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) por ítem {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
       <div className="text-[11px] text-slate-400">Cada ítem tiene su propio AIU, independiente del proveedor que finalmente se adjudique. Si el ítem ya tiene una cotización seleccionada, el AIU de esa cotización tiene prioridad sobre el que se ve aquí.</div>
       <div className="space-y-3">
-        {solicitud.items.map((it) => {
+        {solicitud.items.map((it, idx) => {
           const aiu = it.aiu || {};
+          const tieneAiuCot = (a) => !!a && (parseFloat(a.administracionPct) || parseFloat(a.utilidadPct) || parseFloat(a.imprevistosPct));
+          let cotConAiu = null;
+          if (it.cotizaciones?.length) {
+            const sel = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad);
+            const cot = it.cotizaciones[sel];
+            if (tieneAiuCot(cot?.aiu)) cotConAiu = cot;
+          }
           return (
             <div key={it.id} className="border border-slate-100 rounded-lg p-2.5">
-              <div className="text-xs font-medium text-slate-600 mb-1.5 truncate">{it.nombre}</div>
+              <div className="text-xs font-medium text-slate-600 mb-1.5 truncate">{idx + 1}. {it.nombre}</div>
+              {cotConAiu ? (
+                <div className="text-[11px] text-indigo-600 bg-indigo-50 rounded-md px-2 py-1.5 mb-1">
+                  Se está usando el AIU de la cotización de <b>{cotConAiu.proveedorNombre}</b> (Admón. {cotConAiu.aiu.administracionPct || 0}%, Utilidad {cotConAiu.aiu.utilidadPct || 0}%, Imprevistos {cotConAiu.aiu.imprevistosPct || 0}%) — el que se ve abajo es solo el respaldo, no el que está aplicando.
+                </div>
+              ) : null}
               <div className="grid grid-cols-3 gap-2">
                 <div><label className="text-[10px] text-slate-400 block mb-0.5">Admón. %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.administracionPct || ""} onChange={(e) => setItemAiu(it.id, "administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
                 <div><label className="text-[10px] text-slate-400 block mb-0.5">Utilidad %</label><input disabled={!editable} type="number" min="0" max="100" step="0.1" value={aiu.utilidadPct || ""} onChange={(e) => setItemAiu(it.id, "utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
@@ -2780,7 +2874,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
   const [pagos, setPagos] = useState({ ...planPagosVacio(), ...solicitud.pagos });
   const [corrigiendo, setCorrigiendo] = useState(false);
   // una vez la orden ya se envió al proveedor, las condiciones de pago quedan fijas — ya no se pueden tocar
-  const ocYaEnviada = ["oc_enviada", "recepcion", "completada"].includes(solicitud.status);
+  const ocYaEnviada = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
   // sin precios (ni cotización ni estimado), no hay contra qué cuadrar el plan — se habilita cuando Compras cargue precios
   const sinPrecio = !(total > 0);
   const pagado = totalPagado(pagos);
@@ -2837,13 +2931,13 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
       <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2 text-slate-700 font-medium"><CalendarClock size={16} /> Plan de pagos</div>
         <div className="flex items-center gap-2">
-          {solicitud.pagosConfirmados ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado por Dirección Financiera</Badge> : <Badge tone="amber">Pendiente de confirmación</Badge>}
+          {solicitud.pagosConfirmados ? <Badge tone={descuadrado ? "red" : "green"} title="Este estado no es un botón, solo indica el estado actual.">Confirmado{solicitud.pagosConfirmadosPor ? ` por ${solicitud.pagosConfirmadosPor.nombre} (${solicitud.pagosConfirmadosPor.rol})` : ""}</Badge> : <Badge tone="amber" title="Este estado no es un botón, solo indica el estado actual.">Pendiente de confirmación</Badge>}
           {solicitud.pagosConfirmados && !ocYaEnviada && puedeEditarPagos(currentUser) && <button onClick={onEditarDeNuevo} className="text-[11px] text-indigo-600 underline">Editar de nuevo</button>}
         </div>
       </div>
       {ocYaEnviada && (
         <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2 mb-2">
-          🔒 La orden ya fue enviada al proveedor — las condiciones de pago quedaron fijas y no se pueden modificar.
+          🔒 La orden ya fue generada — las condiciones de pago quedaron fijas y no se pueden modificar.
         </div>
       )}
       {sinPrecio && !ocYaEnviada && (
@@ -2866,7 +2960,7 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
           {editable && <button onClick={usarSugerencia} className="text-indigo-600 font-medium ml-2 shrink-0">Usar sugerencia</button>}
         </div>
       )}
-      {!editable && !solicitud.pagosConfirmados && <div className="text-[11px] text-slate-400 mb-3">Solo Dirección Financiera puede editar y confirmar este plan.</div>}
+      {!editable && !solicitud.pagosConfirmados && <div className="text-[11px] text-slate-400 mb-3">Solo quien tenga permiso de editar pagos (normalmente Dirección Financiera) puede editar y confirmar este plan.</div>}
 
       <div className="flex gap-2 mb-3">
         <button type="button" disabled={!editable} onClick={() => setTipoPago("plan")} className={`px-3 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Plan por etapas (máx. 3)</button>
@@ -2920,9 +3014,10 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
   const [firmandoIdx, setFirmandoIdx] = useState(null);
   const [generandoIdx, setGenerandoIdx] = useState(null);
   if (solicitud.status !== "orden") return null;
-  // gestionar y generar la orden es tarea exclusiva de Compras (o Administrador) — nadie más debería
-  // ver este panel en absoluto, ni siquiera en solo lectura, para evitar que alguien la regenere sin querer
-  if (!puedeGestionarCotizaciones(currentUser)) return null;
+  // gestionar/generar la orden es tarea de Compras; firmarla es tarea de Dirección Financiera —
+  // ambos roles necesitan ver este panel (cada quien solo puede tocar lo que le corresponde)
+  if (!puedeGestionarCotizaciones(currentUser) && !puedeAprobarFinanciera(currentUser)) return null;
+  const puedeGenerar = puedeGestionarCotizaciones(currentUser);
 
   const necesarios = proveedoresAdjudicadosDetalle(solicitud, proveedores);
   const ordenes = necesarios.map((n) => {
@@ -3017,15 +3112,19 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
             <div className="flex items-center gap-2 flex-wrap">
               {o.archivoFirmadoUrl ? (
                 <span className="text-[11px] text-slate-400 flex items-center gap-1"><Lock size={12} /> Ya firmada — no se puede volver a generar.</span>
-              ) : (
+              ) : puedeGenerar ? (
                 <>
                   <button onClick={() => generarOrdenAutomatica(i)} disabled={generandoIdx === i} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50 flex items-center gap-1"><FileText size={12} /> {generandoIdx === i ? "Generando..." : o.archivoOriginalUrl ? "Volver a generar la orden" : "Generar orden de servicio (automático)"}</button>
                   {o.archivoOriginalUrl && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Documento generado, listo para firmar.</span>}
                 </>
+              ) : (
+                <span className="text-[11px] text-amber-600">Pendiente de que Compras genere el documento.</span>
               )}
             </div>
-          ) : (
+          ) : puedeGenerar ? (
             <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar OC para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" soloPdf />
+          ) : (
+            !o.archivoOriginalUrl && <span className="text-[11px] text-amber-600">Pendiente de que Compras suba la orden del sistema contable.</span>
           )}
           {o.archivoOriginalUrl && (
             o.archivoFirmadoUrl ? (
@@ -3590,40 +3689,92 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
         <div><b>Fecha creación:</b> {solicitud.fechaCreacion}</div><div><b>Fecha estimada:</b> {solicitud.fechaEstimada || "—"}</div>
       </div>
 
-      {/* OBJETIVO Y JUSTIFICACIÓN */}
-      <div className="grid grid-cols-2 gap-3 text-xs">
-        <div><div className="font-medium text-slate-500 mb-0.5">Objetivo</div><div className="text-slate-600">{solicitud.objetivo}</div></div>
-        <div><div className="font-medium text-slate-500 mb-0.5">Justificación</div><div className="text-slate-600">{solicitud.justificacion}</div></div>
+      {/* OBJETIVO */}
+      <div className="text-xs">
+        <div className="font-medium text-slate-500 mb-0.5">Objetivo</div><div className="text-slate-600">{solicitud.objetivo}</div>
       </div>
 
       {/* ÍTEMS Y PROVEEDOR ADJUDICADO */}
       <div>
         <div className="text-xs font-medium text-slate-500 mb-1">Ítems adjudicados</div>
         <table className="w-full text-xs">
-          <thead className="text-slate-400 border-b border-slate-200"><tr><th className="text-left py-1">Ítem</th><th className="text-right py-1">Cant.</th><th className="text-left py-1">Proveedor</th><th className="text-right py-1">Total</th></tr></thead>
-          <tbody>{solicitud.items.map((it) => { const idx = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad); const cot = it.cotizaciones[idx]; const dd = desgloseItem(it);
-            return <tr key={it.id} className="border-t border-slate-100"><td className="py-1.5">{it.nombre}</td><td className="py-1.5 text-right">{it.cantidad} {it.unidad}</td><td className="py-1.5">{cot ? nombreProv(cot) : "—"}</td><td className="py-1.5 text-right">{fmt(dd.total)}</td></tr>; })}</tbody>
+          <thead className="text-slate-400 border-b border-slate-200">
+            <tr>
+              <th className="text-left py-1 px-2">Ítem</th>
+              <th className="text-right py-1 px-2">Cant.</th>
+              <th className="text-left py-1 px-2">Proveedor</th>
+              {pagoActivo ? (
+                <>
+                  <th className="text-right py-1 px-2">Costo Directo</th>
+                  <th className="text-right py-1 px-2">AIU</th>
+                  <th className="text-right py-1 px-2">Total</th>
+                </>
+              ) : (
+                <th className="text-right py-1 px-2">Total</th>
+              )}
+            </tr>
+          </thead>
+          <tbody>{solicitud.items.map((it) => { const idx = it.cotizacionSeleccionada ?? mejorCotizacionIdx(it.cotizaciones, it.cantidad, pagoActivo, it.aiu); const cot = it.cotizaciones[idx]; const dd = desgloseItem(it);
+            const aiuUsado = tieneAiuValores(cot?.aiu) ? cot.aiu : (it.aiu || {});
+            const aiuTexto = `A${aiuUsado.administracionPct || 0} U${aiuUsado.utilidadPct || 0} I${aiuUsado.imprevistosPct || 0}`;
+            return (
+              <tr key={it.id} className="border-t border-slate-100">
+                <td className="py-1.5 px-2">{it.nombre}</td>
+                <td className="py-1.5 px-2 text-right whitespace-nowrap">{it.cantidad} {it.unidad}</td>
+                <td className="py-1.5 px-2">{cot ? nombreProv(cot) : "—"}</td>
+                {pagoActivo ? (
+                  <>
+                    <td className="py-1.5 px-2 text-right">{fmt(dd.subtotal)}</td>
+                    <td className="py-1.5 px-2 text-right whitespace-nowrap">{aiuTexto}%</td>
+                    <td className="py-1.5 px-2 text-right">{fmt(totalConAiuCotizacion(dd, cot, it.aiu))}</td>
+                  </>
+                ) : (
+                  <td className="py-1.5 px-2 text-right">{fmt(dd.total)}</td>
+                )}
+              </tr>
+            );
+          })}</tbody>
         </table>
       </div>
 
-      {/* HISTÓRICO DE COTIZACIONES POR ÍTEM (las 3, no solo la elegida) */}
+      {/* HISTÓRICO DE COTIZACIONES POR ÍTEM — en compra se ven las hasta 3 recibidas; en servicio
+          solo el proveedor adjudicado (sin precio inicial ni score, que no aportan al documento final) */}
       {solicitud.items.some((it) => it.cotizaciones.length > 0) && (
         <div>
-          <div className="text-xs font-medium text-slate-500 mb-1">Histórico de cotizaciones recibidas</div>
+          <div className="text-xs font-medium text-slate-500 mb-1">{pagoActivo ? "Proveedor adjudicado por ítem" : "Histórico de cotizaciones recibidas"}</div>
           {solicitud.items.filter((it) => it.cotizaciones.length > 0).map((it) => {
-            const scored = calcularScores(it.cotizaciones, it.cantidad);
-            const bestIdx = mejorCotizacionIdx(it.cotizaciones, it.cantidad);
+            const scored = calcularScores(it.cotizaciones, it.cantidad, pagoActivo, it.aiu);
+            const bestIdx = mejorCotizacionIdx(it.cotizaciones, it.cantidad, pagoActivo, it.aiu);
             const elegidaIdx = it.cotizacionSeleccionada ?? bestIdx;
+            const filas = pagoActivo ? [scored[elegidaIdx]].filter(Boolean) : scored;
             return (
               <div key={it.id} className="mb-2">
                 <div className="text-[11px] font-medium text-slate-600">{it.nombre} ({it.cantidad} {it.unidad})</div>
                 <table className="w-full text-[11px] mb-1">
-                  <thead className="text-slate-400 border-b border-slate-100"><tr><th className="text-left py-0.5">Proveedor</th><th className="text-right py-0.5">Precio inicial</th><th className="text-right py-0.5">Precio final neg.</th><th className="text-right py-0.5">Total</th><th className="text-right py-0.5">Entrega</th><th className="text-right py-0.5">Score</th><th className="text-center py-0.5">Elegida</th></tr></thead>
-                  <tbody>{scored.map((c, i) => (
-                    <tr key={i} className="border-t border-slate-50"><td className="py-0.5">{nombreProv(c)}</td><td className="py-0.5 text-right">{fmt(c.precioUnitario)}</td><td className="py-0.5 text-right">{c.precioFinal ? fmt(c.precioFinal) : "—"}</td><td className="py-0.5 text-right">{fmt(c.total)}</td><td className="py-0.5 text-right">{c.diasEntrega} días</td><td className="py-0.5 text-right">{(c.score * 100).toFixed(0)}%</td><td className="py-0.5 text-center">{i === elegidaIdx ? "✓" : ""}</td></tr>
+                  <thead className="text-slate-400 border-b border-slate-100">
+                    <tr>
+                      <th className="text-left py-0.5 px-1.5">Proveedor</th>
+                      {!pagoActivo && <th className="text-right py-0.5 px-1.5">Precio inicial</th>}
+                      <th className="text-right py-0.5 px-1.5">Precio final neg.</th>
+                      <th className="text-right py-0.5 px-1.5">Total</th>
+                      <th className="text-right py-0.5 px-1.5">Entrega</th>
+                      {!pagoActivo && <th className="text-right py-0.5 px-1.5">Score</th>}
+                      {!pagoActivo && <th className="text-center py-0.5 px-1.5">Elegida</th>}
+                    </tr>
+                  </thead>
+                  <tbody>{filas.map((c, i) => (
+                    <tr key={i} className="border-t border-slate-50">
+                      <td className="py-0.5 px-1.5">{nombreProv(c)}</td>
+                      {!pagoActivo && <td className="py-0.5 px-1.5 text-right">{fmt(c.precioUnitario)}</td>}
+                      <td className="py-0.5 px-1.5 text-right">{c.precioFinal ? fmt(c.precioFinal) : "—"}</td>
+                      <td className="py-0.5 px-1.5 text-right">{fmt(pagoActivo ? totalConAiuCotizacion(c, c, it.aiu) : c.total)}</td>
+                      <td className="py-0.5 px-1.5 text-right">{c.diasEntrega} días</td>
+                      {!pagoActivo && <td className="py-0.5 px-1.5 text-right">{(c.score * 100).toFixed(0)}%</td>}
+                      {!pagoActivo && <td className="py-0.5 px-1.5 text-center">{i === elegidaIdx ? "✓" : ""}</td>}
+                    </tr>
                   ))}</tbody>
                 </table>
-                {it.observacionSeleccion && <div className="text-[11px] text-amber-700 italic">Justificación de selección no sugerida: "{it.observacionSeleccion}"</div>}
+                {!pagoActivo && it.observacionSeleccion && <div className="text-[11px] text-amber-700 italic">Justificación de selección no sugerida: "{it.observacionSeleccion}"</div>}
               </div>
             );
           })}
@@ -3827,6 +3978,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       historialEstados: empujarHistorial(destino),
       notificaciones: notificar(`Solicitud reabierta por ${currentUser.nombre} (${currentUser.rol}) para corregir y volver a enviar.`),
     };
+    // guarda el motivo del rechazo aparte ANTES de reiniciar la firma — si no, se pierde y nadie
+    // puede ver después por qué se devolvió (la firma queda limpia para la próxima aprobación)
+    if (campo && solicitud.firmas?.[campo]) {
+      cambios.ultimoRechazo = { nombre: solicitud.firmas[campo].nombre, observacion: solicitud.firmas[campo].observacion, fecha: solicitud.firmas[campo].fecha };
+    }
     if (campo) cambios.firmas = { ...solicitud.firmas, [campo]: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null } };
     if (revision) cambios.revisionCompras = { estado: "pendiente", observacion: "", usuario: "", fecha: "" };
     patch(cambios);
@@ -4019,12 +4175,36 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="mt-4 pt-4 border-t border-slate-100"><Stepper status={solicitud.status} /></div>
       </div>
 
-      {solicitud.status === "rechazada" && (puedeReabrir(currentUser) || currentUser.id === solicitud.solicitanteId) && (
-        <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
-          <div className="text-sm text-rose-700">Esta solicitud fue rechazada. Si el motivo fue un error que ya se corrigió (ej. en los precios estimados o en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada.</div>
-          <button onClick={reabrirSolicitud} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium shrink-0">Reabrir para corregir</button>
-        </div>
-      )}
+      {(() => {
+        // busca la firma que quedó marcada como rechazada (jefe/director/financiera/gerencia) para
+        // mostrar el motivo — funciona tanto mientras el estado sigue en "Rechazada" como después
+        // de reabrirla, mientras se está corrigiendo (para que no se pierda el motivo original)
+        const campoRechazo = ["gerencia", "financiera", "director", "jefe"].find((c) => solicitud.firmas?.[c]?.aprobado === false);
+        const firmaRechazo = campoRechazo ? solicitud.firmas[campoRechazo] : null;
+        const enCorreccion = solicitud.status !== "rechazada" && solicitud.historialEstados?.some((h) => h.status === "rechazada");
+        if (solicitud.status === "rechazada" && (puedeReabrir(currentUser) || currentUser.id === solicitud.solicitanteId)) {
+          return (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
+              <div className="text-sm text-rose-700">
+                Esta solicitud fue rechazada por {firmaRechazo?.nombre || "—"}.
+                {firmaRechazo?.observacion && <div className="mt-1 italic">"{firmaRechazo.observacion}"</div>}
+                {" "}Si el motivo fue un error que ya se corrigió (ej. en los precios estimados o en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada.
+              </div>
+              <button onClick={reabrirSolicitud} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium shrink-0">Reabrir para corregir</button>
+            </div>
+          );
+        }
+        if (enCorreccion && (firmaRechazo || solicitud.ultimoRechazo)) {
+          const motivo = firmaRechazo || solicitud.ultimoRechazo;
+          return (
+            <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+              <div className="text-sm text-amber-700">Esta solicitud fue devuelta por {motivo.nombre} para corregirla:</div>
+              <div className="text-sm text-amber-800 italic mt-1">"{motivo.observacion}"</div>
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="font-medium text-slate-700 mb-3">Ítems solicitados</div>
@@ -4096,6 +4276,19 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       </div>
 
       {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
+          <div className="font-medium text-slate-700">Adjuntar cotizaciones (opcional)</div>
+          <div className="text-xs text-slate-400">Si ya tienes una cotización de algún proveedor para un ítem, puedes adjuntarla aquí — le ahorra trabajo a Compras más adelante.</div>
+          {solicitud.items.map((it, idx) => (
+            <div key={it.id}>
+              <div className="text-xs font-medium text-slate-500 mb-1">{idx + 1}. {it.nombre}</div>
+              <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, cotizaciones: cots } : x)) })} compacto sinIva={solicitud.tipo === "servicio"} />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
         <PagosSugeridosEditor solicitud={solicitud} total={total} onGuardar={(sug) => patch({ pagosSugeridos: sug })} />
       )}
 
@@ -4131,7 +4324,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <div className="font-medium text-slate-700 flex items-center gap-2"><TrendingUp size={16} /> Cuadro comparativo (sugerencia automática)</div>
           {["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && <div className="text-xs text-slate-400">Cotizaciones que el solicitante adjuntó al crear la solicitud — Compras podrá completar y ajustar esto más adelante.</div>}
-          {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} item={it} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} />)}
+          {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} item={it} numero={solicitud.items.findIndex((x) => x.id === it.id) + 1} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} />)}
         </div>
       )}
 
@@ -4142,7 +4335,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       {solicitud.tipo === "servicio" && ["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
-        <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
+        <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
       )}
 
       <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
@@ -4476,9 +4669,9 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
           <button onClick={eliminarSeleccion} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Trash2 size={13} /> Eliminar seleccionadas</button>
         </div>
       )}
-    <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+    <div className="bg-white rounded-xl border border-slate-200 overflow-auto max-h-[70vh]">
       <table className="w-full text-sm">
-        <thead className="bg-slate-50 text-slate-500"><tr>
+        <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10"><tr>
           {esAdmin && <th className="px-4 py-2 w-8"><input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} /></th>}
           <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
         <tbody>{solicitudes.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
@@ -4904,7 +5097,7 @@ export default function App() {
         ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
           <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} />
         ) : tab === "planInversion" && puedeVerPlanInversion(currentUser) ? (
-          <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
+          <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} onActualizarSolicitud={actualizarSolicitudDB} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
             currentUser={currentUser}
