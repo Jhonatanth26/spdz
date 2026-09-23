@@ -4788,7 +4788,18 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
 function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas }) {
   const [enviandoId, setEnviandoId] = useState(null);
   const [seleccionadas, setSeleccionadas] = useState([]);
+  const [porPagina, setPorPagina] = useState(25);
+  const [paginaActual, setPaginaActual] = useState(1);
   const esAdmin = currentUser?.rol === "Administrador";
+
+  // si cambian los filtros (la lista recibida es distinta) o se reduce el tamaño de página,
+  // vuelve a la página 1 para no quedar "perdido" en una página que ya no existe
+  useEffect(() => { setPaginaActual(1); }, [solicitudes.length, porPagina]);
+
+  const totalPaginas = Math.max(1, Math.ceil(solicitudes.length / porPagina));
+  const paginaSegura = Math.min(paginaActual, totalPaginas);
+  const desde = (paginaSegura - 1) * porPagina;
+  const solicitudesPagina = solicitudes.slice(desde, desde + porPagina);
 
   const alternar = (id) => setSeleccionadas((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
   const todasSeleccionadas = solicitudes.length > 0 && seleccionadas.length === solicitudes.length;
@@ -4837,7 +4848,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
         <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10"><tr>
           {esAdmin && <th className="px-4 py-2 w-8"><input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} /></th>}
           <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
-        <tbody>{solicitudes.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
+        <tbody>{solicitudesPagina.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
           const puedeReenviar = currentUser && puedeGestionarCotizaciones(currentUser) && (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl);
           return (<tr key={s.id} className={`border-t border-slate-100 hover:bg-slate-50 cursor-pointer ${seleccionadas.includes(s.id) ? "bg-rose-50/40" : ""}`} onClick={() => onAbrir(s.id)}>
             {esAdmin && <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} /></td>}
@@ -4856,6 +4867,21 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
             <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
       </table>
     </div>
+    {solicitudes.length > 0 && (
+      <div className="flex items-center justify-end gap-4 text-xs text-slate-500 px-1">
+        <div className="flex items-center gap-1.5">
+          <span>Filas por página:</span>
+          <select value={porPagina} onChange={(e) => setPorPagina(Number(e.target.value))} className="border border-slate-200 rounded-md px-1.5 py-1 text-xs">
+            {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </div>
+        <span>{desde + 1}–{Math.min(desde + porPagina, solicitudes.length)} de {solicitudes.length}</span>
+        <div className="flex items-center gap-1">
+          <button onClick={() => setPaginaActual((p) => Math.max(1, p - 1))} disabled={paginaSegura <= 1} className="p-1 rounded disabled:opacity-30 text-slate-500 hover:bg-slate-100"><ChevronRight size={15} className="rotate-180" /></button>
+          <button onClick={() => setPaginaActual((p) => Math.min(totalPaginas, p + 1))} disabled={paginaSegura >= totalPaginas} className="p-1 rounded disabled:opacity-30 text-slate-500 hover:bg-slate-100"><ChevronRight size={15} /></button>
+        </div>
+      </div>
+    )}
     </div>
   );
 }
