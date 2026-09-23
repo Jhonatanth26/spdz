@@ -244,6 +244,15 @@ function tramosDePago(pagos) {
     { tipo: "Final", ...pagos.final },
   ];
 }
+// para el calendario/dashboard: si la solicitud tiene más de un ítem, cada uno maneja su propio
+// plan de pagos — se juntan todos los tramos de todos los ítems en una sola lista, marcando de
+// qué ítem viene cada uno. Con un solo ítem, sigue usando el plan general de siempre.
+function tramosDePagoSolicitud(s) {
+  if (s.items?.length > 1) {
+    return s.items.flatMap((it) => tramosDePago({ ...planPagosVacio(), ...it.pagos }).map((t) => ({ ...t, itemNombre: it.nombre })));
+  }
+  return tramosDePago(s.pagos);
+}
 // cuando cambia el total (ej. se ajustó el AIU), reescala proporcionalmente los valores ya puestos
 // en el plan para que la suma siga cuadrando exacto con el nuevo total, sin perder las proporciones
 function reescalarPlanPago(pagos, totalNuevo) {
@@ -258,6 +267,22 @@ function reescalarPlanPago(pagos, totalNuevo) {
     intermedio: { ...pagos.intermedio, valor: pagos.intermedio.valor ? Math.round(parseFloat(pagos.intermedio.valor) * factor) : pagos.intermedio.valor },
     final: { ...pagos.final, valor: pagos.final.valor ? Math.round(parseFloat(pagos.final.valor) * factor) : pagos.final.valor },
   };
+}
+// total real de UN ítem (Costo Directo + su propio AIU, con el mismo respaldo cotización→ítem que
+// usa el cálculo general) — es la base contra la que debe cuadrar el plan de pagos de ese ítem
+function totalItemConAiu(item, sinIva) {
+  const d = desgloseItem(item);
+  if (!sinIva) return d.total;
+  let aiu = item.aiu || {};
+  if (item.cotizaciones?.length) {
+    const sel = item.cotizacionSeleccionada ?? mejorCotizacionIdx(item.cotizaciones, item.cantidad, true, item.aiu);
+    const cot = item.cotizaciones[sel];
+    if (tieneAiuValores(cot?.aiu)) aiu = cot.aiu;
+  }
+  const adm = d.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
+  const util = d.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
+  const imprev = d.subtotal * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+  return d.subtotal + adm + util + imprev + util * 0.19;
 }
 // valida que las fechas del plan de pagos queden en orden creciente: anticipo ≤ intermedio (si aplica) ≤ final
 // devuelve un mensaje de error, o null si está bien
@@ -771,8 +796,9 @@ function Dashboard({ areas, solicitudes, proveedores, currentUser, onAbrir, onVe
     solicitudes.forEach((s) => {
       if (["completada", "rechazada"].includes(s.status)) return;
       const prov = proveedoresAdjudicados(s, proveedores);
-      if (s.tipo === "servicio" && s.pagosConfirmados) {
-        const tramos = tramosDePago(s.pagos);
+      const pagosConfirmadosAlgunos = s.items?.length > 1 ? s.items.some((it) => it.pagosConfirmados) : s.pagosConfirmados;
+      if (s.tipo === "servicio" && pagosConfirmadosAlgunos) {
+        const tramos = tramosDePagoSolicitud(s);
         tramos.forEach((t) => {
           if (!(parseFloat(t.valor) > 0) || !t.fecha || t.pagado) return;
           const dias = Math.round((new Date(t.fecha + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
@@ -934,12 +960,13 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
   solicitudes.forEach((s) => {
     if (["completada", "rechazada"].includes(s.status)) return;
     const prov = proveedoresAdjudicados(s, proveedores);
-    if (s.tipo === "servicio" && s.pagosConfirmados) {
-      const tramos = tramosDePago(s.pagos);
-      tramos.forEach((t) => {
+    const pagosConfirmadosAlgunos = s.items?.length > 1 ? s.items.some((it) => it.pagosConfirmados) : s.pagosConfirmados;
+    if (s.tipo === "servicio" && pagosConfirmadosAlgunos) {
+      const tramos = tramosDePagoSolicitud(s);
+      tramos.forEach((t, i) => {
         if (!(parseFloat(t.valor) > 0) || !t.fecha) return;
         const dias = Math.round((new Date(t.fecha + "T00:00:00") - new Date(hoy() + "T00:00:00")) / 86400000);
-        filas.push({ id: `${s.id}-${t.tipo}`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: t.tipo, valor: parseFloat(t.valor), fecha: t.fecha, dias, pagado: !!t.pagado });
+        filas.push({ id: `${s.id}-${t.tipo}-${i}`, solicitudId: s.id, folio: s.folio, proveedor: prov, tipo: t.itemNombre ? `${t.tipo} (${t.itemNombre})` : t.tipo, valor: parseFloat(t.valor), fecha: t.fecha, dias, pagado: !!t.pagado });
       });
     } else if (s.fechaEstimada) {
       const total = totalSolicitud(s);
@@ -3008,6 +3035,120 @@ function PagosEstructurados({ solicitud, total, currentUser, onProgramar, onConf
 }
 
 /* ---------------------------------------------------------
+   PLAN DE PAGOS POR ÍTEM — cuando la solicitud tiene más de un
+   ítem, cada uno tiene su propio plan de pagos y su propia
+   confirmación (además de poder confirmarlos todos de una vez).
+--------------------------------------------------------- */
+function ItemPlanPago({ item, numero, totalItem, currentUser, editable, onGuardar, onConfirmar, onEditarDeNuevo }) {
+  const [pagos, setPagos] = useState({ ...planPagosVacio(), ...item.pagos });
+  useEffect(() => { setPagos({ ...planPagosVacio(), ...item.pagos }); }, [item.id]);
+  const pagado = totalPagado(pagos);
+  const restante = totalItem - pagado;
+  const descuadrado = item.pagosConfirmados && Math.abs(restante) > 0.5;
+  const faltaFecha = pagos.tipoPago === "contado" ? !pagos.pagoUnico.fecha : (!pagos.anticipo.fecha || !pagos.final.fecha || (pagos.intermedio.activo && !pagos.intermedio.fecha));
+
+  const set = (campo, sub, val) => {
+    if (sub === "fecha" && val) { const error = validarOrdenFechas(pagos, campo, val); if (error) { alert(error); return; } }
+    const copy = { ...pagos, [campo]: { ...pagos[campo], [sub]: val } }; setPagos(copy); onGuardar(copy);
+  };
+  const setTipoPago = (tipo) => { const copy = { ...pagos, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...pagos.pagoUnico, valor: totalItem } : pagos.pagoUnico }; setPagos(copy); onGuardar(copy); };
+  useEffect(() => {
+    if (pagos.tipoPago === "contado" && pagos.pagoUnico.valor !== totalItem) { const copy = { ...pagos, pagoUnico: { ...pagos.pagoUnico, valor: totalItem } }; setPagos(copy); onGuardar(copy); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalItem, pagos.tipoPago]);
+
+  const confirmar = () => {
+    if (Math.abs(restante) > 0.5) { alert(restante > 0 ? `Faltan ${fmt(restante)} por programar en este ítem.` : `El plan supera el total del ítem en ${fmt(-restante)}.`); return; }
+    if (faltaFecha) { alert("Falta poner la fecha de uno o más pagos de este ítem."); return; }
+    onConfirmar(pagos);
+  };
+
+  return (
+    <div className="border border-slate-200 rounded-lg p-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-sm font-medium text-slate-700">{numero}. {item.nombre}</div>
+        {item.pagosConfirmados ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado{item.pagosConfirmadosPor ? ` por ${item.pagosConfirmadosPor.nombre}` : ""}</Badge> : <Badge tone="amber">Pendiente</Badge>}
+      </div>
+      {item.pagosConfirmados && editable && <button onClick={onEditarDeNuevo} className="text-[11px] text-indigo-600 underline mb-2 block">Editar de nuevo</button>}
+      <div className="flex gap-1.5 mb-2">
+        <button type="button" disabled={!editable} onClick={() => setTipoPago("plan")} className={`px-2 py-1 rounded text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por etapas</button>
+        <button type="button" disabled={!editable} onClick={() => setTipoPago("contado")} className={`px-2 py-1 rounded text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único</button>
+      </div>
+      {pagos.tipoPago === "contado" ? (
+        <div className="max-w-xs">
+          <div className="text-[11px] text-slate-400 mb-1">Valor (= total del ítem)</div>
+          <div className="w-full border border-slate-200 bg-slate-50 rounded-md px-2 py-1.5 text-sm mb-1 text-slate-600">{fmt(totalItem)}</div>
+          <InputFecha disabled={!editable} value={pagos.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+          <div><label className="text-[10px] text-slate-400 block mb-0.5">Anticipo</label><InputMiles disabled={!editable} placeholder="Valor" value={pagos.anticipo.valor} onChange={(v) => set("anticipo", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable} value={pagos.anticipo.fecha} onChange={(v) => set("anticipo", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+          <div><label className="text-[10px] text-slate-400 flex items-center gap-1 mb-0.5"><input disabled={!editable} type="checkbox" checked={pagos.intermedio.activo} onChange={(e) => set("intermedio", "activo", e.target.checked)} /> Intermedio</label><InputMiles disabled={!editable || !pagos.intermedio.activo} placeholder="Valor" value={pagos.intermedio.valor} onChange={(v) => set("intermedio", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable || !pagos.intermedio.activo} value={pagos.intermedio.fecha} onChange={(v) => set("intermedio", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+          <div><label className="text-[10px] text-slate-400 block mb-0.5">Pago final</label><InputMiles disabled={!editable} placeholder="Valor" value={pagos.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable} value={pagos.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+        </div>
+      )}
+      <div className="flex items-center justify-between mt-2">
+        <div className="text-[11px] text-slate-500">Total ítem: <b>{fmt(totalItem)}</b> · Programado: <b>{fmt(pagado)}</b> · Restante: <b className={restante > 0.5 ? "text-amber-600" : restante < -0.5 ? "text-rose-600" : "text-emerald-600"}>{fmt(restante)}</b></div>
+        {editable && !item.pagosConfirmados && <button onClick={confirmar} className="text-[11px] bg-emerald-600 text-white px-2 py-1 rounded-md font-medium">Confirmar este ítem</button>}
+      </div>
+    </div>
+  );
+}
+
+function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
+  const sinIva = solicitud.tipo === "servicio";
+  const ocYaEnviada = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
+  const sinPrecio = !(totalSolicitud(solicitud) > 0);
+  const editable = puedeEditarPagos(currentUser) && !ocYaEnviada && !sinPrecio;
+  const todosConfirmados = solicitud.items.every((it) => it.pagosConfirmados);
+
+  const guardarItem = (itemId, pagos) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos } : it)));
+  const confirmarItem = (itemId, pagos) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } } : it)));
+  const editarDeNuevoItem = (itemId) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagosConfirmados: false } : it)));
+
+  const confirmarTodos = () => {
+    const incompletos = solicitud.items.filter((it) => !it.pagosConfirmados).map((it) => {
+      const totalItem = totalItemConAiu(it, sinIva);
+      const restante = totalItem - totalPagado(it.pagos || planPagosVacio());
+      const p = { ...planPagosVacio(), ...it.pagos };
+      const faltaFecha = p.tipoPago === "contado" ? !p.pagoUnico.fecha : (!p.anticipo.fecha || !p.final.fecha || (p.intermedio.activo && !p.final.fecha));
+      return { it, restante, faltaFecha };
+    });
+    const conProblema = incompletos.find((x) => Math.abs(x.restante) > 0.5 || x.faltaFecha);
+    if (conProblema) { alert(`El ítem "${conProblema.it.nombre}" todavía no está listo para confirmar (revisa el valor y las fechas).`); return; }
+    if (!incompletos.length) return;
+    onGuardarItems(solicitud.items.map((it) => (it.pagosConfirmados ? it : { ...it, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } })));
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="font-medium text-slate-700 flex items-center gap-2"><CalendarClock size={16} /> Plan de pagos por ítem</div>
+        {todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : editable && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>}
+      </div>
+      {ocYaEnviada && <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">🔒 La orden ya fue generada — las condiciones de pago quedaron fijas.</div>}
+      {sinPrecio && !ocYaEnviada && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">⚠ Todavía no hay precios cargados — se habilita en cuanto Compras cotice.</div>}
+      {!editable && !todosConfirmados && !ocYaEnviada && !sinPrecio && <div className="text-[11px] text-slate-400">Solo quien tenga permiso de editar pagos puede editar y confirmar estos planes.</div>}
+      <div className="space-y-3">
+        {solicitud.items.map((it, idx) => (
+          <ItemPlanPago
+            key={it.id}
+            item={it}
+            numero={idx + 1}
+            totalItem={totalItemConAiu(it, sinIva)}
+            currentUser={currentUser}
+            editable={editable && !it.pagosConfirmados}
+            onGuardar={(pagos) => guardarItem(it.id, pagos)}
+            onConfirmar={(pagos) => confirmarItem(it.id, pagos)}
+            onEditarDeNuevo={() => editarDeNuevoItem(it.id)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    ORDEN ENVIADA AL PROVEEDOR
 --------------------------------------------------------- */
 function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar }) {
@@ -3826,7 +3967,26 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       </div>
 
       {/* PLAN DE PAGOS (solo servicio) */}
-      {pagoActivo && (() => {
+      {pagoActivo && solicitud.items.length > 1 ? (
+        <div>
+          <div className="text-xs font-medium text-slate-500 mb-1">Plan de pagos por ítem</div>
+          {solicitud.items.map((it, idx) => {
+            const p = { ...planPagosVacio(), ...it.pagos };
+            const tramos = tramosDePago(p).filter((t) => parseFloat(t.valor) > 0);
+            if (!tramos.length) return null;
+            return (
+              <div key={it.id} className="mb-1.5">
+                <div className="text-[11px] font-medium text-slate-600">{idx + 1}. {it.nombre} {it.pagosConfirmados ? "(confirmado)" : "(sin confirmar)"}</div>
+                <table className="w-full text-[11px]">
+                  <tbody>{tramos.map((t, i) => (
+                    <tr key={i} className="border-t border-slate-50"><td className="py-0.5">{t.tipo}</td><td className="py-0.5 text-right">{fmt(t.valor)}</td><td className="py-0.5 text-right">{t.fecha || "—"}</td><td className="py-0.5 text-center">{t.pagado ? "✓" : ""}</td></tr>
+                  ))}</tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      ) : pagoActivo && (() => {
         const usaSugerido = !solicitud.pagosConfirmados && !(solicitud.pagos.pagoUnico?.valor > 0 || solicitud.pagos.anticipo.valor > 0 || solicitud.pagos.final.valor > 0);
         const p = { ...planPagosVacio(), ...(usaSugerido ? solicitud.pagosSugeridos : solicitud.pagos) };
         return (
@@ -4057,7 +4217,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
     else if (s === "comparativo") { const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) }); }
     else if (s === "aprobacion_financiera") {
-      if (solicitud.tipo === "servicio" && !solicitud.pagosConfirmados) { alert("Falta confirmar el plan de pagos antes de aprobar y continuar."); return; }
+      const pagosOk = solicitud.items.length > 1 ? solicitud.items.every((it) => it.pagosConfirmados) : solicitud.pagosConfirmados;
+      if (solicitud.tipo === "servicio" && !pagosOk) { alert("Falta confirmar el plan de pagos (de cada ítem) antes de aprobar y continuar."); return; }
       const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
       patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) });
       mostrarToast("✓ Solicitud aprobada por Dirección Financiera");
@@ -4335,7 +4496,9 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       {solicitud.tipo === "servicio" && ["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
-        <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
+        solicitud.items.length > 1
+          ? <PagosPorItem solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} />
+          : <PagosEstructurados solicitud={solicitud} total={total} currentUser={currentUser} onProgramar={(pagos) => patch({ pagos })} onConfirmar={() => patch({ pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } })} onEditarDeNuevo={() => patch({ pagosConfirmados: false })} />
       )}
 
       <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
