@@ -4792,9 +4792,8 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
   const [paginaActual, setPaginaActual] = useState(1);
   const esAdmin = currentUser?.rol === "Administrador";
 
-  // si cambian los filtros (la lista recibida es distinta) o se reduce el tamaño de página,
-  // vuelve a la página 1 para no quedar "perdido" en una página que ya no existe
-  useEffect(() => { setPaginaActual(1); }, [solicitudes.length, porPagina]);
+  // paginaSegura ya se encarga de que nunca quede "atascado" en una página que dejó de existir
+  // (ej. si el filtro reduce la lista) — no hace falta un efecto aparte que reinicie el estado.
 
   const totalPaginas = Math.max(1, Math.ceil(solicitudes.length / porPagina));
   const paginaSegura = Math.min(paginaActual, totalPaginas);
@@ -4871,7 +4870,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
       <div className="flex items-center justify-end gap-4 text-xs text-slate-500 px-1">
         <div className="flex items-center gap-1.5">
           <span>Filas por página:</span>
-          <select value={porPagina} onChange={(e) => setPorPagina(Number(e.target.value))} className="border border-slate-200 rounded-md px-1.5 py-1 text-xs">
+          <select value={porPagina} onChange={(e) => { setPorPagina(Number(e.target.value)); setPaginaActual(1); }} className="border border-slate-200 rounded-md px-1.5 py-1 text-xs">
             {[10, 25, 50, 100].map((n) => <option key={n} value={n}>{n}</option>)}
           </select>
         </div>
