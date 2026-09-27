@@ -2118,7 +2118,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   );
 }
 
-function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, centrosCosto, conceptosGasto, usuarios, currentUser, onCrear, onCancel }) {
+function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, centrosCosto, conceptosGasto, usuarios, currentUser, solicitudes, onCrear, onCancel }) {
   const [tipo, setTipo] = useState("compra");
   const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
   const [areaId, setAreaId] = useState(currentUser.areaId || areas[0].id);
@@ -2158,6 +2158,15 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     setPagosSugeridos({ ...pagosSugeridos, [campo]: { ...pagosSugeridos[campo], fecha: val } });
   };
   const totalGeneral = tipo === "servicio" ? desgloseSolicitud({ tipo, items, aiu }) : items.reduce((acc, it) => { const d = desgloseItem(it); return { subtotal: acc.subtotal + d.subtotal, iva: acc.iva + d.iva, total: acc.total + d.total }; }, { subtotal: 0, iva: 0, total: 0 });
+  // presupuesto disponible del área elegida — mismo cálculo que usa el Dashboard: solicitudes que
+  // ya están comprometiendo presupuesto (no descartadas ni todavía sin aprobar el primer paso)
+  const areaSel = areas.find((a) => a.id === areaId);
+  const comprometidoArea = useMemo(() => {
+    return solicitudes.filter((s) => s.areaId === areaId && !["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [solicitudes, areaId]);
+  const disponibleArea = (areaSel?.presupuesto || 0) - comprometidoArea;
+  const seSalDelPresupuesto = areaSel?.presupuesto > 0 && totalGeneral.total > disponibleArea;
   // si el total cambia (ej. se agrega otro ítem) mientras está en modo "pago único", se mantiene sincronizado
   useEffect(() => {
     if (pagosSugeridos.tipoPago === "contado" && pagosSugeridos.pagoUnico.valor !== totalGeneral.total) {
@@ -2454,6 +2463,27 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         )}
         {requiereGerencia(totalGeneral.total) && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Este monto requerirá aprobación de Gerencia.</div>}
         {!requiereGerencia(totalGeneral.total) && requiereDireccion(totalGeneral.total) && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Este monto requerirá aprobación de Dirección Financiera.</div>}
+
+        {areaSel && (
+          <div className="border-t border-slate-200 pt-3 space-y-1.5">
+            <div className="text-xs font-medium text-slate-500 flex items-center gap-1"><DollarSign size={12} /> Presupuesto de {areaSel.nombre}</div>
+            {areaSel.presupuesto > 0 ? (
+              <>
+                <div className="flex justify-between text-xs text-slate-500"><span>Presupuesto</span><span>{fmt(areaSel.presupuesto)}</span></div>
+                <div className="flex justify-between text-xs text-slate-500"><span>Ya comprometido</span><span>{fmt(comprometidoArea)}</span></div>
+                <div className="flex justify-between text-xs text-slate-500"><span>Disponible</span><span className={disponibleArea < 0 ? "text-rose-600 font-medium" : "text-emerald-600 font-medium"}>{fmt(disponibleArea)}</span></div>
+                <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden"><div className={`h-1.5 rounded-full ${seSalDelPresupuesto ? "bg-rose-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(100, (comprometidoArea / areaSel.presupuesto) * 100)}%` }} /></div>
+                {totalGeneral.total > 0 && (
+                  seSalDelPresupuesto
+                    ? <div className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-md px-2 py-1.5">⚠ Esta solicitud supera el presupuesto disponible del área por {fmt(totalGeneral.total - disponibleArea)}.</div>
+                    : <div className="text-[11px] text-emerald-600">✓ Esta solicitud cabe dentro del presupuesto disponible.</div>
+                )}
+              </>
+            ) : (
+              <div className="text-[11px] text-slate-400">Esta área no tiene un presupuesto mensual configurado.</div>
+            )}
+          </div>
+        )}
       </div>
     </div>
     </div>
@@ -5377,7 +5407,7 @@ export default function App() {
 
       <main className="flex-1 p-6 overflow-auto">
         {creando ? (
-          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
         ) : solicitudAbierta ? (
