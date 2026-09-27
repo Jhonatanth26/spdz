@@ -707,7 +707,11 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   };
 
   const descargarPlantilla = () => {
-    const csv = columnas.map((c) => c.key).join(",") + "\n";
+    const encabezado = columnas.map((c) => c.key).join(",");
+    // fila de ejemplo: para columnas de selección, muestra el nombre esperado (ej. una empresa real)
+    // en vez de dejarlo en blanco, para que quede claro que se escribe el nombre, no el ID
+    const ejemplo = columnas.map((c) => (c.type === "select" && c.options?.length ? c.options[0].label : "")).join(",");
+    const csv = encabezado + "\n" + ejemplo + "\n";
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -720,13 +724,27 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
       header: true, skipEmptyLines: true,
       complete: (res) => {
         let importados = 0;
+        let sinCoincidir = [];
         res.data.forEach((fila) => {
           const nueva = { id: nextId() };
-          columnas.forEach((c) => { nueva[c.key] = (fila[c.key] ?? "").toString().trim(); });
+          columnas.forEach((c) => {
+            const valorCrudo = (fila[c.key] ?? "").toString().trim();
+            if (c.type === "select" && valorCrudo) {
+              // en un CSV es mucho más práctico escribir el nombre (ej. "SP Dique") que el ID interno —
+              // se busca por nombre primero, y si no coincide con ninguno, se prueba como si ya fuera el ID
+              const porNombre = c.options.find((o) => o.label.trim().toLowerCase() === valorCrudo.toLowerCase());
+              if (porNombre) nueva[c.key] = porNombre.value;
+              else if (c.options.some((o) => o.value === valorCrudo)) nueva[c.key] = valorCrudo;
+              else { nueva[c.key] = ""; sinCoincidir.push(`"${valorCrudo}" (${c.label})`); }
+            } else {
+              nueva[c.key] = valorCrudo;
+            }
+          });
           if (Object.values(nueva).some((v) => v && v !== nueva.id)) { onGuardar(nueva); importados++; }
         });
-        setMensajeImport(`${importados} registro(s) importado(s) correctamente.`);
-        setTimeout(() => setMensajeImport(""), 4000);
+        const avisoSinCoincidir = sinCoincidir.length ? ` ${sinCoincidir.length} valor(es) no coincidieron con ninguna opción y quedaron vacíos: ${[...new Set(sinCoincidir)].slice(0, 5).join(", ")}${sinCoincidir.length > 5 ? "..." : ""}.` : "";
+        setMensajeImport(`${importados} registro(s) importado(s) correctamente.${avisoSinCoincidir}`);
+        setTimeout(() => setMensajeImport(""), 7000);
       },
       error: () => { setMensajeImport("No se pudo leer el archivo CSV."); setTimeout(() => setMensajeImport(""), 4000); },
     });
