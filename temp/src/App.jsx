@@ -5322,7 +5322,7 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
   };
 
   return (
-    <div ref={ref} className="fixed top-4 right-5 z-40">
+    <div ref={ref} className="relative z-40">
       <button onClick={() => setAbierto((v) => !v)} className="relative bg-white border border-slate-200 rounded-full p-2.5 shadow-sm hover:bg-slate-50">
         <Bell size={18} className="text-slate-600" />
         {sinLeer > 0 && <span className="absolute -top-1 -right-1 bg-rose-600 text-white text-[10px] font-semibold rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{sinLeer > 9 ? "9+" : sinLeer}</span>}
@@ -5561,9 +5561,12 @@ export default function App() {
         </div>
       </aside>
 
-      <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex justify-end px-4 pt-3 shrink-0">
+          <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
+        </div>
 
-      <main className="flex-1 p-6 overflow-auto">
+      <main className="flex-1 p-6 pt-2 overflow-auto">
         {creando ? (
           <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
@@ -5624,6 +5627,7 @@ export default function App() {
           <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         )}
       </main>
+      </div>
 
       {exportando && !solicitudAbierta && (
         <div className="print-wrapper-oculto" style={{ display: "none" }}>
