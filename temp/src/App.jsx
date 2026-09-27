@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { useAuth } from "./hooks/useAuth";
 import { useSupabaseTable } from "./hooks/useSupabaseTable";
 import { useSolicitudes } from "./hooks/useSolicitudes";
+import { useNotificaciones } from "./hooks/useNotificaciones";
 import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_MB, subirArchivoPublico, subirBytes } from "./lib/storage";
 import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
@@ -16,7 +17,7 @@ import {
   Calendar, Award, ArrowLeft, LayoutDashboard, ListChecks, BarChart3,
   DollarSign, PackageCheck, CalendarClock, Boxes, Users, Truck,
   Settings, Target, ClipboardList, Lock, LogOut, History, PenTool, ShieldCheck,
-  Paperclip, Mail, Camera, Timer, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon,
+  Paperclip, Mail, Camera, Timer, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell,
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip,
@@ -1181,6 +1182,7 @@ function CalendarioPagos({ solicitudes, proveedores, onAbrir }) {
 }
 
 function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
+  const [vista, setVista] = useState("individual");
   const [filtro, setFiltro] = useState("");
   const [desde, setDesde] = useState("");
   const [hasta, setHasta] = useState("");
@@ -1188,6 +1190,32 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
   const claveProveedor = (ev) => ev.proveedorId ? `id:${ev.proveedorId}` : `nombre:${(ev.proveedorNombre || "").trim().toLowerCase()}`;
 
   const todasCompletadas = solicitudes.filter((s) => s.evaluacionProveedor?.completada);
+
+  // ranking general: agrupa TODAS las evaluaciones por proveedor (sin filtro de fecha/proveedor),
+  // calcula su promedio, y una tendencia comparando la mitad más reciente contra la más antigua
+  const rankingProveedores = useMemo(() => {
+    const grupos = {};
+    todasCompletadas.forEach((s) => {
+      const ev = s.evaluacionProveedor;
+      if (!ev.proveedorId && !ev.proveedorNombre) return;
+      const key = claveProveedor(ev);
+      if (!grupos[key]) grupos[key] = { key, nombre: ev.proveedorNombre || proveedores.find((p) => p.id === ev.proveedorId)?.nombre || "Sin nombre", evaluaciones: [] };
+      grupos[key].evaluaciones.push({ pct: puntajeEvaluacion(ev.criterios) * 100, fecha: ev.fechaCompletado || "" });
+    });
+    return Object.values(grupos).map((g) => {
+      const ordenadas = [...g.evaluaciones].sort((a, b) => a.fecha.localeCompare(b.fecha));
+      const promedio = ordenadas.reduce((a, e) => a + e.pct, 0) / ordenadas.length;
+      let tendencia = null;
+      if (ordenadas.length >= 2) {
+        const mitad = Math.floor(ordenadas.length / 2);
+        const promAntiguo = ordenadas.slice(0, mitad).reduce((a, e) => a + e.pct, 0) / mitad;
+        const promReciente = ordenadas.slice(mitad).reduce((a, e) => a + e.pct, 0) / (ordenadas.length - mitad);
+        const dif = promReciente - promAntiguo;
+        tendencia = Math.abs(dif) < 3 ? "estable" : dif > 0 ? "subiendo" : "bajando";
+      }
+      return { ...g, cantidad: ordenadas.length, promedio, ultima: ordenadas[ordenadas.length - 1]?.fecha || "", tendencia };
+    }).sort((a, b) => b.promedio - a.promedio);
+  }, [todasCompletadas, proveedores]);
   // opciones del selector: se arman a partir de las evaluaciones mismas (por ID si lo tienen, si no por nombre)
   // así no se pierden proveedores cuyo registro no quedó vinculado por ID (datos de antes de esa mejora)
   const opciones = [];
@@ -1248,26 +1276,18 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h2 className="text-lg font-semibold text-slate-800">Evaluación de proveedores</h2>
-        <p className="text-xs text-slate-400 mt-1">Promedio de resultados de un proveedor en un rango de fechas — útil para auditorías ISO 9001.</p>
-      </div>
-
-      {/* 1. FILTRO POR PERIODO */}
-      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <label className="text-[11px] font-medium text-slate-500">Proveedor</label>
-          <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[200px]">
-            <option value="">Todos los evaluados</option>
-            {opciones.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
-          </select>
+          <h2 className="text-lg font-semibold text-slate-800">Evaluación de proveedores</h2>
+          <p className="text-xs text-slate-400 mt-1">{vista === "individual" ? "Promedio de resultados de un proveedor en un rango de fechas — útil para auditorías ISO 9001." : "Comparativo de desempeño entre todos los proveedores evaluados."}</p>
         </div>
-        <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
-        <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
-        <button onClick={descargarReporte} disabled={!evaluaciones.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel (resumen)</button>
+        <div className="flex border border-slate-200 rounded-md overflow-hidden shrink-0">
+          <button onClick={() => setVista("individual")} className={`text-xs px-3 py-1.5 font-medium ${vista === "individual" ? "bg-indigo-600 text-white" : "bg-white text-slate-600"}`}>Por proveedor</button>
+          <button onClick={() => setVista("ranking")} className={`text-xs px-3 py-1.5 font-medium ${vista === "ranking" ? "bg-indigo-600 text-white" : "bg-white text-slate-600"}`}>Ranking general</button>
+        </div>
       </div>
 
-      {/* 2. PENDIENTES DE EVALUACIÓN */}
+      {/* PENDIENTES DE EVALUACIÓN — se ve en ambas vistas */}
       {pendientes.length > 0 && (
         <div className="bg-white rounded-xl border border-slate-200 p-5">
           <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><Clock size={15} /> Pendientes de evaluación ({pendientes.length})</div>
@@ -1283,6 +1303,60 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
           </table>
         </div>
       )}
+
+      {vista === "ranking" ? (
+        rankingProveedores.length === 0 ? (
+          <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">Todavía no hay evaluaciones completas para comparar.</div>
+        ) : (
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs"><tr>
+                <th className="text-left px-4 py-2">#</th>
+                <th className="text-left px-4 py-2">Proveedor</th>
+                <th className="text-right px-4 py-2">Evaluaciones</th>
+                <th className="text-right px-4 py-2">Promedio</th>
+                <th className="text-center px-4 py-2">Clasificación</th>
+                <th className="text-center px-4 py-2">Tendencia</th>
+                <th className="text-right px-4 py-2">Última evaluación</th>
+                <th className="text-center px-4 py-2">Preferido</th>
+              </tr></thead>
+              <tbody>{rankingProveedores.map((g, i) => { const c = clasificacionConfianza(g.promedio);
+                return (
+                  <tr key={g.key} onClick={() => { setFiltro(g.key); setVista("individual"); }} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
+                    <td className="px-4 py-2.5 text-slate-400">{i + 1}</td>
+                    <td className="px-4 py-2.5 font-medium text-slate-700">{g.nombre}</td>
+                    <td className="px-4 py-2.5 text-right text-slate-600">{g.cantidad}</td>
+                    <td className="px-4 py-2.5 text-right font-medium text-slate-700">{g.promedio.toFixed(1)}%</td>
+                    <td className="px-4 py-2.5 text-center"><Badge tone={c.tone}>{c.texto}</Badge></td>
+                    <td className="px-4 py-2.5 text-center">
+                      {g.tendencia === "subiendo" && <span className="text-emerald-600 text-xs font-medium">↑ Mejorando</span>}
+                      {g.tendencia === "bajando" && <span className="text-rose-600 text-xs font-medium">↓ Empeorando</span>}
+                      {g.tendencia === "estable" && <span className="text-slate-400 text-xs">→ Estable</span>}
+                      {g.tendencia === null && <span className="text-slate-300 text-xs">—</span>}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-slate-500">{g.ultima || "—"}</td>
+                    <td className="px-4 py-2.5 text-center">{g.promedio >= 80 && g.cantidad >= 2 && <span title="Buen desempeño consistente" className="text-amber-500">★</span>}</td>
+                  </tr>
+                ); })}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : (
+      <>
+      {/* 1. FILTRO POR PERIODO */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-wrap gap-3 items-end">
+        <div>
+          <label className="text-[11px] font-medium text-slate-500">Proveedor</label>
+          <select value={filtro} onChange={(e) => setFiltro(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm min-w-[200px]">
+            <option value="">Todos los evaluados</option>
+            {opciones.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+          </select>
+        </div>
+        <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={desde} onChange={(e) => setDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+        <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={hasta} onChange={(e) => setHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+        <button onClick={descargarReporte} disabled={!evaluaciones.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel (resumen)</button>
+      </div>
 
       {evaluaciones.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay evaluaciones completas que coincidan con estos filtros.</div>
@@ -1328,6 +1402,8 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
             </table>
           </div>
         </>
+      )}
+      </>
       )}
     </div>
   );
@@ -3809,7 +3885,7 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
 }
 
 
-function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar }) {
+function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNotificacion }) {
   const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []) });
   const [enviado, setEnviado] = useState(false);
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); setEnviado(false); };
@@ -3829,6 +3905,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar }) {
         `<p>Hola,</p><p>${currentUser.nombre} registró la recepción de la solicitud <b>${solicitud.folio}</b> con observaciones:</p><p><i>"${r.comentario}"</i></p><p>Queda pendiente de revisión.</p>`
       );
     }
+    usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol)).forEach((u) => crearNotificacion?.(u.id, `${currentUser.nombre} registró la recepción de ${solicitud.folio} con observaciones: "${r.comentario}"`, solicitud.id));
     setEnviado(true);
   };
 
@@ -4275,7 +4352,7 @@ function accionLabel(solicitud, total) {
   }
 }
 
-function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver }) {
+function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver, crearNotificacion }) {
   const [observacion, setObservacion] = useState("");
   const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
   const [toast, setToast] = useState(null);
@@ -4319,6 +4396,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       );
     }
     patch({ notificaciones: notificar(responsable?.email ? `${currentUser.nombre} reenvió la solicitud corregida. Correo enviado a ${responsable.nombre} (${responsable.email}).` : `${currentUser.nombre} reenvió la solicitud corregida. No hay un responsable con correo configurado para notificar.`) });
+    crearNotificacion?.(responsable?.id, `${currentUser.nombre} corrigió la solicitud ${solicitud.folio} y quedó lista de nuevo para tu aprobación.`, solicitud.id);
     alert(responsable?.email ? `Se avisó a ${responsable.nombre} por correo.` : "Se registró el reenvío, pero no hay un responsable con correo configurado para notificar.");
   };
   const empujarHistorial = (status) => [...solicitud.historialEstados, { status, fecha: ahoraISO() }];
@@ -4360,28 +4438,40 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const firmar = () => ({ aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion, fotoUrl: currentUser.firmaFotoUrl || null });
   const avanzar = () => {
     const s = solicitud.status;
+    // notifica a TODOS los usuarios de un rol (para Dirección Financiera/Gerencia, que suelen ser varios)
+    const notificarRol = (rol, mensaje) => usuarios.filter((u) => u.rol === rol).forEach((u) => crearNotificacion?.(u.id, mensaje, solicitud.id));
     if (s === "aprobacion_jefe") {
       if (currentUser.rol === "Jefe de Área y Director") {
         // la misma persona hace ambos roles: se aprueban los dos pasos de una vez, sin duplicar el clic
         patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar(), director: { ...firmar(), observacion: "Aprobado junto con el paso de jefe de área (mismo responsable)." } }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada (jefe y director), lista para cotizar.`) });
         mostrarToast("✓ Solicitud aprobada como jefe de área y director");
+        notificarRol("Compras", `La solicitud ${solicitud.folio} ya está aprobada y lista para cotizar.`);
       } else {
         const director = usuarios.find((u) => u.areaId === solicitud.areaId && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
         patch({ status: "aprobacion_director", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("aprobacion_director"), notificaciones: notificar(director?.email ? `Correo enviado a ${director.nombre} (${director.email}): solicitud ${solicitud.folio} pendiente de tu aprobación.` : `Solicitud aprobada por el jefe de área. No hay un director de área con correo configurado para notificar.`) });
         mostrarToast("✓ Solicitud aprobada como jefe de área");
+        crearNotificacion?.(director?.id, `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`, solicitud.id);
       }
     }
-    else if (s === "aprobacion_director") { patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); mostrarToast("✓ Solicitud aprobada como director de área"); }
+    else if (s === "aprobacion_director") { patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); mostrarToast("✓ Solicitud aprobada como director de área"); notificarRol("Compras", `La solicitud ${solicitud.folio} ya está aprobada y lista para cotizar.`); }
     else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
-    else if (s === "comparativo") { const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden"; patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) }); }
+    else if (s === "comparativo") {
+      const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
+      patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) });
+      if (next === "aprobacion_financiera") notificarRol("Dirección Financiera", `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`);
+      else if (next === "aprobacion_gerencia") notificarRol("Gerencia", `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`);
+      else notificarRol("Compras", `La solicitud ${solicitud.folio} ya tiene orden generada.`);
+    }
     else if (s === "aprobacion_financiera") {
       const pagosOk = solicitud.items.length > 1 ? solicitud.items.every((it) => it.pagosConfirmados) : solicitud.pagosConfirmados;
       if (solicitud.tipo === "servicio" && !pagosOk) { alert("Falta confirmar el plan de pagos (de cada ítem) antes de aprobar y continuar."); return; }
       const next = requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
       patch({ status: next, firmas: { ...solicitud.firmas, financiera: firmar() }, historialEstados: empujarHistorial(next) });
       mostrarToast("✓ Solicitud aprobada por Dirección Financiera");
+      if (next === "aprobacion_gerencia") notificarRol("Gerencia", `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`);
+      else notificarRol("Compras", `La solicitud ${solicitud.folio} ya tiene orden generada.`);
     }
-    else if (s === "aprobacion_gerencia") { patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") }); mostrarToast("✓ Solicitud aprobada por Gerencia"); }
+    else if (s === "aprobacion_gerencia") { patch({ status: "orden", firmas: { ...solicitud.firmas, gerencia: firmar() }, historialEstados: empujarHistorial("orden") }); mostrarToast("✓ Solicitud aprobada por Gerencia"); notificarRol("Compras", `La solicitud ${solicitud.folio} ya tiene orden generada.`); }
     else if (s === "orden") {
       if (!todasOrdenesFirmadas(solicitud, proveedores)) return;
       const ordenesConCorreo = [];
@@ -4449,6 +4539,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         `<p>Hola ${solicitante.nombre},</p><p>Tu solicitud <b>${solicitud.folio}</b> fue rechazada por ${currentUser.nombre} (${currentUser.rol}).</p>${observacion ? `<p><b>Motivo:</b> ${observacion}</p>` : ""}`
       );
     }
+    crearNotificacion?.(solicitante?.id, `Tu solicitud ${solicitud.folio} fue rechazada por ${currentUser.nombre}.${observacion ? ` Motivo: "${observacion}"` : ""}`, solicitud.id);
     setObservacion("");
   };
 
@@ -4674,7 +4765,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       <ReenviarOrdenesPanel solicitud={solicitud} proveedores={proveedores} guardarProveedor={guardarProveedor} empresa={empresa} currentUser={currentUser} />
 
-      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} usuarios={usuarios} onGuardar={(r) => patch({ recepcion: r })} />}
+      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} usuarios={usuarios} onGuardar={(r) => patch({ recepcion: r })} crearNotificacion={crearNotificacion} />}
 
       {["recepcion", "completada"].includes(solicitud.status) && (
         <EvaluacionPanel
@@ -5201,6 +5292,70 @@ function Catalogos({
 /* ---------------------------------------------------------
    APP PRINCIPAL
 --------------------------------------------------------- */
+// Campanita de notificaciones dentro de la app — se refresca sola, con contador de no leídas,
+// desplegable con las últimas, clic para ir directo a la solicitud y marcarla leída de una vez.
+function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas, onAbrir }) {
+  const [abierto, setAbierto] = useState(false);
+  const ref = useRef(null);
+  const sinLeer = notificaciones.filter((n) => !n.leida).length;
+
+  useEffect(() => {
+    const cerrarSiFuera = (e) => { if (ref.current && !ref.current.contains(e.target)) setAbierto(false); };
+    document.addEventListener("mousedown", cerrarSiFuera);
+    return () => document.removeEventListener("mousedown", cerrarSiFuera);
+  }, []);
+
+  const clickNotificacion = (n) => {
+    if (!n.leida) onMarcarLeida(n.id);
+    if (n.solicitudId) onAbrir(n.solicitudId);
+    setAbierto(false);
+  };
+
+  const hace = (fechaISO) => {
+    const dif = Date.now() - new Date(fechaISO).getTime();
+    const min = Math.floor(dif / 60000);
+    if (min < 1) return "Ahora";
+    if (min < 60) return `Hace ${min} min`;
+    const horas = Math.floor(min / 60);
+    if (horas < 24) return `Hace ${horas} h`;
+    return `Hace ${Math.floor(horas / 24)} d`;
+  };
+
+  return (
+    <div ref={ref} className="fixed top-4 right-5 z-40">
+      <button onClick={() => setAbierto((v) => !v)} className="relative bg-white border border-slate-200 rounded-full p-2.5 shadow-sm hover:bg-slate-50">
+        <Bell size={18} className="text-slate-600" />
+        {sinLeer > 0 && <span className="absolute -top-1 -right-1 bg-rose-600 text-white text-[10px] font-semibold rounded-full min-w-[16px] h-4 px-1 flex items-center justify-center">{sinLeer > 9 ? "9+" : sinLeer}</span>}
+      </button>
+      {abierto && (
+        <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
+            <span className="text-sm font-medium text-slate-700">Notificaciones</span>
+            {sinLeer > 0 && <button onClick={onMarcarTodasLeidas} className="text-[11px] text-indigo-600 font-medium">Marcar todas leídas</button>}
+          </div>
+          <div className="max-h-96 overflow-y-auto">
+            {notificaciones.length === 0 ? (
+              <div className="px-4 py-8 text-center text-xs text-slate-400">No tienes notificaciones todavía.</div>
+            ) : (
+              notificaciones.map((n) => (
+                <div key={n.id} onClick={() => clickNotificacion(n)} className={`px-4 py-2.5 border-b border-slate-50 cursor-pointer hover:bg-slate-50 ${!n.leida ? "bg-indigo-50/40" : ""}`}>
+                  <div className="flex items-start gap-2">
+                    {!n.leida && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 shrink-0" />}
+                    <div className="min-w-0">
+                      <div className={`text-xs ${!n.leida ? "text-slate-700 font-medium" : "text-slate-500"}`}>{n.mensaje}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{hace(n.creadoEn)}</div>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
   const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea } = useSupabaseTable('areas', {
@@ -5260,6 +5415,7 @@ export default function App() {
 
   const [historico, setHistorico] = useState(HISTORICO_INIT);
   const { solicitudes, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB } = useSolicitudes();
+  const { notificaciones: notisUsuario, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(currentUser?.id);
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   const [creando, setCreando] = useState(false);
@@ -5405,13 +5561,15 @@ export default function App() {
         </div>
       </aside>
 
+      <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
+
       <main className="flex-1 p-6 overflow-auto">
         {creando ? (
           <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
         ) : solicitudAbierta ? (
-          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} />
+          <SolicitudDetalle solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onVerCalendario={() => setTab("calendarioPagos")} />
         ) : tab === "misPendientes" && puedeVerMisPendientes(currentUser) ? (
