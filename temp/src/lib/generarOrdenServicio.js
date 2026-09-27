@@ -56,11 +56,13 @@ export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNom
 
   // ---------- ENCABEZADO ----------
   texto(empresa?.nombre || 'Empresa', margen, 16, { bold: true, color: rgb(0.05, 0.05, 0.15) })
-  textoDerecha(solicitud.folio, margenDerecho, 13, { bold: true })
-  y -= 22
-  texto('ORDEN DE SERVICIO / TRABAJO', margen, 13, { bold: true, color: rgb(0.31, 0.27, 0.9) })
-  y -= 18
-  texto(`Fecha de generación: ${hoy_()}`, margen, 9, { color: rgb(0.4, 0.4, 0.45) })
+  texto(`Nit: ${empresa?.nit || '—'}`, margen, 9, { color: rgb(0.4, 0.4, 0.45) })
+  pagina.drawRectangle({ x: margenDerecho - 130, y: y - 30, width: 130, height: 34, borderColor: rgb(0.1, 0.1, 0.15), borderWidth: 1 })
+  pagina.drawLine({ start: { x: margenDerecho - 130, y: y - 15 }, end: { x: margenDerecho, y: y - 15 }, thickness: 1, color: rgb(0.1, 0.1, 0.15) })
+  textoDerecha('ORDEN DE SERVICIO/TRABAJO', margenDerecho - 6, 8, { bold: true })
+  pagina.drawText(`No ${solicitud.folio}`, { x: margenDerecho - 124, y: y - 26, size: 11, font: fontBold, color: rgb(0.05, 0.05, 0.15) })
+  y -= 44
+  texto(`Fecha: ${hoy_()}`, margen, 9, { color: rgb(0.4, 0.4, 0.45) })
   y -= 24
 
   // línea divisoria
@@ -127,7 +129,9 @@ export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNom
   filaTotal(`Imprevistos (${aiuPcts?.imprevistosPct || 0}%)`, fmt_(imprevistos))
   filaTotal('IVA sobre la Utilidad (19%)', fmt_(ivaUtilidad))
   y -= 2
-  filaTotal('Total', fmt_(total), { bold: true, size: 11, salto: 26 })
+  filaTotal('Total', fmt_(total), { bold: true, size: 11, salto: 20 })
+  texto(`SON: ${numeroALetras_(total)}`, margen, 9, { bold: true })
+  y -= 26
 
   // ---------- CONDICIONES DE PAGO ----------
   if (solicitud.tipo === 'servicio' && solicitud.pagosConfirmados) {
@@ -166,4 +170,38 @@ function fmt_(v) {
 }
 function hoy_() {
   return new Date().toLocaleDateString('es-CO')
+}
+
+// convierte un número a su forma escrita en español, para el "SON: ..." (ej. 7591300 -> "SIETE MILLONES QUINIENTOS NOVENTA Y UN MIL TRESCIENTOS PESOS M/CTE")
+function numeroALetras_(n) {
+  const UNIDADES = ['', 'UN', 'DOS', 'TRES', 'CUATRO', 'CINCO', 'SEIS', 'SIETE', 'OCHO', 'NUEVE']
+  const DIEZ_A_DIECINUEVE = ['DIEZ', 'ONCE', 'DOCE', 'TRECE', 'CATORCE', 'QUINCE', 'DIECISÉIS', 'DIECISIETE', 'DIECIOCHO', 'DIECINUEVE']
+  const DECENAS = ['', '', 'VEINTE', 'TREINTA', 'CUARENTA', 'CINCUENTA', 'SESENTA', 'SETENTA', 'OCHENTA', 'NOVENTA']
+  const CENTENAS = ['', 'CIENTO', 'DOSCIENTOS', 'TRESCIENTOS', 'CUATROCIENTOS', 'QUINIENTOS', 'SEISCIENTOS', 'SETECIENTOS', 'OCHOCIENTOS', 'NOVECIENTOS']
+
+  function trescientos(num) {
+    if (num === 0) return ''
+    if (num === 100) return 'CIEN'
+    let s = ''
+    const c = Math.floor(num / 100), resto = num % 100
+    if (c > 0) s += CENTENAS[c] + ' '
+    if (resto >= 10 && resto <= 19) { s += DIEZ_A_DIECINUEVE[resto - 10] }
+    else {
+      const d = Math.floor(resto / 10), u = resto % 10
+      if (d === 2 && u > 0) s += 'VEINTI' + UNIDADES[u]
+      else { if (d > 0) s += DECENAS[d]; if (d > 0 && u > 0) s += ' Y '; if (u > 0) s += UNIDADES[u] }
+    }
+    return s.trim()
+  }
+
+  let entero = Math.round(Math.abs(n || 0))
+  if (entero === 0) return 'CERO PESOS M/CTE'
+  const millones = Math.floor(entero / 1000000)
+  const miles = Math.floor((entero % 1000000) / 1000)
+  const resto = entero % 1000
+  let partes = []
+  if (millones > 0) partes.push(millones === 1 ? 'UN MILLÓN' : trescientos(millones) + ' MILLONES')
+  if (miles > 0) partes.push(miles === 1 ? 'MIL' : trescientos(miles) + ' MIL')
+  if (resto > 0) partes.push(trescientos(resto))
+  return (partes.join(' ').trim() || 'CERO') + ' PESOS M/CTE'
 }

@@ -105,6 +105,40 @@ const PASOS = [
 ];
 
 const fmt = (n) => (n || 0).toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
+
+// convierte un número a su forma escrita en español, para el "Son: ..." de las órdenes (ej. 7591300 -> "SIETE MILLONES QUINIENTOS NOVENTA Y UN MIL TRESCIENTOS")
+function numeroALetras(n) {
+  const UNIDADES = ["", "UN", "DOS", "TRES", "CUATRO", "CINCO", "SEIS", "SIETE", "OCHO", "NUEVE"];
+  const DIEZ_A_DIECINUEVE = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISÉIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
+  const DECENAS = ["", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
+  const CENTENAS = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
+
+  function trescientos(num) {
+    if (num === 0) return "";
+    if (num === 100) return "CIEN";
+    let s = "";
+    const c = Math.floor(num / 100), resto = num % 100;
+    if (c > 0) s += CENTENAS[c] + " ";
+    if (resto >= 10 && resto <= 19) { s += DIEZ_A_DIECINUEVE[resto - 10]; }
+    else {
+      const d = Math.floor(resto / 10), u = resto % 10;
+      if (d === 2 && u > 0) s += "VEINTI" + UNIDADES[u].toLowerCase().charAt(0).toUpperCase() + UNIDADES[u].toLowerCase().slice(1);
+      else { if (d > 0) s += DECENAS[d]; if (d > 0 && u > 0) s += " Y "; if (u > 0) s += UNIDADES[u]; }
+    }
+    return s.trim();
+  }
+
+  let entero = Math.round(Math.abs(n || 0));
+  if (entero === 0) return "CERO PESOS M/CTE";
+  const millones = Math.floor(entero / 1000000);
+  const miles = Math.floor((entero % 1000000) / 1000);
+  const resto = entero % 1000;
+  let partes = [];
+  if (millones > 0) partes.push((millones === 1 ? "UN MILLÓN" : trescientos(millones) + " MILLONES"));
+  if (miles > 0) partes.push((miles === 1 ? "MIL" : trescientos(miles) + " MIL"));
+  if (resto > 0) partes.push(trescientos(resto));
+  return (partes.join(" ").trim() || "CERO") + " PESOS M/CTE";
+}
 // hace crecer un <textarea> automáticamente según el contenido que se escribe
 const autoResize = (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; };
 const hoy = () => new Date().toISOString().slice(0, 10);
@@ -2220,8 +2254,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Solicitante</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500">{currentUser.nombre} (firma automática)</div></div>
-        <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Layers size={12} /> Centro de costo</label><select value={centroCostoId} onChange={(e) => setCentroCostoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{centrosCosto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
-        <div><label className="text-xs font-medium text-slate-500">Concepto de gasto</label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{conceptosGasto.map((c) => <option key={c.id} value={c.id}>{c.nombre}</option>)}</select></div>
+        <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Layers size={12} /> Centro de costo</label><select value={centroCostoId} onChange={(e) => setCentroCostoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{centrosCosto.map((c) => <option key={c.id} value={c.id}>{c.codigo ? `${c.codigo} · ${c.nombre}` : c.nombre}</option>)}</select></div>
+        <div><label className="text-xs font-medium text-slate-500">Concepto de gasto</label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{conceptosGasto.map((c) => <option key={c.id} value={c.id}>{c.codigo ? `${c.codigo} · ${c.nombre}` : c.nombre}</option>)}</select></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
@@ -3798,6 +3832,14 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
   const conceptoGasto = conceptosGasto.find((c) => c.id === solicitud.conceptoGastoId);
   const nombreProv = (c) => proveedores.find((p) => p.id === c.proveedorId)?.nombre || c.proveedorNombre || "—";
   const pagoActivo = solicitud.tipo === "servicio";
+  // proveedor principal para el encabezado tipo "orden de trabajo" — si hay más de uno adjudicado,
+  // se usa el primero y se listan los demás dentro de la tabla de ítems más abajo
+  const proveedoresPrincipales = proveedoresAdjudicadosDetalle(solicitud, proveedores);
+  const proveedorPrincipalCat = proveedoresPrincipales[0] ? proveedores.find((p) => p.id === proveedoresPrincipales[0].proveedorId) : null;
+  const nombreProveedorPrincipal = proveedoresPrincipales.length > 1 ? proveedoresPrincipales.map((p) => p.proveedorNombre).join(" / ") : (proveedoresPrincipales[0]?.proveedorNombre || "—");
+  const nitProveedorPrincipal = proveedorPrincipalCat?.nit || "—";
+  const direccionProveedorPrincipal = proveedorPrincipalCat?.direccion || "—";
+  const telefonoProveedorPrincipal = proveedorPrincipalCat?.telefono || "—";
 
   return (
     <div>
@@ -3811,28 +3853,57 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
           #orden-imprimible .salto-pagina { page-break-before: always; }
         }
       `}</style>
-    <div id="orden-imprimible" className="bg-white rounded-xl border-2 border-slate-300 p-6 space-y-5">
-      {/* ENCABEZADO */}
-      <div className="flex justify-between items-start border-b border-slate-200 pb-3">
-        <div className="flex items-center gap-3">
-          {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-12 max-w-[120px] object-contain" />}
+    <div id="orden-imprimible" className="bg-white border-2 border-slate-800 p-6 space-y-4 text-sm">
+      {/* ENCABEZADO ESTILO CARTA MEMBRETADA */}
+      <div className="flex justify-between items-start gap-4 pb-2">
+        <div className="flex items-start gap-3">
+          {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-14 max-w-[120px] object-contain" />}
           <div>
-            <div className="text-base font-semibold text-slate-800">{solicitud.tipo === "compra" ? "Solicitud de Compra" : "Orden de servicio/trabajo"}</div>
-            <div className="text-xs text-slate-400">{solicitud.folio} · {empresa?.nombre}</div>
+            <div className="text-lg font-bold text-slate-800 uppercase">{empresa?.nombre}</div>
+            <div className="text-xs text-slate-600">Nit: {empresa?.nit || "—"}</div>
           </div>
         </div>
-        <Badge tone="blue">{PASOS.find((p) => p.key === solicitud.status)?.label}</Badge>
+        <div className="border-2 border-slate-800 text-center shrink-0">
+          <div className="px-3 py-1 border-b-2 border-slate-800 text-xs font-semibold uppercase">{solicitud.tipo === "compra" ? "Orden de Compra" : "Orden de Trabajo"}</div>
+          <div className="px-3 py-1 text-sm font-bold">No {solicitud.folio}</div>
+        </div>
+      </div>
+
+      {/* DATOS EN RECUADRO, ESTILO FORMULARIO */}
+      <table className="w-full text-xs border-collapse border border-slate-400">
+        <tbody>
+          <tr>
+            <td className="border border-slate-400 px-2 py-1 font-semibold bg-slate-50 w-32">FECHA:</td>
+            <td className="border border-slate-400 px-2 py-1" colSpan={3}>{solicitud.fechaCreacion}</td>
+          </tr>
+          <tr>
+            <td className="border border-slate-400 px-2 py-1 font-semibold bg-slate-50">Proveedor:</td>
+            <td className="border border-slate-400 px-2 py-1">{nombreProveedorPrincipal}</td>
+            <td className="border border-slate-400 px-2 py-1 font-semibold bg-slate-50 w-24">NIT:</td>
+            <td className="border border-slate-400 px-2 py-1">{nitProveedorPrincipal}</td>
+          </tr>
+          <tr>
+            <td className="border border-slate-400 px-2 py-1 font-semibold bg-slate-50">Dirección:</td>
+            <td className="border border-slate-400 px-2 py-1">{direccionProveedorPrincipal}</td>
+            <td className="border border-slate-400 px-2 py-1 font-semibold bg-slate-50">Teléfono:</td>
+            <td className="border border-slate-400 px-2 py-1">{telefonoProveedorPrincipal}</td>
+          </tr>
+          <tr>
+            <td className="border border-slate-400 px-2 py-1 font-semibold bg-slate-50">Oficina Solicitante:</td>
+            <td className="border border-slate-400 px-2 py-1">{area?.nombre}{departamento && ` — ${departamento.nombre}`}</td>
+            <td className="border border-slate-400 px-2 py-1 font-semibold bg-slate-50">Responsable:</td>
+            <td className="border border-slate-400 px-2 py-1">{solicitante?.nombre}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div className="border border-slate-400 p-2">
+        <div className="text-xs font-semibold mb-1">DETALLE {solicitud.tipo === "compra" ? "DE LA COMPRA AUTORIZADA" : "DEL TRABAJO AUTORIZADO"}:</div>
+        <div className="text-xs text-slate-700">{solicitud.objetivo}</div>
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-        <div><b>Área:</b> {area?.nombre}{departamento && ` — ${departamento.nombre}`}</div><div><b>Solicitante:</b> {solicitante?.nombre}</div>
-        <div><b>Centro de costo:</b> {centroCosto?.nombre || "—"}</div><div><b>Concepto de gasto:</b> {conceptoGasto?.nombre || "—"}</div>
-        <div><b>Fecha creación:</b> {solicitud.fechaCreacion}</div><div><b>Fecha estimada:</b> {solicitud.fechaEstimada || "—"}</div>
-      </div>
-
-      {/* OBJETIVO */}
-      <div className="text-xs">
-        <div className="font-medium text-slate-500 mb-0.5">Objetivo</div><div className="text-slate-600">{solicitud.objetivo}</div>
+        <div><b>Centro de costo:</b> {centroCosto ? (centroCosto.codigo ? `${centroCosto.codigo} · ${centroCosto.nombre}` : centroCosto.nombre) : "—"}</div><div><b>Concepto de gasto:</b> {conceptoGasto ? (conceptoGasto.codigo ? `${conceptoGasto.codigo} · ${conceptoGasto.nombre}` : conceptoGasto.nombre) : "—"}</div>
       </div>
 
       {/* ÍTEMS Y PROVEEDOR ADJUDICADO */}
@@ -3941,6 +4012,44 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
         </div>
       )}
 
+      {/* SON: (monto en letras) */}
+      <div className="text-xs font-semibold border-t border-b border-slate-300 py-1.5">SON: {numeroALetras(d.total)}</div>
+
+      {/* FORMA DE PAGO Y PLAZO DE ENTREGA */}
+      <table className="w-full text-xs border-collapse border border-slate-400">
+        <tbody>
+          <tr>
+            <td className="border border-slate-400 px-2 py-2 align-top w-1/2">
+              <div className="font-semibold mb-1">FORMA DE PAGO:</div>
+              <div className="text-slate-600">{pagoActivo ? (solicitud.pagosConfirmados || solicitud.items.some((it) => it.pagosConfirmados) ? tramosDePagoSolicitud(solicitud).filter((t) => parseFloat(t.valor) > 0).map((t) => `${t.tipo}${t.itemNombre ? ` (${t.itemNombre})` : ""}: ${fmt(t.valor)} — ${t.fecha || "sin fecha"}`).join(" · ") || "Sin definir" : "Sin definir") : "Sin definir"}</div>
+            </td>
+            <td className="border border-slate-400 px-2 py-2 align-top w-1/2">
+              <div className="font-semibold mb-1">PLAZO ENTREGA {solicitud.tipo === "compra" ? "MATERIALES" : "TRABAJOS"}:</div>
+              <div className="text-slate-600">{solicitud.folio}{solicitud.fechaEstimada && ` — ${solicitud.fechaEstimada}`}</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* AUTORIZA / ACEPTADO */}
+      <table className="w-full text-xs border-collapse border border-slate-400 mt-6">
+        <tbody>
+          <tr>
+            <td className="border border-slate-400 px-2 pt-8 pb-2 text-center w-1/2">
+              <div className="border-t border-slate-800 pt-1 mx-4">AUTORIZA</div>
+            </td>
+            <td className="border border-slate-400 px-2 pt-8 pb-2 text-center w-1/2">
+              <div className="border-t border-slate-800 pt-1 mx-4">ACEPTADO</div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div className="border border-slate-400 p-2">
+        <div className="text-xs font-semibold mb-1">OBSERVACIONES:</div>
+        <div className="text-xs text-slate-600 min-h-[24px]">{solicitud.recepcion?.comentario || ""}</div>
+      </div>
+
       {/* REVISIÓN DE COMPRAS */}
       {solicitud.tipo === "compra" && solicitud.revisionCompras.estado !== "no_aplica" && (
         <div className="text-xs"><b className="text-slate-500">Revisión de Compras:</b> {solicitud.revisionCompras.estado} — {solicitud.revisionCompras.usuario || "—"} ({solicitud.revisionCompras.fecha || "—"}){solicitud.revisionCompras.observacion && ` · "${solicitud.revisionCompras.observacion}"`}</div>
@@ -3948,7 +4057,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
 
       {/* FIRMAS */}
       <div className="salto-pagina">
-        <div className="text-xs font-medium text-slate-500 mb-2">Firmas y aprobaciones</div>
+        <div className="text-xs font-medium text-slate-500 mb-2">Historial de firmas y aprobaciones (registro digital interno)</div>
         <div className="grid grid-cols-2 gap-3 text-xs">
           {[["Solicitante", solicitud.firmas.solicitante], ["Jefe de área", solicitud.firmas.jefe], ["Director de área", solicitud.firmas.director], ["Dirección financiera", solicitud.firmas.financiera], ["Gerencia", solicitud.firmas.gerencia]].map(([rol, f]) => (
             <div key={rol} className="border border-slate-200 rounded-md p-2">
@@ -5005,8 +5114,8 @@ function Catalogos({
         </>
       )}
       {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
-      {sub === "centros" && <CrudTable titulo="Centros de costo" icon={Layers} columnas={[{ key: "nombre", label: "Nombre" }]} datos={centrosCosto} onGuardar={guardarCentroCosto} onEliminar={eliminarCentroCosto} plantilla={{ nombre: "" }} />}
-      {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto" icon={ClipboardList} columnas={[{ key: "nombre", label: "Nombre" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ nombre: "" }} />}
+      {sub === "centros" && <CrudTable titulo="Centros de costo" icon={Layers} columnas={[{ key: "codigo", label: "Código" }, { key: "nombre", label: "Nombre" }]} datos={centrosCosto} onGuardar={guardarCentroCosto} onEliminar={eliminarCentroCosto} plantilla={{ codigo: "", nombre: "" }} />}
+      {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ grupo: "", codigo: "", nombre: "" }} />}
       {sub === "permisos" && currentUser?.rol === "Administrador" && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <div className="px-5 py-3 border-b border-slate-100">
