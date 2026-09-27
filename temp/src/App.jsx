@@ -5415,7 +5415,6 @@ export default function App() {
 
   const [historico, setHistorico] = useState(HISTORICO_INIT);
   const { solicitudes, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB } = useSolicitudes();
-  const { notificaciones: notisUsuario, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(currentUser?.id);
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   const [creando, setCreando] = useState(false);
@@ -5435,6 +5434,7 @@ export default function App() {
 
   // --- Sesión real con Supabase Auth ---
   const { perfil: perfilAuth, cargando: cargandoSesion, iniciarSesion, cerrarSesion, actualizarPerfil } = useAuth();
+  const { notificaciones: notisUsuario, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(perfilAuth?.id);
 
   if (cargandoSesion) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Cargando...</div>;
