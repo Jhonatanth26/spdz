@@ -51,6 +51,9 @@ const haciaFila = (s) => ({
     prioridad: s.prioridad,
     evaluacionProveedor: s.evaluacionProveedor,
     aiu: s.aiu,
+    ultimoRechazo: s.ultimoRechazo,
+    pagosConfirmadosPor: s.pagosConfirmadosPor,
+    presupuestoAlEnviar: s.presupuestoAlEnviar,
   },
 })
 
