@@ -3122,52 +3122,77 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
   );
 }
 
-// Compras (u otro rol con permiso) valida y ajusta los % de AIU que el solicitante estimó,
-// una vez el proveedor ya entregó su cotización real — solo aplica a órdenes de servicio/trabajo.
-function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [] }) {
+// Resumen de los costos indirectos (AIU). El AIU es POR ÍTEM Y POR PROVEEDOR: cada cotización lleva sus propios
+// porcentajes (Administración, Utilidad e Imprevistos, que Compras digita en la cotización de ese proveedor) y aquí se
+// ven todos juntos, ítem por ítem. Para el valor de la solicitud se usa el de la cotización seleccionada de cada ítem
+// — o, mientras Compras no haya elegido, el de la recomendada. Solo aplica a órdenes de servicio/trabajo.
+function AiuEditor({ solicitud, editable, proveedores = [] }) {
   const ab = useAbiertosItems(solicitud.items);
-  const setItemAiu = (itemId, campo, val) => {
-    onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, aiu: { ...(it.aiu || {}), [campo]: pctValido(val) } } : it)));
-  };
   const d = desgloseSolicitud(solicitud);
+  const nombreProv = (c) => proveedores.find((pv) => pv.id === c.proveedorId)?.nombre || c.proveedorNombre || "Proveedor";
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) por ítem {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
-      <div className="text-[11px] text-slate-400">Cada ítem tiene su propio AIU, independiente del proveedor que finalmente se adjudique. Si el ítem ya tiene una cotización seleccionada, el AIU de esa cotización tiene prioridad sobre el que se ve aquí.</div>
+      <div className="font-medium text-slate-700 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) por ítem y por proveedor</div>
+      <div className="text-[11px] text-slate-400">
+        El AIU se define por ítem <b>y por proveedor</b>: cada cotización tiene sus propios porcentajes. Para el valor de la solicitud se usa el de la cotización seleccionada de cada ítem — o el de la recomendada mientras Compras no haya elegido. El IVA (19%) se calcula solo sobre la Utilidad.
+        {editable ? " Para cambiar el AIU de un proveedor, edítalo en su cotización." : ""}
+      </div>
       <div className="space-y-3">
         <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />
         {solicitud.items.map((it, idx) => {
-          const aiu = it.aiu || {};
-          const tieneAiuCot = (a) => !!a && (parseFloat(a.administracionPct) || parseFloat(a.utilidadPct) || parseFloat(a.imprevistosPct));
-          let cotConAiu = null;
-          if (it.cotizaciones?.length) {
-            const sel = idxCotizacionActiva(it, true);
-            const cot = it.cotizaciones[sel];
-            if (tieneAiuCot(cot?.aiu)) cotConAiu = cot;
-          }
-          const aiuMostrado = cotConAiu ? cotConAiu.aiu : aiu;
-          const bloqueado = !editable || !!cotConAiu; // si el AIU viene de la cotización, se edita allá, no aquí
+          const cots = it.cotizaciones || [];
+          const idxActiva = idxCotizacionActiva(it, true);
+          const scored = cots.length ? calcularScores(cots, it.cantidad, true, it.aiu) : [];
+          const aiuActivo = idxActiva >= 0 ? (tieneAiuValores(cots[idxActiva]?.aiu) ? cots[idxActiva].aiu : (it.aiu || {})) : {};
+          const eligio = it.cotizacionSeleccionada !== null && it.cotizacionSeleccionada !== undefined;
           return (
-            <ItemColapsable key={it.id} abierto={ab.abierto(it.id)} onToggle={() => ab.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)} resumen={<span>AIU {aiuMostrado.administracionPct || 0} / {aiuMostrado.utilidadPct || 0} / {aiuMostrado.imprevistosPct || 0} %</span>}>
-            <div className="p-1">
-              {cotConAiu ? (
-                <div className="text-[11px] text-indigo-600 bg-indigo-50 rounded-md px-2 py-1.5 mb-1">
-                  AIU definido en la cotización de <b>{proveedores.find((pv) => pv.id === cotConAiu.proveedorId)?.nombre || cotConAiu.proveedorNombre || "el proveedor"}</b>{editable ? " — para cambiarlo, edítalo en el formulario de cotización." : "."}
+            <ItemColapsable key={it.id} abierto={ab.abierto(it.id)} onToggle={() => ab.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)}
+              resumen={cots.length ? <span>AIU aplicado {aiuActivo.administracionPct || 0} / {aiuActivo.utilidadPct || 0} / {aiuActivo.imprevistosPct || 0} %</span> : <span>Sin cotizaciones</span>}>
+              {cots.length === 0 ? (
+                <div className="text-[11px] text-slate-400 px-1 py-2">Este ítem todavía no tiene cotizaciones: el AIU se define en la cotización de cada proveedor.</div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead className="text-slate-400 border-b border-slate-200">
+                      <tr>
+                        <th className="text-left py-1 px-2">Proveedor</th>
+                        <th className="text-right py-1 px-2">Costo directo</th>
+                        <th className="text-right py-1 px-2">Admón. %</th>
+                        <th className="text-right py-1 px-2">Utilidad %</th>
+                        <th className="text-right py-1 px-2">Imprevistos %</th>
+                        <th className="text-right py-1 px-2">Total con AIU</th>
+                        <th className="py-1 px-2"></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cots.map((c, i) => {
+                        const propio = tieneAiuValores(c.aiu);
+                        const usaDelItem = !propio && tieneAiuValores(it.aiu); // solicitudes antiguas con un AIU general del ítem
+                        const a = propio ? c.aiu : (it.aiu || {});
+                        const aplicada = i === idxActiva;
+                        return (
+                          <tr key={i} className={`border-t border-slate-100 ${aplicada ? "bg-emerald-50/60" : ""}`}>
+                            <td className="py-1.5 px-2 font-medium text-slate-700">{nombreProv(c)}{usaDelItem && <span className="ml-1 text-[10px] text-slate-400 font-normal">(AIU general del ítem)</span>}</td>
+                            <td className="py-1.5 px-2 text-right">{fmt(scored[i].subtotal)}</td>
+                            <td className="py-1.5 px-2 text-right">{a.administracionPct || 0}</td>
+                            <td className="py-1.5 px-2 text-right">{a.utilidadPct || 0}</td>
+                            <td className="py-1.5 px-2 text-right">{a.imprevistosPct || 0}</td>
+                            <td className="py-1.5 px-2 text-right font-medium">{fmt(scored[i].totalConAiu)}</td>
+                            <td className="py-1.5 px-2 text-right">{aplicada && <Badge tone="green">{eligio ? "Seleccionada" : "Recomendada"}</Badge>}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
-              ) : null}
-              <div className="grid grid-cols-3 gap-2">
-                <div><label className="text-[10px] text-slate-400 block mb-0.5">Admón. %</label><input disabled={bloqueado} type="number" min="0" max="100" step="0.1" value={aiuMostrado.administracionPct || ""} onChange={(e) => setItemAiu(it.id, "administracionPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
-                <div><label className="text-[10px] text-slate-400 block mb-0.5">Utilidad %</label><input disabled={bloqueado} type="number" min="0" max="100" step="0.1" value={aiuMostrado.utilidadPct || ""} onChange={(e) => setItemAiu(it.id, "utilidadPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
-                <div><label className="text-[10px] text-slate-400 block mb-0.5">Imprevistos %</label><input disabled={bloqueado} type="number" min="0" max="100" step="0.1" value={aiuMostrado.imprevistosPct || ""} onChange={(e) => setItemAiu(it.id, "imprevistosPct", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
-              </div>
-            </div>
+              )}
             </ItemColapsable>
           );
         })}
       </div>
-      <div className="text-[11px] text-slate-400">El IVA (19%) se calcula automáticamente solo sobre la Utilidad.</div>
       <div className="space-y-0.5 text-xs text-slate-500 max-w-xs">
+        <div className="text-[11px] text-slate-400 mb-1">Total de la solicitud (con el AIU aplicado en cada ítem)</div>
         <div className="flex justify-between"><span>Costo Directo</span><span>{fmt(d.costoDirecto)}</span></div>
         <div className="flex justify-between"><span>Administración</span><span>{fmt(d.administracion)}</span></div>
         <div className="flex justify-between"><span>Utilidad</span><span>{fmt(d.utilidad)}</span></div>
@@ -4886,7 +4911,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
         aiuVisible(solicitud)
-          ? <AiuEditor proveedores={proveedores} solicitud={solicitud} onGuardarItems={(items) => patch({ items })} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
+          ? <AiuEditor proveedores={proveedores} solicitud={solicitud} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
           : <ResumenTotales solicitud={solicitud} />
       )}
 
