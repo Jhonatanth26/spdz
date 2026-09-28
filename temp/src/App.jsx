@@ -189,6 +189,7 @@ function numeroALetras(n) {
   const DIEZ_A_DIECINUEVE = ["DIEZ", "ONCE", "DOCE", "TRECE", "CATORCE", "QUINCE", "DIECISÉIS", "DIECISIETE", "DIECIOCHO", "DIECINUEVE"];
   const DECENAS = ["", "", "VEINTE", "TREINTA", "CUARENTA", "CINCUENTA", "SESENTA", "SETENTA", "OCHENTA", "NOVENTA"];
   const CENTENAS = ["", "CIENTO", "DOSCIENTOS", "TRESCIENTOS", "CUATROCIENTOS", "QUINIENTOS", "SEISCIENTOS", "SETECIENTOS", "OCHOCIENTOS", "NOVECIENTOS"];
+  const VEINTI = ["", "VEINTIÚN", "VEINTIDÓS", "VEINTITRÉS", "VEINTICUATRO", "VEINTICINCO", "VEINTISÉIS", "VEINTISIETE", "VEINTIOCHO", "VEINTINUEVE"];
 
   function trescientos(num) {
     if (num === 0) return "";
@@ -199,7 +200,7 @@ function numeroALetras(n) {
     if (resto >= 10 && resto <= 19) { s += DIEZ_A_DIECINUEVE[resto - 10]; }
     else {
       const d = Math.floor(resto / 10), u = resto % 10;
-      if (d === 2 && u > 0) s += "VEINTI" + UNIDADES[u].toLowerCase().charAt(0).toUpperCase() + UNIDADES[u].toLowerCase().slice(1);
+      if (d === 2 && u > 0) s += VEINTI[u];
       else { if (d > 0) s += DECENAS[d]; if (d > 0 && u > 0) s += " Y "; if (u > 0) s += UNIDADES[u]; }
     }
     return s.trim();
@@ -3517,7 +3518,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
 /* ---------------------------------------------------------
    ORDEN ENVIADA AL PROVEEDOR
 --------------------------------------------------------- */
-function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar }) {
+function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar, area, solicitante }) {
   const [firmandoIdx, setFirmandoIdx] = useState(null);
   const [generandoIdx, setGenerandoIdx] = useState(null);
   const { mostrar: mostrarToast } = useToast();
@@ -3552,29 +3553,24 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
         return cot && mismoProveedor({ proveedorId: cot.proveedorId, proveedorNombre: cot.proveedorNombre }, orden);
       });
       const baseItems = itemsDelProveedor.length ? itemsDelProveedor : solicitud.items;
-      const itemsParaPdf = baseItems.map((it) => { const d = desgloseItem(it, true); const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0; return { nombre: it.nombre, cantidad: it.cantidad, unidad: it.unidad, valorUnitario: unitario, total: d.subtotal }; });
-      // usa el AIU de la cotización de este proveedor específicamente (cada uno puede tener % distintos)
-      let costoDirecto = 0, administracion = 0, utilidad = 0, imprevistos = 0;
-      baseItems.forEach((it) => {
-        const dIt = desgloseItem(it, true);
-        costoDirecto += dIt.subtotal;
+      const pct = (v) => parseFloat(v) || 0;
+      // cada ítem con su propio AIU: el de la cotización seleccionada (o recomendada) de ESTE proveedor
+      const itemsParaPdf = baseItems.map((it) => {
+        const d = desgloseItem(it, true);
+        const cant = parseFloat(it.cantidad) || 0;
+        const cotSel = it.cotizaciones?.[idxCotizacionActiva(it, true)];
         let aiu = it.aiu || solicitud.aiu || {};
-        if (it.cotizaciones?.length) {
-          const sel = idxCotizacionActiva(it, true);
-          const cot = it.cotizaciones[sel];
-          if (cot?.aiu && (parseFloat(cot.aiu.administracionPct) || parseFloat(cot.aiu.utilidadPct) || parseFloat(cot.aiu.imprevistosPct))) aiu = cot.aiu;
-        }
-        administracion += dIt.subtotal * (parseFloat(aiu.administracionPct) || 0) / 100;
-        utilidad += dIt.subtotal * (parseFloat(aiu.utilidadPct) || 0) / 100;
-        imprevistos += dIt.subtotal * (parseFloat(aiu.imprevistosPct) || 0) / 100;
+        if (cotSel && tieneAiuValores(cotSel.aiu)) aiu = cotSel.aiu;
+        const admin = d.subtotal * pct(aiu.administracionPct) / 100;
+        const util = d.subtotal * pct(aiu.utilidadPct) / 100;
+        const imprev = d.subtotal * pct(aiu.imprevistosPct) / 100;
+        const ivaUtil = util * 0.19;
+        return { nombre: it.nombre, cantidad: it.cantidad, unidad: it.unidad, valorUnitario: cant > 0 ? d.subtotal / cant : 0, total: d.subtotal, aiuPct: { a: pct(aiu.administracionPct), u: pct(aiu.utilidadPct), i: pct(aiu.imprevistosPct) }, admin, util, imprev, ivaUtil, totalItem: d.subtotal + admin + util + imprev + ivaUtil };
       });
-      const ivaUtilidad = utilidad * 0.19;
-      const total = costoDirecto + administracion + utilidad + imprevistos + ivaUtilidad;
-      const primerCot = baseItems[0]?.cotizaciones?.[idxCotizacionActiva(baseItems[0], true)];
-      const aiuPcts = primerCot?.aiu || solicitud.aiu || {};
-      const totales = { costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, aiuPcts };
-      const planesPago = baseItems.filter((it) => planConfirmadoItem(solicitud, it)).map((it) => ({ nombre: it.nombre, pagos: planOficialItem(solicitud, it) })).filter((pl) => planTieneValores(pl.pagos));
-      const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre: orden.proveedorNombre, items: itemsParaPdf, planesPago, ...totales });
+      const suma = (k) => itemsParaPdf.reduce((acc, x) => acc + x[k], 0);
+      const totales = { costoDirecto: suma("total"), administracion: suma("admin"), utilidad: suma("util"), imprevistos: suma("imprev"), ivaUtilidad: suma("ivaUtil"), total: suma("totalItem") };
+      const planesPago = baseItems.filter((it) => planConfirmadoItem(solicitud, it)).map((it) => ({ numero: solicitud.items.findIndex((x) => x.id === it.id) + 1, nombre: it.nombre, pagos: planOficialItem(solicitud, it) })).filter((pl) => planTieneValores(pl.pagos));
+      const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedor: buscarProveedorDeOrden(orden, proveedores), proveedorNombre: orden.proveedorNombre, area: area?.nombre, solicitanteNombre: solicitante?.nombre, items: itemsParaPdf, planesPago, ...totales });
       const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
       if (ruta) { actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); mostrarToast("Orden de servicio generada — pendiente de firma"); }
       else alert("No se pudo generar el documento. Intenta de nuevo.");
@@ -4970,7 +4966,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <PagosPorItem solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} />
       )}
 
-      <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} />
+      <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} area={area} solicitante={solicitante} onGuardar={(oc) => patch({ ocEnviada: oc })} />
 
       {(solicitud.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl) && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
