@@ -3,7 +3,7 @@ import { PDFDocument, rgb, StandardFonts } from 'pdf-lib'
 // Genera el PDF de la Orden de Servicio/Trabajo desde los datos de la solicitud —
 // se usa cuando el sistema contable (Zeus) no genera este tipo de orden.
 // Devuelve los bytes del PDF (Uint8Array), listos para subir a Storage y luego firmar.
-export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre, items, costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, aiuPcts }) {
+export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre, items, costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, aiuPcts, planesPago = [] }) {
   const pdfDoc = await PDFDocument.create()
   const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
@@ -133,23 +133,29 @@ export async function generarOrdenServicioPDF({ solicitud, empresa, proveedorNom
   texto(`SON: ${numeroALetras_(total)}`, margen, 9, { bold: true })
   y -= 26
 
-  // ---------- CONDICIONES DE PAGO ----------
-  if (solicitud.tipo === 'servicio' && solicitud.pagosConfirmados) {
+  // ---------- CONDICIONES DE PAGO (por ítem) ----------
+  if (planesPago && planesPago.length) {
     saltoSiHaceFalta(70)
     texto('Condiciones de pago', margen, 10, { bold: true })
     y -= 15
-    const p = solicitud.pagos
-    if (p.tipoPago === 'contado') {
-      texto(`Pago único (de contado): ${fmt_(p.pagoUnico.valor)}`, margen, 9)
-      textoDerecha(p.pagoUnico.fecha || 'sin fecha', margenDerecho, 9)
-      y -= 13
-    } else {
-      texto(`Anticipo: ${fmt_(p.anticipo.valor)}`, margen, 9); textoDerecha(p.anticipo.fecha || 'sin fecha', margenDerecho, 9)
-      y -= 13
-      if (p.intermedio?.activo) { texto(`Intermedio: ${fmt_(p.intermedio.valor)}`, margen, 9); textoDerecha(p.intermedio.fecha || 'sin fecha', margenDerecho, 9); y -= 13 }
-      texto(`Pago final: ${fmt_(p.final.valor)}`, margen, 9); textoDerecha(p.final.fecha || 'sin fecha', margenDerecho, 9)
-    }
-    y -= 20
+    planesPago.forEach((pl) => {
+      const p = pl.pagos
+      saltoSiHaceFalta(56)
+      if (planesPago.length > 1) { texto(pl.nombre, margen, 9, { bold: true }); y -= 12 }
+      if (p.tipoPago === 'contado') {
+        texto(`Pago único (de contado): ${fmt_(p.pagoUnico.valor)}`, margen, 9)
+        textoDerecha(p.pagoUnico.fecha || 'sin fecha', margenDerecho, 9)
+        y -= 13
+      } else {
+        texto(`Anticipo: ${fmt_(p.anticipo.valor)}`, margen, 9); textoDerecha(p.anticipo.fecha || 'sin fecha', margenDerecho, 9)
+        y -= 13
+        if (p.intermedio?.activo) { texto(`Intermedio: ${fmt_(p.intermedio.valor)}`, margen, 9); textoDerecha(p.intermedio.fecha || 'sin fecha', margenDerecho, 9); y -= 13 }
+        texto(`Pago final: ${fmt_(p.final.valor)}`, margen, 9); textoDerecha(p.final.fecha || 'sin fecha', margenDerecho, 9)
+        y -= 13
+      }
+      y -= 6
+    })
+    y -= 14
   }
 
   // ---------- PIE / GENERADO POR EL SISTEMA ----------
