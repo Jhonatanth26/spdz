@@ -120,6 +120,8 @@ const tinteItem = (idx) => TINTES_ITEM[(idx || 0) % TINTES_ITEM.length];
 // El AIU (costos indirectos) lo define Compras al cotizar. No se pide ni se muestra en lo que llena el solicitante.
 // En el detalle de la solicitud se ve (en solo lectura para quien no es Compras) cuando ya está definido: desde la
 // etapa de cotización, o antes si Compras ya lo cargó (ej. una solicitud devuelta que vuelve al jefe o al director).
+// fases (secciones) del detalle de la solicitud que se pueden expandir o contraer
+const FASES_DETALLE = ["presupuesto", "items", "adjuntar", "sugerido", "revision", "cotizaciones", "comparativo", "aiu", "pagos", "orden", "copia", "reenviar", "recepcion", "evaluacion", "firmas"].map((id) => ({ id }));
 const ETAPAS_SIN_AIU = ["solicitud", "aprobacion_jefe", "aprobacion_director"];
 const tieneAiuDefinido = (s) => tieneAiuValores(s.aiu) || (s.items || []).some((it) => tieneAiuValores(it.aiu) || (it.cotizaciones || []).some((c) => tieneAiuValores(c.aiu)));
 const aiuVisible = (s) => s.tipo === "servicio" && (s.items || []).some((it) => (it.cotizaciones || []).length > 0) && (!ETAPAS_SIN_AIU.includes(s.status) || tieneAiuDefinido(s));
@@ -171,13 +173,37 @@ function ItemColapsable({ abierto, onToggle, numero, titulo, resumen, insignia, 
     </div>
   );
 }
-function ControlExpandirTodo({ n, onTodos }) {
+// Una FASE (sección) de la solicitud: tarjeta con flecha para expandir o contraer. Contraída conserva el título y la
+// descripción (si la tiene) y un resumen corto; el contenido SIGUE montado y solo se oculta, así que nada se pierde.
+// Se puede controlar desde afuera (abierto / onToggle) o dejar que maneje su propio estado.
+function SeccionColapsable({ titulo, icono: Icono, descripcion, resumen, insignia, acciones, abierto, onToggle, defaultAbierto = true, claseCaja = "bg-white rounded-xl border border-slate-200", children }) {
+  const [interno, setInterno] = useState(defaultAbierto);
+  const controlado = abierto !== undefined;
+  const esAbierto = controlado ? abierto : interno;
+  const alternar = controlado && onToggle ? onToggle : () => setInterno((v) => !v);
+  return (
+    <div className={claseCaja}>
+      <div className="flex items-start gap-3 px-5 py-3.5">
+        <button type="button" data-fase="true" onClick={alternar} aria-expanded={esAbierto} className="flex-1 min-w-0 flex items-start gap-2 text-left">
+          <ChevronRight size={16} className={`mt-0.5 shrink-0 text-slate-400 transition-transform ${esAbierto ? "rotate-90" : ""}`} />
+          <span className="min-w-0 flex-1">
+            <span className="font-medium text-slate-700 flex items-center gap-2 flex-wrap">{Icono && <Icono size={16} className="shrink-0" />}{titulo}{insignia}</span>
+            {descripcion && <span className="block text-xs text-slate-400 mt-0.5 font-normal">{descripcion}</span>}
+          </span>
+        </button>
+        {(resumen || acciones) && <div className="flex items-center gap-2 shrink-0 text-xs text-slate-500">{resumen}{acciones}</div>}
+      </div>
+      <div className={esAbierto ? "px-5 pb-5 space-y-3" : "hidden"}>{children}</div>
+    </div>
+  );
+}
+function ControlExpandirTodo({ n, onTodos, etiquetas = { abrir: "Expandir todo", cerrar: "Contraer todo" } }) {
   if (n <= 2) return null;
   return (
     <div className="flex items-center gap-2 text-[11px] text-slate-500">
-      <button type="button" onClick={() => onTodos(true)} className="hover:text-indigo-600 underline">Expandir todo</button>
+      <button type="button" onClick={() => onTodos(true)} className="hover:text-indigo-600 underline">{etiquetas.abrir}</button>
       <span>·</span>
-      <button type="button" onClick={() => onTodos(false)} className="hover:text-indigo-600 underline">Contraer todo</button>
+      <button type="button" onClick={() => onTodos(false)} className="hover:text-indigo-600 underline">{etiquetas.cerrar}</button>
     </div>
   );
 }
@@ -3168,7 +3194,7 @@ function AiuFilaProveedor({ nombre, subtotal, aiuGuardado, aiuItem, usaDelItem, 
 // porcentajes (Administración, Utilidad e Imprevistos) y aquí es donde Compras los digita, ítem por ítem. Para el valor
 // de la solicitud se usa el de la cotización seleccionada de cada ítem — o, mientras Compras no haya elegido, el de la
 // recomendada. Los demás roles lo ven en solo lectura. Solo aplica a órdenes de servicio/trabajo.
-function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [] }) {
+function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [], abierto, onToggle }) {
   const ab = useAbiertosItems(solicitud.items);
   const d = desgloseSolicitud(solicitud);
   const itemsRef = useRef(solicitud.items); itemsRef.current = solicitud.items;
@@ -3178,12 +3204,10 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [] }) {
   const guardarAiu = (itemId, cotIdx, aiu) => guardarRef.current?.(itemsRef.current.map((it) => (it.id === itemId ? { ...it, cotizaciones: it.cotizaciones.map((c, i) => (i === cotIdx ? { ...c, aiu } : c)) } : it)));
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) por ítem y por proveedor {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
-      <div className="text-[11px] text-slate-400">
+    <SeccionColapsable icono={DollarSign} titulo="Costos indirectos (AIU) por ítem y por proveedor" insignia={!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>} descripcion={<>
         El AIU se define por ítem <b>y por proveedor</b>: cada cotización tiene sus propios porcentajes. Para el valor de la solicitud se usa el de la cotización seleccionada de cada ítem — o el de la recomendada mientras Compras no haya elegido. El IVA (19%) se calcula solo sobre la Utilidad.
         {editable ? " Escribe los porcentajes de cada proveedor directamente en la tabla: se guardan solos." : ""}
-      </div>
+      </>} resumen={<span>Total {fmt(d.total)}</span>} abierto={abierto} onToggle={onToggle}>
       <div className="space-y-3">
         <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />
         {solicitud.items.map((it, idx) => {
@@ -3243,28 +3267,26 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [] }) {
         <div className="flex justify-between"><span>IVA sobre Utilidad</span><span>{fmt(d.ivaUtilidad)}</span></div>
         <div className="flex justify-between font-medium text-slate-700 border-t border-slate-100 pt-1 mt-1"><span>Total</span><span>{fmt(d.total)}</span></div>
       </div>
-    </div>
+    </SeccionColapsable>
   );
 }
 
-function ResumenTotales({ solicitud }) {
+function ResumenTotales({ solicitud, abierto, onToggle }) {
   const d = desgloseSolicitud(solicitud);
   // los costos indirectos (AIU) aparecen solo cuando ya hay cotizaciones cargadas
   if (solicitud.tipo === "servicio" && !aiuVisible(solicitud)) {
     return (
-      <div className="bg-white rounded-xl border border-slate-200 p-5">
-        <div className="font-medium text-slate-700 mb-3 text-sm">Totales de la solicitud</div>
+      <SeccionColapsable titulo="Totales de la solicitud" resumen={<span>Total {fmt(d.total)}</span>} abierto={abierto} onToggle={onToggle}>
         <div className="flex flex-col items-end gap-1 text-sm max-w-xs ml-auto">
           <div className="flex justify-between w-full"><span className="text-slate-500">Costo Directo</span><span className="text-slate-700">{fmt(d.costoDirecto)}</span></div>
           <div className="text-[11px] text-slate-400 w-full text-right">Los costos indirectos (AIU) se calculan cuando Compras ingrese las cotizaciones.</div>
         </div>
-      </div>
+      </SeccionColapsable>
     );
   }
   if (solicitud.tipo === "servicio") {
     return (
-      <div className="bg-white rounded-xl border border-slate-200 p-5">
-        <div className="font-medium text-slate-700 mb-3 text-sm">Totales de la solicitud (Costo Directo + AIU)</div>
+      <SeccionColapsable titulo="Totales de la solicitud (Costo Directo + AIU)" resumen={<span>Total {fmt(d.total)}</span>} abierto={abierto} onToggle={onToggle}>
         <div className="flex flex-col items-end gap-1 text-sm max-w-xs ml-auto">
           <div className="flex justify-between w-full"><span className="text-slate-500">Costo Directo</span><span className="text-slate-700">{fmt(d.costoDirecto)}</span></div>
           <div className="flex justify-between w-full"><span className="text-slate-500">Administración ({solicitud.aiu?.administracionPct || 0}%)</span><span className="text-slate-700">{fmt(d.administracion)}</span></div>
@@ -3273,36 +3295,34 @@ function ResumenTotales({ solicitud }) {
           <div className="flex justify-between w-full"><span className="text-slate-500">IVA sobre la Utilidad (19%)</span><span className="text-slate-700">{fmt(d.ivaUtilidad)}</span></div>
           <div className="flex justify-between w-full border-t border-slate-200 pt-1 mt-1"><span className="font-medium text-slate-800">Total solicitud</span><span className="font-semibold text-slate-900">{fmt(d.total)}</span></div>
         </div>
-      </div>
+      </SeccionColapsable>
     );
   }
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5">
-      <div className="font-medium text-slate-700 mb-3 text-sm">Totales de la solicitud</div>
+    <SeccionColapsable titulo="Totales de la solicitud" resumen={<span>Total {fmt(d.total)}</span>} abierto={abierto} onToggle={onToggle}>
       <div className="flex flex-col items-end gap-1 text-sm max-w-xs ml-auto">
         <div className="flex justify-between w-full"><span className="text-slate-500">Subtotal</span><span className="text-slate-700">{fmt(d.subtotal)}</span></div>
         <div className="flex justify-between w-full"><span className="text-slate-500">Total IVA</span><span className="text-slate-700">{fmt(d.iva)}</span></div>
         <div className="flex justify-between w-full border-t border-slate-200 pt-1 mt-1"><span className="font-medium text-slate-800">Total solicitud</span><span className="font-semibold text-slate-900">{fmt(d.total)}</span></div>
       </div>
-    </div>
+    </SeccionColapsable>
   );
 }
 
 /* ---------------------------------------------------------
    REVISIÓN DE COMPRAS (solo compra) — histórico + aprobar/rechazar/modificar
 --------------------------------------------------------- */
-function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGuardarItems, onDecision }) {
+function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGuardarItems, onDecision, abierto, onToggle }) {
   const [observacion, setObservacion] = useState("");
   const esCompras = currentUser.rol === "Compras" || currentUser.rol === "Administrador";
   if (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "no_aplica") return null;
 
   if (solicitud.revisionCompras.estado !== "pendiente") {
     return (
-      <div className="bg-white rounded-xl border border-slate-200 p-5">
-        <div className="font-medium text-slate-700 mb-2 flex items-center gap-2"><CheckSquare size={16} /> Revisión de Compras</div>
+      <SeccionColapsable icono={CheckSquare} titulo="Revisión de Compras" abierto={abierto} onToggle={onToggle}>
         <Badge tone={solicitud.revisionCompras.estado === "aprobada" ? "green" : "red"}>{solicitud.revisionCompras.estado === "aprobada" ? "Aprobada" : "Rechazada"} por {solicitud.revisionCompras.usuario} · {solicitud.revisionCompras.fecha}</Badge>
         {solicitud.revisionCompras.observacion && <div className="text-xs text-slate-500 italic mt-2">"{solicitud.revisionCompras.observacion}"</div>}
-      </div>
+      </SeccionColapsable>
     );
   }
 
@@ -3311,9 +3331,7 @@ function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGu
   );
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><CheckSquare size={16} /> Revisión de Compras</div>
-      <div className="text-xs text-slate-400">Solo visible para Compras: histórico de precios y opción de ajustar cantidades antes de continuar.</div>
+    <SeccionColapsable icono={CheckSquare} titulo="Revisión de Compras" descripcion="Solo visible para Compras: histórico de precios y opción de ajustar cantidades antes de continuar." abierto={abierto} onToggle={onToggle}>
       {solicitud.items.map((it) => (
         <div key={it.id} className="border border-slate-200 rounded-lg p-2.5">
           <div className="flex items-center gap-2 mb-1">
@@ -3329,7 +3347,7 @@ function RevisionCompras({ solicitud, historico, setHistorico, currentUser, onGu
         <button onClick={() => observacion.trim() && onDecision("rechazada", observacion)} className="px-3 py-1.5 rounded-lg text-xs text-rose-600 border border-rose-200">Rechazar</button>
         <button onClick={() => onDecision("aprobada", observacion)} className="px-3 py-1.5 rounded-lg text-xs bg-indigo-600 text-white font-medium">Aprobar y continuar a cotización</button>
       </div>
-    </div>
+    </SeccionColapsable>
   );
 }
 
@@ -3440,7 +3458,7 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
   );
 }
 
-function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
+function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
   const ab = useAbiertosItems(solicitud.items);
   const sinIva = solicitud.tipo === "servicio";
@@ -3480,12 +3498,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-      <div className="flex items-center justify-between gap-2 flex-wrap">
-        <div className="font-medium text-slate-700 flex items-center gap-2"><CalendarClock size={16} /> Plan de pagos por ítem</div>
-        {todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : (puedeEditarRol && !ocYaEnviada && hayAlgoPorConfirmar && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>)}
-      </div>
-      {opcional && <div className="text-[11px] text-slate-400">En las solicitudes de compra el plan de pagos es opcional: no bloquea la aprobación.</div>}
+    <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos por ítem" descripcion={opcional ? "En las solicitudes de compra el plan de pagos es opcional: no bloquea la aprobación." : undefined} acciones={todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : (puedeEditarRol && !ocYaEnviada && hayAlgoPorConfirmar && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>)} abierto={abierto} onToggle={onToggle}>
       {ocYaEnviada && <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">🔒 La orden ya fue generada — las condiciones de pago quedaron fijas.</div>}
       {sinPrecio && !ocYaEnviada && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">⚠ Todavía no hay precios cargados — se habilita en cuanto Compras cotice.</div>}
       {!tienePermiso && !ocYaEnviada && !sinPrecio && <div className="text-[11px] text-slate-400">Tu rol no tiene el permiso para editar y confirmar el plan de pagos. El administrador puede activarlo en Catálogo → Permisos.</div>}
@@ -3511,14 +3524,14 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
           />
         ))}
       </div>
-    </div>
+    </SeccionColapsable>
   );
 }
 
 /* ---------------------------------------------------------
    ORDEN ENVIADA AL PROVEEDOR
 --------------------------------------------------------- */
-function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar, area, solicitante }) {
+function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar, area, solicitante, abierto, onToggle }) {
   const [firmandoIdx, setFirmandoIdx] = useState(null);
   const [generandoIdx, setGenerandoIdx] = useState(null);
   const { mostrar: mostrarToast } = useToast();
@@ -3606,9 +3619,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
   );
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Firma y envío de la orden al proveedor</div>
-      <div className="text-xs text-slate-500">Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud. {solicitud.tipo === "servicio" ? <>Como el sistema contable no genera órdenes de servicio/trabajo, el propio sistema arma el documento por ti.</> : <>Sube aquí la orden generada en el sistema contable de cada uno.</>} El documento se envía a <b>Dirección Financiera</b> para su firma digital. Al marcar como "Enviada al proveedor", el documento ya firmado se envía automáticamente por correo a cada proveedor <b>que tenga correo registrado en el Catálogo</b> — si alguno no lo tiene, tendrás que enviársela tú manualmente.</div>
+    <SeccionColapsable icono={Send} titulo="Firma y envío de la orden al proveedor" descripcion={<>Se detectaron <b>{ordenes.length}</b> proveedor(es) adjudicado(s) en esta solicitud. {solicitud.tipo === "servicio" ? <>Como el sistema contable no genera órdenes de servicio/trabajo, el propio sistema arma el documento por ti.</> : <>Sube aquí la orden generada en el sistema contable de cada uno.</>} El documento se envía a <b>Dirección Financiera</b> para su firma digital. Al marcar como "Enviada al proveedor", el documento ya firmado se envía automáticamente por correo a cada proveedor <b>que tenga correo registrado en el Catálogo</b> — si alguno no lo tiene, tendrás que enviársela tú manualmente.</>} abierto={abierto} onToggle={onToggle}>
 
       {ordenes.map((o, i) => (
         <div key={i} className="border border-slate-200 rounded-lg p-3 space-y-2">
@@ -3653,12 +3664,12 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
           )}
         </div>
       ))}
-    </div>
+    </SeccionColapsable>
   );
 }
 
 // permite a Compras reenviar por correo una orden ya firmada (ej. si el proveedor la perdió o no llegó)
-function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empresa, currentUser }) {
+function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empresa, currentUser, abierto, onToggle }) {
   const [seleccionadas, setSeleccionadas] = useState([]);
   const [correosManual, setCorreosManual] = useState({}); // { idx: { c1: "", c2: "" } }
   const [enviando, setEnviando] = useState(false);
@@ -3703,9 +3714,7 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><Send size={16} /> Reenviar orden(es) firmada(s) al proveedor</div>
-      <div className="text-xs text-slate-400">Solo visible para Compras. Útil si el proveedor no recibió el correo o lo perdió.</div>
+    <SeccionColapsable icono={Send} titulo="Reenviar orden(es) firmada(s) al proveedor" descripcion="Solo visible para Compras. Útil si el proveedor no recibió el correo o lo perdió." abierto={abierto} onToggle={onToggle}>
       {ordenesFirmadas.map((o, idx) => {
         const prov = buscarProveedorDeOrden(o, proveedores);
         return (
@@ -3739,7 +3748,7 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
       })}
       <button onClick={reenviar} disabled={!seleccionadas.length || enviando} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40">{enviando ? "Enviando..." : `Reenviar (${seleccionadas.length})`}</button>
       {mensaje && <div className="text-[11px] text-emerald-600">{mensaje}</div>}
-    </div>
+    </SeccionColapsable>
   );
 }
 
@@ -3824,7 +3833,7 @@ function descargarExcelEvaluacion(ev, solicitud) {
 
 // permite corregir/agregar el plan de pagos sugerido después de reabrir una solicitud rechazada
 // (el mismo Sí/No y campos que existen al crearla, pero editable desde el detalle)
-function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuardar }) {
+function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuardar, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
   const [reevaluando, setReevaluando] = useState(false);
   const [ev, setEv] = useState({ ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor });
@@ -3899,17 +3908,10 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
   });
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="flex items-center justify-between flex-wrap gap-2">
-        <div className="font-medium text-slate-700 flex items-center gap-2">
-          <Award size={16} /> Evaluación de proveedor {!yaFinalizada && <span className="text-[11px] text-amber-600 font-normal">(obligatoria para completar — la hace Compras)</span>}
-          {yaFinalizada && ev.completada && !reevaluando && <Badge tone="green">Diligenciada</Badge>}
-        </div>
-        <div className="flex items-center gap-2">
+    <SeccionColapsable icono={Award} titulo="Evaluación de proveedor" descripcion={!yaFinalizada ? <span className="text-amber-600">Obligatoria para completar — la hace Compras.</span> : undefined} insignia={yaFinalizada && ev.completada && !reevaluando ? <Badge tone="green">Diligenciada</Badge> : null} acciones={<div className="flex items-center gap-2">
           {ev.completada && <button onClick={() => descargarExcelEvaluacion(ev, solicitud)} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>}
           {yaFinalizada && esCompras && !reevaluando && <button onClick={() => setReevaluando(true)} className="text-xs text-indigo-600 underline">{ev.completada ? "Reevaluar" : "Diligenciar ahora"}</button>}
-        </div>
-      </div>
+        </div>} abierto={abierto} onToggle={onToggle}>
 
       {esRegistroViejoVacio && !reevaluando && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
@@ -4016,12 +4018,12 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
           {reevaluando && <button onClick={() => setReevaluando(false)} className="text-xs text-slate-500">Cancelar</button>}
         </div>
       )}
-    </div>
+    </SeccionColapsable>
   );
 }
 
 
-function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNotificacion }) {
+function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNotificacion, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
   const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []) });
   const [enviado, setEnviado] = useState(false);
@@ -4048,13 +4050,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNoti
   };
 
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-      <div className="font-medium text-slate-700 flex items-center gap-2">
-        <PackageCheck size={16} /> Recepción
-        {estado === "satisfaccion" && <Badge tone="green">Recibida a satisfacción</Badge>}
-        {estado === "observaciones" && <Badge tone="amber">Recibida con observaciones</Badge>}
-        {!estado && <Badge tone="amber">Pendiente de recepción</Badge>}
-      </div>
+    <SeccionColapsable icono={PackageCheck} titulo="Recepción" insignia={<>{estado === "satisfaccion" && <Badge tone="green">Recibida a satisfacción</Badge>}{estado === "observaciones" && <Badge tone="amber">Recibida con observaciones</Badge>}{!estado && <Badge tone="amber">Pendiente de recepción</Badge>}</>} abierto={abierto} onToggle={onToggle}>
       <div>
         <label className="text-xs font-medium text-slate-500 mb-1 block">Soportes de recepción (puedes adjuntar varios)</label>
         <div className="space-y-1.5">
@@ -4082,7 +4078,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNoti
       {!estado && <div className="text-[11px] text-amber-600">Marca cómo se recibió para que Compras pueda hacer la evaluación y finalizar la solicitud.</div>}
       {estado === "satisfaccion" && <div className="text-[11px] text-emerald-600">✓ Recibida a satisfacción — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
       {estado === "observaciones" && <div className="text-[11px] text-amber-600">✓ Recibida con observaciones — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
-    </div>
+    </SeccionColapsable>
   );
 }
 
@@ -4495,6 +4491,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, nombre, itemCatalogoId: catId || x.itemCatalogoId } : x)) });
     mostrarToast("Ítem corregido y guardado en el catálogo");
   };
+  const fases = useAbiertosItems(FASES_DETALLE, true); // cada fase (sección) se puede expandir o contraer
   const abCot = useAbiertosItems(solicitud.items);   // cotizaciones de Compras
   const abComp = useAbiertosItems(solicitud.items);  // cuadro comparativo
   const abAdj = useAbiertosItems(solicitud.items);   // cotizaciones que adjunta el solicitante al corregir
@@ -4745,11 +4742,12 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="mt-4 pt-4 border-t border-slate-100"><Stepper status={solicitud.status} /></div>
       </div>
 
+      <div className="flex justify-end"><ControlExpandirTodo n={3} onTodos={fases.todos} etiquetas={{ abrir: "Expandir todas las fases", cerrar: "Contraer todas las fases" }} /></div>
+
       {areaPresup?.presupuesto > 0 && solicitud.status !== "rechazada" && (() => {
         const restante = areaPresup.presupuesto - comprometidoAreaDet - total;
         return (
-          <div className={`rounded-xl border p-4 ${restante < 0 ? "bg-rose-50 border-rose-200" : "bg-white border-slate-200"}`}>
-            <div className="text-sm font-medium text-slate-700 flex items-center gap-2 mb-2"><DollarSign size={15} /> Presupuesto de {areaPresup.nombre}</div>
+          <SeccionColapsable icono={DollarSign} titulo={`Presupuesto de ${areaPresup.nombre}`} claseCaja={`rounded-xl border ${restante < 0 ? "bg-rose-50 border-rose-200" : "bg-white border-slate-200"}`} resumen={<span className={restante < 0 ? "text-rose-600 font-medium" : ""}>Disponible {fmt(restante)}</span>} abierto={fases.abierto("presupuesto")} onToggle={() => fases.alternar("presupuesto")}>
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
               <div><div className="text-slate-400">Presupuesto</div><div className="font-medium text-slate-700">{fmt(areaPresup.presupuesto)}</div></div>
               <div><div className="text-slate-400">Comprometido (otras solicitudes)</div><div className="font-medium text-slate-700">{fmt(comprometidoAreaDet)}</div></div>
@@ -4758,7 +4756,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             </div>
             {restante < 0 && <div className="text-[11px] text-rose-600 mt-2">⚠ Esta solicitud supera el presupuesto disponible del área por {fmt(-restante)}.</div>}
             {solicitud.presupuestoAlEnviar && <div className="text-[11px] text-slate-400 mt-2">Al momento de enviarse, el área tenía {fmt(solicitud.presupuestoAlEnviar.disponible)} disponibles.</div>}
-          </div>
+          </SeccionColapsable>
         );
       })()}
 
@@ -4793,8 +4791,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         return null;
       })()}
 
-      <div className="bg-white rounded-xl border border-slate-200 p-5">
-        <div className="font-medium text-slate-700 mb-3">Ítems solicitados</div>
+      <SeccionColapsable titulo="Ítems solicitados" resumen={<span>{solicitud.items.length} ítem(s) · {fmt(total)}</span>} abierto={fases.abierto("items")} onToggle={() => fases.alternar("items")}>
         {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && solicitud.items.every((it) => !(it.cotizaciones?.length > 0)) && (
           <div className="text-xs text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2 mb-3">Puedes corregir el precio estimado de cada ítem mientras la solicitud esté en este paso.</div>
         )}
@@ -4876,25 +4873,21 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           })}</tbody>
         </table>
         </div>
-      </div>
+      </SeccionColapsable>
 
       {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-          <div className="font-medium text-slate-700">Adjuntar cotizaciones (opcional)</div>
-          <div className="text-xs text-slate-400">Si ya tienes una cotización de algún proveedor para un ítem, puedes adjuntarla aquí — le ahorra trabajo a Compras más adelante.</div>
+        <SeccionColapsable titulo="Adjuntar cotizaciones (opcional)" descripcion={<>Si ya tienes una cotización de algún proveedor para un ítem, puedes adjuntarla aquí — le ahorra trabajo a Compras más adelante.</>} abierto={fases.abierto("adjuntar")} onToggle={() => fases.alternar("adjuntar")}>
           <ControlExpandirTodo n={solicitud.items.length} onTodos={abAdj.todos} />
           {solicitud.items.map((it, idx) => (
             <ItemColapsable key={it.id} abierto={abAdj.abierto(it.id)} onToggle={() => abAdj.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)} resumen={<span>{(it.cotizaciones || []).length} cotización(es)</span>}>
               <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, cotizaciones: cots } : x)) })} compacto sinIva={solicitud.tipo === "servicio"} />
             </ItemColapsable>
           ))}
-        </div>
+        </SeccionColapsable>
       )}
 
       {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-          <div className="font-medium text-slate-700 flex items-center gap-2"><CalendarClock size={16} /> Plan de pagos sugerido, por ítem (opcional)</div>
-          <div className="text-xs text-slate-400">Pasa como valor inicial al plan de pagos que revisan Compras y Dirección Financiera.</div>
+        <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos sugerido, por ítem (opcional)" descripcion={<>Pasa como valor inicial al plan de pagos que revisan Compras y Dirección Financiera.</>} abierto={fases.abierto("sugerido")} onToggle={() => fases.alternar("sugerido")}>
           <ControlExpandirTodo n={solicitud.items.length} onTodos={abSug.todos} />
           {solicitud.items.map((it, idx) => {
             const totalIt = totalItemConAiu(it, solicitud.tipo === "servicio");
@@ -4909,7 +4902,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
               </ItemColapsable>
             );
           })}
-        </div>
+        </SeccionColapsable>
       )}
 
       {currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && solicitud.historialEstados.some((h) => h.status === "rechazada") && (
@@ -4920,19 +4913,14 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       {solicitud.status === "cotizando" && puedeVerHistorico(currentUser) && (
-        <RevisionCompras solicitud={solicitud} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onGuardarItems={guardarItemsRevision} onDecision={decidirRevisionCompras} />
+        <RevisionCompras abierto={fases.abierto("revision")} onToggle={() => fases.alternar("revision")} solicitud={solicitud} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onGuardarItems={guardarItemsRevision} onDecision={decidirRevisionCompras} />
       )}
       {solicitud.status === "cotizando" && !puedeVerHistorico(currentUser) && solicitud.tipo === "compra" && solicitud.revisionCompras.estado === "pendiente" && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Pendiente de revisión por el área de Compras antes de continuar con las cotizaciones.</div>
       )}
 
       {!comparativoBloqueado && ["cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status) && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada") && puedeGestionarCotizaciones(currentUser) && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="font-medium text-slate-700">Cargar hasta 3 cotizaciones por ítem (Compras)</div>
-            <button onClick={() => setMostrarCotGeneralCompras(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>
-          </div>
-          <div className="text-[11px] text-slate-400">Si por error solo guardaste 1 o 2, puedes seguir agregando hasta 3 aquí mismo, incluso después de generar el cuadro comparativo — hasta que se cree la orden.</div>
+        <SeccionColapsable titulo="Cargar hasta 3 cotizaciones por ítem (Compras)" descripcion={<>Si por error solo guardaste 1 o 2, puedes seguir agregando hasta 3 aquí mismo, incluso después de generar el cuadro comparativo — hasta que se cree la orden.</>} acciones={<button onClick={() => setMostrarCotGeneralCompras(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>} abierto={fases.abierto("cotizaciones")} onToggle={() => fases.alternar("cotizaciones")}>
           {mostrarCotGeneralCompras && (
             <CotizacionGeneralForm items={solicitud.items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneralCompras} onCerrar={() => setMostrarCotGeneralCompras(false)} />
           )}
@@ -4944,47 +4932,46 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
               <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} sinIva={solicitud.tipo === "servicio"} />
             </ItemColapsable>
           ))}
-        </div>
+        </SeccionColapsable>
       )}
 
       {["aprobacion_jefe", "aprobacion_director", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && solicitud.items.some((i) => i.cotizaciones.length > 0) && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-          <div className="font-medium text-slate-700 flex items-center gap-2"><TrendingUp size={16} /> Cuadro comparativo (sugerencia automática)</div>
-          {["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && <div className="text-xs text-slate-400">Cotizaciones que el solicitante adjuntó al crear la solicitud — Compras podrá completar y ajustar esto más adelante.</div>}
+        <SeccionColapsable icono={TrendingUp} titulo="Cuadro comparativo (sugerencia automática)" descripcion={["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) ? <>Cotizaciones que el solicitante adjuntó al crear la solicitud — Compras podrá completar y ajustar esto más adelante.</> : undefined} abierto={fases.abierto("comparativo")} onToggle={() => fases.alternar("comparativo")}>
           <ControlExpandirTodo n={solicitud.items.filter((i) => i.cotizaciones.length > 0).length} onTodos={abComp.todos} />
           {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} abierto={abComp.abierto(it.id)} onToggle={() => abComp.alternar(it.id)} item={it} tinte={tinteItem(solicitud.items.findIndex((x) => x.id === it.id))} numero={solicitud.items.findIndex((x) => x.id === it.id) + 1} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} />)}
-        </div>
+        </SeccionColapsable>
       )}
 
       {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
         aiuVisible(solicitud)
-          ? <AiuEditor proveedores={proveedores} solicitud={solicitud} onGuardarItems={(items) => patch({ items })} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
-          : <ResumenTotales solicitud={solicitud} />
+          ? <AiuEditor abierto={fases.abierto("aiu")} onToggle={() => fases.alternar("aiu")} proveedores={proveedores} solicitud={solicitud} onGuardarItems={(items) => patch({ items })} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
+          : <ResumenTotales abierto={fases.abierto("aiu")} onToggle={() => fases.alternar("aiu")} solicitud={solicitud} />
       )}
 
       {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
-        <PagosPorItem solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} />
+        <PagosPorItem abierto={fases.abierto("pagos")} onToggle={() => fases.alternar("pagos")} solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} />
       )}
 
-      <OcEnviadaPanel solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} area={area} solicitante={solicitante} onGuardar={(oc) => patch({ ocEnviada: oc })} />
+      <OcEnviadaPanel abierto={fases.abierto("orden")} onToggle={() => fases.alternar("orden")} solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} area={area} solicitante={solicitante} onGuardar={(oc) => patch({ ocEnviada: oc })} />
 
       {(solicitud.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl) && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
-          <div className="font-medium text-slate-700 flex items-center gap-2"><FileText size={16} /> Copia de la orden enviada al proveedor</div>
+        <SeccionColapsable icono={FileText} titulo="Copia de la orden enviada al proveedor" abierto={fases.abierto("copia")} onToggle={() => fases.alternar("copia")}>
           {(solicitud.ocEnviada.ordenesProveedor || []).filter((o) => o.archivoFirmadoUrl).map((o, i) => (
             <div key={i} className="text-sm text-slate-600 flex items-center gap-2">
               <Truck size={13} className="text-slate-400" /> {o.proveedorNombre} — <EnlacePrivado path={o.archivoFirmadoUrl} className="text-indigo-600 underline">Ver / descargar PDF firmado</EnlacePrivado>
             </div>
           ))}
-        </div>
+        </SeccionColapsable>
       )}
 
-      <ReenviarOrdenesPanel solicitud={solicitud} proveedores={proveedores} guardarProveedor={guardarProveedor} empresa={empresa} currentUser={currentUser} />
+      <ReenviarOrdenesPanel abierto={fases.abierto("reenviar")} onToggle={() => fases.alternar("reenviar")} solicitud={solicitud} proveedores={proveedores} guardarProveedor={guardarProveedor} empresa={empresa} currentUser={currentUser} />
 
-      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel solicitud={solicitud} currentUser={currentUser} usuarios={usuarios} onGuardar={(r) => patch({ recepcion: r })} crearNotificacion={crearNotificacion} />}
+      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel abierto={fases.abierto("recepcion")} onToggle={() => fases.alternar("recepcion")} solicitud={solicitud} currentUser={currentUser} usuarios={usuarios} onGuardar={(r) => patch({ recepcion: r })} crearNotificacion={crearNotificacion} />}
 
       {["recepcion", "completada"].includes(solicitud.status) && (
         <EvaluacionPanel
+          abierto={fases.abierto("evaluacion")}
+          onToggle={() => fases.alternar("evaluacion")}
           solicitud={solicitud}
           empresa={empresa}
           proveedores={proveedores}
@@ -4997,8 +4984,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <OrdenDocumento solicitud={solicitud} empresa={empresa} area={area} departamento={departamento} solicitante={solicitante} proveedores={proveedores} conceptosGasto={conceptosGasto} />
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-5">
-        <div className="font-medium text-slate-700 mb-3 flex items-center gap-2"><PenTool size={15} /> Firmas</div>
+      <SeccionColapsable icono={PenTool} titulo="Firmas" abierto={fases.abierto("firmas")} onToggle={() => fases.alternar("firmas")}>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
           <FirmaBlock rol="solicitante" firma={solicitud.firmas.solicitante} />
           <FirmaBlock rol="jefe de área" firma={solicitud.firmas.jefe} />
@@ -5006,7 +4992,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           <FirmaBlock rol="dirección financiera" firma={solicitud.firmas.financiera} />
           <FirmaBlock rol="gerencia" firma={solicitud.firmas.gerencia} />
         </div>
-      </div>
+      </SeccionColapsable>
 
       <TiempoProceso historial={solicitud.historialEstados} />
       <NotificacionesPanel notificaciones={solicitud.notificaciones} />
