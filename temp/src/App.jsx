@@ -281,7 +281,8 @@ function primerErrorPrecio(item) {
   for (const c of item.cotizaciones || []) { const e = erroresPrecioCotizacion(item, c); if (e.length) return e[0].texto; }
   return null;
 }
-function tieneAiuValores(aiu) { return !!aiu && (parseFloat(aiu.administracionPct) || parseFloat(aiu.utilidadPct) || parseFloat(aiu.imprevistosPct)); }
+const idCotizacion = () => "c" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+function tieneAiuValores(aiu) { return !!aiu && !!(parseFloat(aiu.administracionPct) || parseFloat(aiu.utilidadPct) || parseFloat(aiu.imprevistosPct)); }
 // total real de una cotización de servicio: usa el AIU propio de esa cotización si lo tiene, si no
 // el del ítem como respaldo — es el mismo criterio que usa el cálculo real de la solicitud
 function totalConAiuCotizacion(desglose, cotizacion, itemAiu) {
@@ -2473,7 +2474,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     setItems((prev) => prev.map((i) => {
       if (!(i.id in precios)) return i;
       if (i.cotizaciones.length >= 3) return i;
-      return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
+      return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
     }));
     setMostrarCotGeneral(false);
   };
@@ -2784,7 +2785,7 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo }) {
 
 function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo, sinIva, tinte }) {
   const [abierto, setAbierto] = useState(!compacto);
-  const [cots, setCots] = useState(item.cotizaciones.length ? item.cotizaciones : []);
+  const [cots, setCots] = useState(() => (item.cotizaciones || []).map((c) => (c.id ? c : { ...c, id: idCotizacion() })));
   const [guardadoMsg, setGuardadoMsg] = useState(false);
   const update = (i, field, val) => setCots((prev) => prev.map((c, idx) => (idx === i ? { ...c, [field]: val } : c)));
   const updateAiu = (i, campo, val) => setCots((prev) => prev.map((c, idx) => (idx === i ? { ...c, aiu: { ...(c.aiu || {}), [campo]: pctValido(val) } } : c)));
@@ -2798,8 +2799,14 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
     else alert("No se pudo obtener la tasa de cambio automática. Ingrésala manualmente.");
   };
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
-  const addCot = () => cots.length < 3 && setCots([...cots, { proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, pagos: null, archivoNombre: "" }]);
+  const addCot = () => cots.length < 3 && setCots([...cots, { id: idCotizacion(), proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, pagos: null, archivoNombre: "" }]);
   const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
+  // AIU vigente de una cotización: el que está guardado en la solicitud (se edita en el panel de AIU), no la copia local
+  const aiuDe = (c) => {
+    const previas = item.cotizaciones || [];
+    const ext = (c.id && previas.find((x) => x.id === c.id)) || previas.find((x) => !x.id && x.proveedorId === c.proveedorId && x.precioUnitario === c.precioUnitario);
+    return (ext && ext.aiu) || c.aiu || {};
+  };
 
   // guarda automáticamente lo que ya se alcanzó a escribir (incluido el archivo adjunto), sin depender
   // de que se le dé clic al botón — así nada se pierde si alguien solo adjunta el archivo y no le da "Guardar"
@@ -2949,25 +2956,10 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             </div>
 
-            {sinIva && !compacto && (
-              <div className="grid grid-cols-3 gap-2">
-                <div className="flex flex-col gap-0.5">
-                  <label className="text-[10px] text-slate-400">Admón. % (este proveedor)</label>
-                  <input type="number" min="0" max="100" step="0.1" placeholder="0" value={c.aiu?.administracionPct || ""} onChange={(e) => updateAiu(i, "administracionPct", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <label className="text-[10px] text-slate-400">Utilidad %</label>
-                  <input type="number" min="0" max="100" step="0.1" placeholder="0" value={c.aiu?.utilidadPct || ""} onChange={(e) => updateAiu(i, "utilidadPct", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-                </div>
-                <div className="flex flex-col gap-0.5">
-                  <label className="text-[10px] text-slate-400">Imprevistos %</label>
-                  <input type="number" min="0" max="100" step="0.1" placeholder="0" value={c.aiu?.imprevistosPct || ""} onChange={(e) => updateAiu(i, "imprevistosPct", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-                </div>
-              </div>
-            )}
+            {sinIva && !compacto && <div className="text-[11px] text-slate-400">El AIU de este proveedor se digita en el panel «Costos indirectos (AIU) por ítem y por proveedor», más abajo.</div>}
 
             {sinIva && c.precioUnitario && (() => {
-              const aiuC = c.aiu || {};
+              const aiuC = aiuDe(c);
               const admC = d.subtotal * (parseFloat(aiuC.administracionPct) || 0) / 100;
               const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
               const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
@@ -2980,7 +2972,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (() => {
                 const factor = parseFloat(c.factorConversion) || 1;
                 const precioPorUnidad = precioEquivalente(c);
-                const aiuC = c.aiu || {};
+                const aiuC = aiuDe(c);
                 const admC = d.subtotal * (parseFloat(aiuC.administracionPct) || 0) / 100;
                 const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
                 const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
@@ -3122,21 +3114,74 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
   );
 }
 
-// Resumen de los costos indirectos (AIU). El AIU es POR ÍTEM Y POR PROVEEDOR: cada cotización lleva sus propios
-// porcentajes (Administración, Utilidad e Imprevistos, que Compras digita en la cotización de ese proveedor) y aquí se
-// ven todos juntos, ítem por ítem. Para el valor de la solicitud se usa el de la cotización seleccionada de cada ítem
-// — o, mientras Compras no haya elegido, el de la recomendada. Solo aplica a órdenes de servicio/trabajo.
-function AiuEditor({ solicitud, editable, proveedores = [] }) {
+// Una fila de la tabla de AIU: los tres porcentajes de UN proveedor para UN ítem. Lo que se escribe queda en una copia
+// local (para que el campo no "se coma" lo digitado mientras la solicitud se guarda) y se guarda solo, medio segundo
+// después de dejar de escribir, al salir del campo o al cerrar la pantalla. El total de la fila se recalcula al escribir.
+const CAMPOS_AIU = ["administracionPct", "utilidadPct", "imprevistosPct"];
+function AiuFilaProveedor({ nombre, subtotal, aiuGuardado, aiuItem, usaDelItem, aplicada, eligio, editable, onCommit }) {
+  const g = aiuGuardado || {};
+  const desdeGuardado = () => ({ administracionPct: g.administracionPct ?? "", utilidadPct: g.utilidadPct ?? "", imprevistosPct: g.imprevistosPct ?? "" });
+  const [loc, setLoc] = useState(desdeGuardado);
+  const locRef = useRef(loc); locRef.current = loc;
+  const sucio = useRef(false);
+  const timer = useRef(null);
+  const onCommitRef = useRef(onCommit); onCommitRef.current = onCommit;
+  const claveGuardado = CAMPOS_AIU.map((k) => g[k] ?? "").join("|");
+  // se sincroniza con lo guardado, salvo mientras se está escribiendo
+  useEffect(() => {
+    const coincide = CAMPOS_AIU.every((k) => String(locRef.current[k] ?? "") === String(g[k] ?? ""));
+    if (coincide) sucio.current = false;
+    else if (!sucio.current) setLoc(desdeGuardado());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [claveGuardado]);
+  const guardar = () => { clearTimeout(timer.current); if (sucio.current) onCommitRef.current(locRef.current); };
+  const cambiar = (campo, v) => {
+    const nuevo = { ...locRef.current, [campo]: pctValido(v) };
+    locRef.current = nuevo; setLoc(nuevo); sucio.current = true;
+    clearTimeout(timer.current); timer.current = setTimeout(guardar, 600);
+  };
+  // si se sale de la pantalla con algo por guardar, se guarda
+  useEffect(() => () => { clearTimeout(timer.current); if (sucio.current) onCommitRef.current(locRef.current); }, []);
+
+  const mostrado = editable ? loc : (tieneAiuValores(g) ? g : (aiuItem || {}));
+  const total = totalConAiuCotizacion({ subtotal }, { aiu: loc }, aiuItem);
+  const celda = (campo) => (
+    <td className="py-1.5 px-2 text-right">
+      {editable
+        ? <input type="number" min="0" max="100" step="0.1" inputMode="decimal" aria-label={`${campo} de ${nombre}`} value={loc[campo]} placeholder={String((usaDelItem && aiuItem?.[campo]) || 0)} onChange={(e) => cambiar(campo, e.target.value)} onBlur={guardar} className="w-16 border border-slate-200 rounded-md px-1.5 py-1 text-xs text-right" />
+        : (mostrado[campo] || 0)}
+    </td>
+  );
+  return (
+    <tr className={`border-t border-slate-100 ${aplicada ? "bg-emerald-50/60" : ""}`}>
+      <td className="py-1.5 px-2 font-medium text-slate-700">{nombre}{usaDelItem && <span className="ml-1 text-[10px] text-slate-400 font-normal">(AIU general del ítem)</span>}</td>
+      <td className="py-1.5 px-2 text-right">{fmt(subtotal)}</td>
+      {celda("administracionPct")}{celda("utilidadPct")}{celda("imprevistosPct")}
+      <td className="py-1.5 px-2 text-right font-medium">{fmt(total)}</td>
+      <td className="py-1.5 px-2 text-right">{aplicada && <Badge tone="green">{eligio ? "Seleccionada" : "Recomendada"}</Badge>}</td>
+    </tr>
+  );
+}
+
+// Panel de los costos indirectos (AIU). El AIU es POR ÍTEM Y POR PROVEEDOR: cada cotización lleva sus propios
+// porcentajes (Administración, Utilidad e Imprevistos) y aquí es donde Compras los digita, ítem por ítem. Para el valor
+// de la solicitud se usa el de la cotización seleccionada de cada ítem — o, mientras Compras no haya elegido, el de la
+// recomendada. Los demás roles lo ven en solo lectura. Solo aplica a órdenes de servicio/trabajo.
+function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [] }) {
   const ab = useAbiertosItems(solicitud.items);
   const d = desgloseSolicitud(solicitud);
+  const itemsRef = useRef(solicitud.items); itemsRef.current = solicitud.items;
+  const guardarRef = useRef(onGuardarItems); guardarRef.current = onGuardarItems;
   const nombreProv = (c) => proveedores.find((pv) => pv.id === c.proveedorId)?.nombre || c.proveedorNombre || "Proveedor";
+  // guarda el AIU de UNA cotización de UN ítem, partiendo de lo último que hay guardado
+  const guardarAiu = (itemId, cotIdx, aiu) => guardarRef.current?.(itemsRef.current.map((it) => (it.id === itemId ? { ...it, cotizaciones: it.cotizaciones.map((c, i) => (i === cotIdx ? { ...c, aiu } : c)) } : it)));
 
   return (
     <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
-      <div className="font-medium text-slate-700 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) por ítem y por proveedor</div>
+      <div className="font-medium text-slate-700 flex items-center gap-2"><DollarSign size={16} /> Costos indirectos (AIU) por ítem y por proveedor {!editable && <span className="text-[11px] text-slate-400 font-normal">(solo lectura)</span>}</div>
       <div className="text-[11px] text-slate-400">
         El AIU se define por ítem <b>y por proveedor</b>: cada cotización tiene sus propios porcentajes. Para el valor de la solicitud se usa el de la cotización seleccionada de cada ítem — o el de la recomendada mientras Compras no haya elegido. El IVA (19%) se calcula solo sobre la Utilidad.
-        {editable ? " Para cambiar el AIU de un proveedor, edítalo en su cotización." : ""}
+        {editable ? " Escribe los porcentajes de cada proveedor directamente en la tabla: se guardan solos." : ""}
       </div>
       <div className="space-y-3">
         <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />
@@ -3150,7 +3195,7 @@ function AiuEditor({ solicitud, editable, proveedores = [] }) {
             <ItemColapsable key={it.id} abierto={ab.abierto(it.id)} onToggle={() => ab.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)}
               resumen={cots.length ? <span>AIU aplicado {aiuActivo.administracionPct || 0} / {aiuActivo.utilidadPct || 0} / {aiuActivo.imprevistosPct || 0} %</span> : <span>Sin cotizaciones</span>}>
               {cots.length === 0 ? (
-                <div className="text-[11px] text-slate-400 px-1 py-2">Este ítem todavía no tiene cotizaciones: el AIU se define en la cotización de cada proveedor.</div>
+                <div className="text-[11px] text-slate-400 px-1 py-2">Este ítem todavía no tiene cotizaciones: el AIU se digita por cada proveedor cuando Compras las cargue.</div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -3166,23 +3211,20 @@ function AiuEditor({ solicitud, editable, proveedores = [] }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {cots.map((c, i) => {
-                        const propio = tieneAiuValores(c.aiu);
-                        const usaDelItem = !propio && tieneAiuValores(it.aiu); // solicitudes antiguas con un AIU general del ítem
-                        const a = propio ? c.aiu : (it.aiu || {});
-                        const aplicada = i === idxActiva;
-                        return (
-                          <tr key={i} className={`border-t border-slate-100 ${aplicada ? "bg-emerald-50/60" : ""}`}>
-                            <td className="py-1.5 px-2 font-medium text-slate-700">{nombreProv(c)}{usaDelItem && <span className="ml-1 text-[10px] text-slate-400 font-normal">(AIU general del ítem)</span>}</td>
-                            <td className="py-1.5 px-2 text-right">{fmt(scored[i].subtotal)}</td>
-                            <td className="py-1.5 px-2 text-right">{a.administracionPct || 0}</td>
-                            <td className="py-1.5 px-2 text-right">{a.utilidadPct || 0}</td>
-                            <td className="py-1.5 px-2 text-right">{a.imprevistosPct || 0}</td>
-                            <td className="py-1.5 px-2 text-right font-medium">{fmt(scored[i].totalConAiu)}</td>
-                            <td className="py-1.5 px-2 text-right">{aplicada && <Badge tone="green">{eligio ? "Seleccionada" : "Recomendada"}</Badge>}</td>
-                          </tr>
-                        );
-                      })}
+                      {cots.map((c, i) => (
+                        <AiuFilaProveedor
+                          key={c.id || i}
+                          nombre={nombreProv(c)}
+                          subtotal={scored[i].subtotal}
+                          aiuGuardado={c.aiu}
+                          aiuItem={it.aiu}
+                          usaDelItem={!tieneAiuValores(c.aiu) && tieneAiuValores(it.aiu)}
+                          aplicada={i === idxActiva}
+                          eligio={eligio}
+                          editable={editable}
+                          onCommit={(aiu) => guardarAiu(it.id, i, aiu)}
+                        />
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -4513,14 +4555,23 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const empujarHistorial = (status) => [...solicitud.historialEstados, { status, fecha: ahoraISO() }];
   const notificar = (mensaje) => [...solicitud.notificaciones, { fecha: ahoraISO(), mensaje }];
 
-  const guardarCotizaciones = (itemId, cots) => patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizaciones: cots } : i)) });
+  const guardarCotizaciones = (itemId, cots) => {
+    // el AIU se edita en el panel de costos indirectos: el formulario de cotización guarda todo lo demás pero conserva
+    // el AIU que ya esté guardado (si no, cualquier cambio en el formulario borraría lo que se puso en el panel)
+    const previas = solicitud.items.find((i) => i.id === itemId)?.cotizaciones || [];
+    const fusionadas = cots.map((c) => {
+      const previa = (c.id && previas.find((x) => x.id === c.id)) || previas.find((x) => !x.id && x.proveedorId === c.proveedorId && x.precioUnitario === c.precioUnitario);
+      return previa && previa.aiu ? { ...c, aiu: previa.aiu } : c;
+    });
+    patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizaciones: fusionadas } : i)) });
+  };
   const [mostrarCotGeneralCompras, setMostrarCotGeneralCompras] = useState(false);
   // aplica una misma cotización (proveedor + archivo) a varios ítems a la vez, cada uno con su propio precio
   const aplicarCotizacionGeneralCompras = (precios, cotizacionBase) => {
     patch({
       items: solicitud.items.map((i) => {
         if (!(i.id in precios) || i.cotizaciones.length >= 3) return i;
-        return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
+        return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
       }),
     });
     setMostrarCotGeneralCompras(false);
@@ -4911,7 +4962,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
         aiuVisible(solicitud)
-          ? <AiuEditor proveedores={proveedores} solicitud={solicitud} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
+          ? <AiuEditor proveedores={proveedores} solicitud={solicitud} onGuardarItems={(items) => patch({ items })} editable={puedeGestionarCotizaciones(currentUser) && !["oc_enviada", "recepcion", "completada"].includes(solicitud.status)} />
           : <ResumenTotales solicitud={solicitud} />
       )}
 
