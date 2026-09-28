@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabaseClient'
 
 // Notificaciones dentro de la app (campanita) — separadas del log interno de cada
-// solicitud. Se refrescan solas cada 30s (más simple y confiable que configurar
+// solicitud. Se refrescan solas cada 15s (más simple y confiable que configurar
 // Supabase Realtime para este caso de uso).
 export function useNotificaciones(usuarioId) {
   const [notificaciones, setNotificaciones] = useState([])
@@ -17,7 +17,7 @@ export function useNotificaciones(usuarioId) {
       .eq('usuario_id', usuarioId)
       .order('creado_en', { ascending: false })
       .limit(50)
-    if (error) { console.error('Error cargando notificaciones:', error.message); return }
+    if (error) { console.error('Error cargando notificaciones:', error.message); setCargando(false); return }
     setNotificaciones((data || []).map((r) => ({
       id: r.id, usuarioId: r.usuario_id, mensaje: r.mensaje, solicitudId: r.solicitud_id,
       leida: r.leida, creadoEn: r.creado_en,
@@ -27,7 +27,7 @@ export function useNotificaciones(usuarioId) {
 
   useEffect(() => {
     cargar()
-    timerRef.current = setInterval(cargar, 30000)
+    timerRef.current = setInterval(cargar, 15000)
     return () => clearInterval(timerRef.current)
   }, [cargar])
 

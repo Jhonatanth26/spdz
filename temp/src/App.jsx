@@ -123,6 +123,27 @@ const tinteItem = (idx) => TINTES_ITEM[(idx || 0) % TINTES_ITEM.length];
 const ETAPAS_SIN_AIU = ["solicitud", "aprobacion_jefe", "aprobacion_director"];
 const tieneAiuDefinido = (s) => tieneAiuValores(s.aiu) || (s.items || []).some((it) => tieneAiuValores(it.aiu) || (it.cotizaciones || []).some((c) => tieneAiuValores(c.aiu)));
 const aiuVisible = (s) => s.tipo === "servicio" && (s.items || []).some((it) => (it.cotizaciones || []).length > 0) && (!ETAPAS_SIN_AIU.includes(s.status) || tieneAiuDefinido(s));
+// Avisos (toasts) globales: el mismo aviso verde de arriba a la derecha para toda la app — crear una solicitud,
+// cada cambio del flujo y las notificaciones que llegan. tipo: "ok" (verde), "alerta" (rojo: rechazos y errores),
+// "info" (índigo: notificaciones). Se cierran solos, o al hacer clic (y si traen onClick, lo ejecutan).
+const ToastContext = React.createContext({ mostrar: () => {} });
+const useToast = () => React.useContext(ToastContext);
+function ToastHost({ toasts, onCerrar }) {
+  const colores = { ok: "bg-emerald-600", alerta: "bg-rose-600", info: "bg-indigo-600" };
+  return (
+    <div className="fixed top-16 right-4 z-50 flex flex-col gap-2 items-end pointer-events-none">
+      {toasts.map((t) => {
+        const Icono = t.tipo === "info" ? Bell : t.tipo === "alerta" ? XCircle : CheckCircle2;
+        return (
+          <div key={t.id} role="status" onClick={() => { t.onClick?.(); onCerrar(t.id); }} className={`pointer-events-auto cursor-pointer ${colores[t.tipo] || colores.ok} text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2 max-w-sm`}>
+            <Icono size={16} className="shrink-0" /> <span>{t.mensaje}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 // Ítems plegables: con varios ítems las pantallas se vuelven larguísimas. Cada ítem tiene una flecha para expandir o
 // contraer y, contraído, deja una línea de resumen. El contenido SIGUE montado (solo se oculta), así que nada de lo
 // que se haya escrito se pierde al contraer.
@@ -3352,6 +3373,7 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
 }
 
 function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
+  const { mostrar: mostrarToast } = useToast();
   const ab = useAbiertosItems(solicitud.items);
   const sinIva = solicitud.tipo === "servicio";
   const opcional = solicitud.tipo === "compra"; // en solicitudes de compra el plan no bloquea la aprobación
@@ -3374,8 +3396,8 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
   const hayAlgoPorConfirmar = filas.some((f) => !f.conf && (!opcional || planTieneValores(f.inicial)));
 
   const guardarItem = (itemId, pagos) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos } : it)));
-  const confirmarItem = (itemId, pagos) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } } : it)));
-  const editarDeNuevoItem = (itemId) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagosConfirmados: false } : it)));
+  const confirmarItem = (itemId, pagos) => { onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } } : it))); mostrarToast("Plan de pagos del ítem confirmado"); };
+  const editarDeNuevoItem = (itemId) => { onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagosConfirmados: false } : it))); mostrarToast("Plan de pagos reabierto para editarlo"); };
 
   const confirmarTodos = () => {
     const porConfirmar = filas.filter((f) => !f.conf && (!opcional || planTieneValores(f.inicial)));
@@ -3386,6 +3408,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
       const f = porConfirmar.find((x) => x.it.id === it.id);
       return f ? { ...it, pagos: f.inicial, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } } : it;
     }));
+    mostrarToast(porConfirmar.length === 1 ? "Plan de pagos confirmado" : `Planes de pago confirmados (${porConfirmar.length} ítems)`);
   };
 
   return (
@@ -3430,6 +3453,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems }) {
 function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar }) {
   const [firmandoIdx, setFirmandoIdx] = useState(null);
   const [generandoIdx, setGenerandoIdx] = useState(null);
+  const { mostrar: mostrarToast } = useToast();
   if (solicitud.status !== "orden") return null;
   // gestionar/generar la orden es tarea de Compras; firmarla es tarea de Dirección Financiera —
   // ambos roles necesitan ver este panel (cada quien solo puede tocar lo que le corresponde)
@@ -3485,7 +3509,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       const planesPago = baseItems.filter((it) => planConfirmadoItem(solicitud, it)).map((it) => ({ nombre: it.nombre, pagos: planOficialItem(solicitud, it) })).filter((pl) => planTieneValores(pl.pagos));
       const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre: orden.proveedorNombre, items: itemsParaPdf, planesPago, ...totales });
       const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
-      if (ruta) actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() });
+      if (ruta) { actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); mostrarToast("Orden de servicio generada — pendiente de firma"); }
       else alert("No se pudo generar el documento. Intenta de nuevo.");
     } catch (e) {
       console.error("Error generando la orden de servicio:", e);
@@ -3505,7 +3529,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       const blob = await firmarPDF(urlOriginalFirmada, urlFirmaFotoFirmada, currentUser.nombre, currentUser.cargo, empresa?.nombre);
       const archivo = new File([blob], `OC_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, { type: "application/pdf" });
       const ruta = await subirArchivo(archivo, "ordenes-firmadas");
-      if (ruta) actualizarOrden(idx, { archivoFirmadoUrl: ruta, fecha: hoy(), usuario: currentUser.nombre });
+      if (ruta) { actualizarOrden(idx, { archivoFirmadoUrl: ruta, fecha: hoy(), usuario: currentUser.nombre }); mostrarToast(`Orden de ${orden.proveedorNombre} firmada`); }
       else alert("No se pudo guardar el documento firmado. Intenta de nuevo.");
     } catch (e) {
       console.error("Error firmando el PDF:", e);
@@ -3539,7 +3563,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
               )}
             </div>
           ) : puedeGenerar ? (
-            <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar solicitud de compra para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() })} carpeta="ordenes-originales" soloPdf />
+            <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar solicitud de compra para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => { actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); mostrarToast("Solicitud de compra cargada — pendiente de firma"); }} carpeta="ordenes-originales" soloPdf />
           ) : (
             !o.archivoOriginalUrl && <span className="text-[11px] text-amber-600">Pendiente de que Compras suba la orden del sistema contable.</span>
           )}
@@ -3738,6 +3762,7 @@ function descargarExcelEvaluacion(ev, solicitud) {
 // permite corregir/agregar el plan de pagos sugerido después de reabrir una solicitud rechazada
 // (el mismo Sí/No y campos que existen al crearla, pero editable desde el detalle)
 function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuardar }) {
+  const { mostrar: mostrarToast } = useToast();
   const [reevaluando, setReevaluando] = useState(false);
   const [ev, setEv] = useState({ ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor });
   // si la solicitud cambia por fuera (ej. otra persona la actualizó), se resincroniza el estado local
@@ -3800,6 +3825,7 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
       firmaRealizada: { nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), fotoUrl: currentUser.firmaFotoUrl || null },
     });
     setReevaluando(false);
+    mostrarToast("Evaluación del proveedor guardada");
   };
 
   const grupos = [];
@@ -3933,6 +3959,7 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
 
 
 function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNotificacion }) {
+  const { mostrar: mostrarToast } = useToast();
   const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []) });
   const [enviado, setEnviado] = useState(false);
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); setEnviado(false); };
@@ -3941,7 +3968,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNoti
   // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
   // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
   const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
-  const elegir = (tipo) => set({ recibidoSatisfaccion: true, tipoRecepcion: tipo });
+  const elegir = (tipo) => { set({ recibidoSatisfaccion: true, tipoRecepcion: tipo }); mostrarToast(tipo === "observaciones" ? "Recepción registrada con observaciones" : "Recepción registrada a satisfacción"); };
 
   const enviarACompras = () => {
     const equipoCompras = usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol) && u.email);
@@ -3954,6 +3981,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNoti
     }
     usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol)).forEach((u) => crearNotificacion?.(u.id, `${currentUser.nombre} registró la recepción de ${solicitud.folio} con observaciones: "${r.comentario}"`, solicitud.id));
     setEnviado(true);
+    mostrarToast("Observaciones enviadas a Compras");
   };
 
   return (
@@ -4410,8 +4438,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const abSug = useAbiertosItems(solicitud.items);   // plan de pagos sugerido al corregir
   const [rechazando, setRechazando] = useState(false);
   const [motivoRechazo, setMotivoRechazo] = useState("");
-  const [toast, setToast] = useState(null);
-  const mostrarToast = (mensaje) => { setToast(mensaje); setTimeout(() => setToast(null), 3500); };
+  const { mostrar: mostrarToast } = useToast();
   const area = areas.find((a) => a.id === solicitud.areaId);
   const departamento = departamentos.find((d) => d.id === solicitud.departamentoId);
   const empresa = empresas.find((e) => e.id === solicitud.empresaId);
@@ -4438,6 +4465,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     if (campo) cambios.firmas = { ...solicitud.firmas, [campo]: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null } };
     if (revision) cambios.revisionCompras = { estado: "pendiente", observacion: "", usuario: "", fecha: "" };
     patch(cambios);
+    mostrarToast("Solicitud reabierta para corregir");
   };
 
   // el solicitante confirma que ya corrigió y avisa por correo a quien le toca aprobar ahora
@@ -4454,7 +4482,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     }
     patch({ notificaciones: notificar(responsable?.email ? `${currentUser.nombre} reenvió la solicitud corregida. Correo enviado a ${responsable.nombre} (${responsable.email}).` : `${currentUser.nombre} reenvió la solicitud corregida. No hay un responsable con correo configurado para notificar.`) });
     crearNotificacion?.(responsable?.id, `${currentUser.nombre} corrigió la solicitud ${solicitud.folio} y quedó lista de nuevo para tu aprobación.`, solicitud.id);
-    alert(responsable?.email ? `Se avisó a ${responsable.nombre} por correo.` : "Se registró el reenvío, pero no hay un responsable con correo configurado para notificar.");
+    if (responsable?.email) mostrarToast(`Corrección reenviada — se avisó a ${responsable.nombre}`);
+    else mostrarToast("Se registró el reenvío, pero no hay un responsable con correo configurado para notificar.", "alerta", { duracion: 7000 });
   };
   const empujarHistorial = (status) => [...solicitud.historialEstados, { status, fecha: ahoraISO() }];
   const notificar = (mensaje) => [...solicitud.notificaciones, { fecha: ahoraISO(), mensaje }];
@@ -4474,8 +4503,9 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const seleccionarCotizacion = (itemId, idx, obs) => patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizacionSeleccionada: idx, observacionSeleccion: obs } : i)) });
   const guardarItemsRevision = (items) => patch({ items });
   const decidirRevisionCompras = (estado, obs) => {
-    if (estado === "rechazada") { patch({ status: "rechazada", revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() }, notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada por Compras.`) }); return; }
+    if (estado === "rechazada") { crearNotificacion?.(solicitante?.id, `Tu solicitud ${solicitud.folio} fue rechazada por Compras.${obs ? ` Motivo: "${obs}"` : ""}`, solicitud.id); mostrarToast("Revisión rechazada — se devolvió al solicitante", "alerta"); patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: obs, fecha: hoy() }, revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() }, notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada por Compras.`) }); return; }
     patch({ revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() } });
+    mostrarToast("Revisión de Compras aprobada — ya se puede cotizar");
   };
 
   const puedeActuar = () => {
@@ -4511,10 +4541,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       }
     }
     else if (s === "aprobacion_director") { patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); mostrarToast("✓ Solicitud aprobada como director de área"); notificarRol("Compras", `La solicitud ${solicitud.folio} ya está aprobada y lista para cotizar.`); }
-    else if (s === "cotizando" && todasCotizadas) patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") });
+    else if (s === "cotizando" && todasCotizadas) { patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") }); mostrarToast("Cuadro comparativo generado"); }
     else if (s === "comparativo") {
       const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
       patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) });
+      mostrarToast(next === "orden" ? "Orden generada — pendiente de firma" : next === "aprobacion_financiera" ? "Enviada a Dirección Financiera para su aprobación" : "Enviada a Gerencia para su aprobación");
       if (next === "aprobacion_financiera") notificarRol("Dirección Financiera", `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`);
       else if (next === "aprobacion_gerencia") notificarRol("Gerencia", `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`);
       else notificarRol("Compras", `La solicitud ${solicitud.folio} ya tiene orden generada.`);
@@ -4542,6 +4573,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       const detalleProveedores = ordenesConCorreo.length ? ` Se envió a: ${ordenesConCorreo.map((o) => `${o.prov.nombre} (${correosDe(o.prov).join(", ")})`).join(", ")}.` : "";
       const avisoSinCorreo = ordenesSinCorreo.length ? ` ⚠ Sin correo registrado, NO se envió a: ${ordenesSinCorreo.map((o) => o.proveedorNombre).join(", ")} — usa "Reenviar orden(es) firmada(s)" para escribirlo y enviarlo.` : "";
       patch({ status: "oc_enviada", historialEstados: empujarHistorial("oc_enviada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}) con copia de la orden.${detalleProveedores}${avisoSinCorreo}`) });
+      mostrarToast("Orden marcada como enviada al proveedor");
+      if (ordenesSinCorreo.length) mostrarToast(`Sin correo registrado, NO se envió a: ${ordenesSinCorreo.map((o) => o.proveedorNombre).join(", ")} — usa "Reenviar orden(es) firmada(s)"`, "alerta", { duracion: 9000 });
       if (solicitante?.email) {
         // arma los enlaces firmados de cada orden ya firmada, para que el solicitante también reciba su copia
         Promise.all(
@@ -4567,7 +4600,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         });
       });
     }
-    else if (s === "oc_enviada") patch({ status: "recepcion", historialEstados: empujarHistorial("recepcion") });
+    else if (s === "oc_enviada") { patch({ status: "recepcion", historialEstados: empujarHistorial("recepcion") }); mostrarToast("Solicitud en recepción — confirma cómo se recibió"); }
     else if (s === "recepcion") {
       if (!solicitud.recepcion.recibidoSatisfaccion) return;
       if (!evaluacionCompleta(solicitud)) return;
@@ -4576,6 +4609,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         if (pagado < total - 0.5) return;
       }
       patch({ status: "completada", historialEstados: empujarHistorial("completada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue completada.`) });
+      mostrarToast("Solicitud completada");
       if (solicitante?.email) {
         enviarCorreo(
           solicitante.email,
@@ -4598,6 +4632,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       );
     }
     crearNotificacion?.(solicitante?.id, `Tu solicitud ${solicitud.folio} fue rechazada por ${currentUser.nombre}.${motivoRechazo ? ` Motivo: "${motivoRechazo}"` : ""}`, solicitud.id);
+    mostrarToast("Solicitud rechazada — el solicitante verá el motivo para corregirla", "alerta");
     setMotivoRechazo(""); setRechazando(false);
   };
 
@@ -4615,11 +4650,6 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
   return (
     <div className="space-y-5">
-      {toast && (
-        <div className="fixed top-4 right-4 z-50 bg-emerald-600 text-white text-sm font-medium px-4 py-2.5 rounded-lg shadow-lg flex items-center gap-2">
-          <CheckCircle2 size={16} /> {String(toast).replace(/^✓\s*/, "")}
-        </div>
-      )}
       <button onClick={onVolver} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"><ArrowLeft size={15} /> Volver a solicitudes</button>
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -5554,7 +5584,36 @@ export default function App() {
 
   // --- Sesión real con Supabase Auth ---
   const { perfil: perfilAuth, cargando: cargandoSesion, iniciarSesion, cerrarSesion, actualizarPerfil } = useAuth();
-  const { notificaciones: notisUsuario, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(perfilAuth?.id);
+  const { notificaciones: notisUsuario, cargando: cargandoNotis, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(perfilAuth?.id);
+
+  // ---- avisos globales ----
+  const [toasts, setToasts] = useState([]);
+  const idToast = useRef(0);
+  const cerrarToast = (id) => setToasts((prev) => prev.filter((t) => t.id !== id));
+  const mostrarToast = (mensaje, tipo = "ok", opciones = {}) => {
+    const id = ++idToast.current;
+    const texto = String(mensaje).replace(/^✓\s*/, "");
+    // un mismo mensaje no se apila dos veces (ej. varios errores seguidos)
+    setToasts((prev) => (prev.some((t) => t.mensaje === texto) ? prev : [...prev.slice(-3), { id, mensaje: texto, tipo, onClick: opciones.onClick }]));
+    setTimeout(() => cerrarToast(id), opciones.duracion || (tipo === "info" ? 7000 : tipo === "alerta" ? 6000 : 3500));
+  };
+  // ---- las notificaciones que llegan también salen como aviso ----
+  const notisVistas = useRef({ uid: null, ids: new Set() });
+  useEffect(() => {
+    if (!perfilAuth?.id || cargandoNotis) return;
+    const vistas = notisVistas.current;
+    if (vistas.uid !== perfilAuth.id) { // primera carga (o cambió el usuario): no se avisa cada una, solo cuántas hay sin leer
+      notisVistas.current = { uid: perfilAuth.id, ids: new Set(notisUsuario.map((n) => n.id)) };
+      const sinLeer = notisUsuario.filter((n) => !n.leida).length;
+      if (sinLeer > 0) mostrarToast(`Tienes ${sinLeer} ${sinLeer > 1 ? "notificaciones" : "notificación"} sin leer`, "info");
+      return;
+    }
+    const nuevas = notisUsuario.filter((n) => !vistas.ids.has(n.id));
+    nuevas.forEach((n) => vistas.ids.add(n.id));
+    nuevas.filter((n) => !n.leida).slice(0, 3).forEach((n) => mostrarToast(n.mensaje, "info", { duracion: 8000, onClick: () => { marcarNotiLeida(n.id); if (n.solicitudId) { setAbierta(n.solicitudId); setCreando(false); setPerfil(false); } } }));
+    if (nuevas.filter((n) => !n.leida).length > 3) mostrarToast(`y ${nuevas.filter((n) => !n.leida).length - 3} notificaciones más`, "info");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [notisUsuario, cargandoNotis, perfilAuth?.id]);
 
   if (cargandoSesion) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Cargando...</div>;
@@ -5576,18 +5635,32 @@ export default function App() {
     areasAdicionales: perfilAuth.areas_adicionales || [],
   };
 
-  const crearSolicitud = async (nueva) => { await crearSolicitudDB(nueva); setCreando(false); setTab("solicitudes"); };
-  const actualizarSolicitud = async (upd) => { await actualizarSolicitudDB(upd); };
+  const crearSolicitud = async (nueva) => {
+    const error = await crearSolicitudDB(nueva);
+    // si no se pudo guardar, el formulario se queda abierto para no perder lo escrito
+    if (error) { mostrarToast(`No se pudo crear la solicitud: ${error.message || "error desconocido"}. Inténtalo de nuevo.`, "alerta"); return; }
+    setCreando(false); setTab("solicitudes");
+    const destinos = { aprobacion_jefe: "aprobación del jefe de área", aprobacion_director: "aprobación del director de área", cotizando: "Compras para cotizar" };
+    mostrarToast(`Solicitud ${nueva.folio} creada y enviada a ${destinos[nueva.status] || PASOS.find((p) => p.key === nueva.status)?.label || "aprobación"}`);
+  };
+  const actualizarSolicitud = async (upd) => {
+    const error = await actualizarSolicitudDB(upd);
+    if (error) mostrarToast(`No se pudo guardar el cambio: ${error.message || "error desconocido"}`, "alerta");
+  };
 
   const eliminarSolicitud = async (id, folio) => {
     if (currentUser.rol !== "Administrador") return;
     if (!window.confirm(`¿Eliminar por completo la solicitud ${folio}? Esta acción no se puede deshacer — se borra todo su historial, cotizaciones, firmas y evaluación.`)) return;
-    await eliminarSolicitudDB(id);
+    const error = await eliminarSolicitudDB(id);
+    if (error) { mostrarToast(`No se pudo eliminar la solicitud: ${error.message || "error desconocido"}`, "alerta"); return; }
     setAbierta(null);
+    mostrarToast(`Solicitud ${folio} eliminada`);
   };
   const eliminarSolicitudesSeleccionadas = async (ids) => {
     if (currentUser.rol !== "Administrador") return;
-    for (const id of ids) await eliminarSolicitudDB(id);
+    let eliminadas = 0;
+    for (const id of ids) { const error = await eliminarSolicitudDB(id); if (!error) eliminadas++; }
+    mostrarToast(eliminadas === ids.length ? `${eliminadas} solicitud(es) eliminada(s)` : `Se eliminaron ${eliminadas} de ${ids.length} solicitudes — revisa las que no se pudieron borrar`, eliminadas === ids.length ? "ok" : "alerta");
   };
   // La foto de firma del perfil, por ahora, solo se guarda en memoria durante la sesión.
   // Falta conectar esto a un "update" real sobre la tabla usuarios (próximo módulo a migrar).
@@ -5605,6 +5678,7 @@ export default function App() {
   );
 
   return (
+    <ToastContext.Provider value={{ mostrar: mostrarToast }}>
     <div className="min-h-screen bg-slate-50 flex text-slate-800" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
       <aside className={`${menuExpandido ? "w-56" : "w-16"} bg-white border-r border-slate-200 p-3 flex flex-col gap-1 shrink-0 transition-all duration-200`}>
         <div className={`flex items-center gap-2 mb-4 ${menuExpandido ? "px-1 justify-between" : "justify-center"}`}>
@@ -5762,5 +5836,7 @@ export default function App() {
         </div>
       )}
     </div>
+    <ToastHost toasts={toasts} onCerrar={cerrarToast} />
+    </ToastContext.Provider>
   );
 }
