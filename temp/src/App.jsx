@@ -195,6 +195,28 @@ function desgloseCotizacion(cot, cantidadSolicitada) {
 function cotizacionUnicaSinJustificar(item) {
   return (item.cotizaciones || []).length === 1 && !((item.cotizaciones[0].justificacionUnico || "").trim());
 }
+// Reglas de precio de una cotización (dos topes):
+//  1) el precio inicial cotizado no puede superar el precio estimado que puso el solicitante;
+//  2) el precio final negociado no puede superar el precio inicial cotizado por el proveedor.
+// (1) se compara en la misma base: COP por unidad del ítem; (2) va en la misma moneda y unidad de la cotización.
+function erroresPrecioCotizacion(item, cot) {
+  const errores = [];
+  const inicial = parseFloat(cot.precioUnitario) || 0;
+  const finalNeg = parseFloat(cot.precioFinal) || 0;
+  const factor = parseFloat(cot.factorConversion) || 1;
+  const tasaCot = cot.moneda && cot.moneda !== "COP" ? (parseFloat(cot.tasaCambio) || 1) : 1;
+  const tasaEst = item.moneda && item.moneda !== "COP" ? (parseFloat(item.tasaCambio) || 1) : 1;
+  const estimadoCOP = (parseFloat(item.precioEstimado) || 0) * tasaEst;
+  const inicialCOP = (inicial * tasaCot) / factor;
+  if (estimadoCOP > 0 && inicial > 0 && inicialCOP - estimadoCOP > 0.5) errores.push({ tipo: "estimado", texto: `El precio inicial (${fmt(inicialCOP)} por ${item.unidad}) supera el precio estimado por el solicitante (${fmt(estimadoCOP)}).` });
+  if (finalNeg > 0 && inicial > 0 && finalNeg - inicial > 0.0001) errores.push({ tipo: "final", texto: "El precio final negociado no puede ser mayor que el precio inicial cotizado por el proveedor." });
+  return errores;
+}
+function itemConPrecioInvalido(item) { return (item.cotizaciones || []).some((c) => erroresPrecioCotizacion(item, c).length > 0); }
+function primerErrorPrecio(item) {
+  for (const c of item.cotizaciones || []) { const e = erroresPrecioCotizacion(item, c); if (e.length) return e[0].texto; }
+  return null;
+}
 function tieneAiuValores(aiu) { return !!aiu && (parseFloat(aiu.administracionPct) || parseFloat(aiu.utilidadPct) || parseFloat(aiu.imprevistosPct)); }
 // total real de una cotización de servicio: usa el AIU propio de esa cotización si lo tiene, si no
 // el del ítem como respaldo — es el mismo criterio que usa el cálculo real de la solicitud
@@ -2387,6 +2409,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     if (!conceptoGastoId) { alert("Falta elegir el concepto de gasto."); return; }
     const idxUnica = items.findIndex((i) => cotizacionUnicaSinJustificar(i));
     if (idxUnica >= 0) { alert(`Ítem ${idxUnica + 1}: adjuntaste una sola cotización, escribe el comentario de por qué solo se cotizó con un proveedor.`); return; }
+    const idxPrecio = items.findIndex((i) => itemConPrecioInvalido(i));
+    if (idxPrecio >= 0) { alert(`Ítem ${idxPrecio + 1}: ${primerErrorPrecio(items[idxPrecio])}`); return; }
     // si el solicitante empezó a llenar el plan de pagos sugerido, debe cuadrar exacto con el total —
     // si lo dejó completamente vacío, no pasa nada, es opcional
     const algoDelPlanLlenado = parseFloat(pagosSugeridos.pagoUnico.valor) > 0 || parseFloat(pagosSugeridos.anticipo.valor) > 0 || parseFloat(pagosSugeridos.intermedio.valor) > 0 || parseFloat(pagosSugeridos.final.valor) > 0;
@@ -2772,6 +2796,8 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
 
   const guardar = async () => {
     if (cots.some((c) => c.precioUnitario && !(c.proveedorId || (c.proveedorNombre || "").trim()))) { alert("Toda cotización debe tener el nombre del proveedor. Escríbelo o elimina esa fila."); return; }
+    const conPrecioInvalido = cots.find((c) => c.precioUnitario && erroresPrecioCotizacion(item, c).length > 0);
+    if (conPrecioInvalido) { alert(erroresPrecioCotizacion(item, conPrecioInvalido)[0].texto + " Corrígelo antes de guardar."); return; }
     const validasPrevias = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
     if (validasPrevias.length === 1 && !(validasPrevias[0].justificacionUnico || "").trim()) { alert("Solo hay una cotización para este ítem: escribe el comentario de por qué solo se cotizó con un proveedor."); return; }
     let listaCots = [...cots];
@@ -2863,6 +2889,11 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             </div>
 
+            {erroresPrecioCotizacion(item, c).map((e, k) => (
+              <div key={k} className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-md px-2 py-1.5">
+                ⚠ {e.texto}{e.tipo === "estimado" && !compacto ? " Si el precio real es mayor, devuelve la solicitud (Rechazar) con el motivo para que el solicitante actualice el precio estimado." : ""}
+              </div>
+            ))}
             {!c.proveedorId && c.proveedorNombre?.trim() && (
               <div className="flex gap-2 max-w-xs">
                 <div className="flex flex-col gap-0.5 w-1/2">
@@ -3520,7 +3551,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       const totales = { costoDirecto, administracion, utilidad, imprevistos, ivaUtilidad, total, aiuPcts };
       const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedorNombre: orden.proveedorNombre, items: itemsParaPdf, ...totales });
       const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
-      if (ruta) actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "" });
+      if (ruta) actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() });
       else alert("No se pudo generar el documento. Intenta de nuevo.");
     } catch (e) {
       console.error("Error generando la orden de servicio:", e);
@@ -3568,16 +3599,24 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
               ) : puedeGenerar ? (
                 <>
                   <button onClick={() => generarOrdenAutomatica(i)} disabled={generandoIdx === i} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50 flex items-center gap-1"><FileText size={12} /> {generandoIdx === i ? "Generando..." : o.archivoOriginalUrl ? "Volver a generar la orden" : "Generar orden de servicio (automático)"}</button>
-                  {o.archivoOriginalUrl && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Documento generado, listo para firmar.</span>}
                 </>
               ) : (
                 <span className="text-[11px] text-amber-600">Pendiente de que Compras genere el documento.</span>
               )}
             </div>
           ) : puedeGenerar ? (
-            <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar solicitud de compra para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "" })} carpeta="ordenes-originales" soloPdf />
+            <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar solicitud de compra para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() })} carpeta="ordenes-originales" soloPdf />
           ) : (
             !o.archivoOriginalUrl && <span className="text-[11px] text-amber-600">Pendiente de que Compras suba la orden del sistema contable.</span>
+          )}
+          {o.archivoOriginalUrl && !o.archivoFirmadoUrl && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 text-xs text-emerald-700 flex items-start gap-2">
+              <CheckCircle2 size={15} className="mt-0.5 shrink-0" />
+              <div>
+                <div className="font-medium">Transacción registrada: {solicitud.tipo === "servicio" ? "orden de servicio generada" : "solicitud de compra cargada"} correctamente{o.cargadaPor ? ` por ${o.cargadaPor}` : ""}{o.cargadaEn ? ` el ${new Date(o.cargadaEn).toLocaleString("es-CO", { dateStyle: "short", timeStyle: "short" })}` : ""}.</div>
+                <div className="text-emerald-600">Queda pendiente de la firma de Dirección Financiera. <EnlacePrivado path={o.archivoOriginalUrl} className="underline">Ver documento</EnlacePrivado></div>
+              </div>
+            </div>
           )}
           {o.archivoOriginalUrl && (
             o.archivoFirmadoUrl ? (
@@ -4532,7 +4571,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const total = totalSolicitud(solicitud);
   const areaPresup = areas.find((a) => a.id === solicitud.areaId);
   const comprometidoAreaDet = (solicitudes || []).filter((x) => x.areaId === solicitud.areaId && x.id !== solicitud.id && !["solicitud", "aprobacion_jefe", "rechazada"].includes(x.status)).reduce((acc, x) => acc + totalSolicitud(x), 0);
-  const todasCotizadas = solicitud.items.every((i) => i.cotizaciones.length > 0 && i.cotizaciones.every((c) => c.proveedorId || (c.proveedorNombre || "").trim()) && !cotizacionUnicaSinJustificar(i));
+  const todasCotizadas = solicitud.items.every((i) => i.cotizaciones.length > 0 && i.cotizaciones.every((c) => c.proveedorId || (c.proveedorNombre || "").trim()) && !cotizacionUnicaSinJustificar(i) && !itemConPrecioInvalido(i));
   const comparativoBloqueado = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
   const patch = (fields) => onUpdate({ ...solicitud, ...fields });
 
@@ -4702,7 +4741,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const rechazar = () => {
     if (!motivoRechazo.trim()) { alert("Escribe el motivo del rechazo — es lo que verá el solicitante para poder corregir la solicitud."); return; }
     const campo = solicitud.status === "aprobacion_jefe" ? "jefe" : solicitud.status === "aprobacion_director" ? "director" : solicitud.status === "aprobacion_financiera" ? "financiera" : solicitud.status === "aprobacion_gerencia" ? "gerencia" : null;
-    patch({ status: "rechazada", firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion: motivoRechazo, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue rechazada.`) });
+    patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: motivoRechazo, fecha: hoy() }, firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion: motivoRechazo, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue rechazada.`) });
     if (solicitante?.email) {
       enviarCorreo(
         solicitante.email,
@@ -4778,7 +4817,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         // mostrar el motivo — funciona tanto mientras el estado sigue en "Rechazada" como después
         // de reabrirla, mientras se está corrigiendo (para que no se pierda el motivo original)
         const campoRechazo = ["gerencia", "financiera", "director", "jefe"].find((c) => solicitud.firmas?.[c]?.aprobado === false);
-        const firmaRechazo = campoRechazo ? solicitud.firmas[campoRechazo] : null;
+        const firmaRechazo = campoRechazo ? solicitud.firmas[campoRechazo] : (solicitud.ultimoRechazo || null);
         const enCorreccion = solicitud.status !== "rechazada" && solicitud.historialEstados?.some((h) => h.status === "rechazada");
         if (solicitud.status === "rechazada" && (puedeReabrir(currentUser) || currentUser.id === solicitud.solicitanteId)) {
           return (
@@ -4829,6 +4868,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           const d = desgloseItem(it);
           const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0;
           const cotConArchivo = (it.cotizaciones || []).filter((c) => c.archivoNombre);
+          const puedeAjustarEstimado = (currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (it.cotizaciones?.length > 0);
           const puedeEditarPrecio = (currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && !(it.cotizaciones?.length > 0);
           return (
             <tr key={it.id} className={`border-t border-slate-100 align-top ${tinteItem(idx).fondo}`}>
@@ -4847,7 +4887,15 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
                 {puedeEditarPrecio ? (
                   <InputMiles value={it.precioEstimado} onChange={(v) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, precioEstimado: v } : x)) })} className="w-24 border border-slate-200 rounded-md px-2 py-1 text-xs text-right" />
                 ) : (
-                  unitario > 0 ? fmt(unitario) : "—"
+                  <>
+                    {unitario > 0 ? fmt(unitario) : "—"}
+                    {puedeAjustarEstimado && (
+                      <div className="mt-1">
+                        <div className="text-[10px] text-slate-400">Precio estimado</div>
+                        <InputMiles value={it.precioEstimado} onChange={(v) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, precioEstimado: v } : x)) })} className="w-24 border border-slate-200 rounded-md px-2 py-1 text-xs text-right" />
+                      </div>
+                    )}
+                  </>
                 )}
               </td>
               <td className="py-2 px-2 text-right font-medium whitespace-nowrap">{d.subtotal > 0 ? fmt(d.subtotal) : "—"}</td>
@@ -5011,6 +5059,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             const motivos = [];
             if (solicitud.status === "cotizando" && !solicitud.items.every((i) => i.cotizaciones.length > 0)) motivos.push("Falta cargar al menos una cotización para cada ítem.");
             if (solicitud.status === "cotizando") solicitud.items.forEach((i, idx) => { if (i.cotizaciones.length > 0 && cotizacionUnicaSinJustificar(i)) motivos.push(`Ítem ${idx + 1}: falta el comentario de por qué solo se cotizó con un proveedor.`); });
+            if (solicitud.status === "cotizando") solicitud.items.forEach((i, idx) => { (i.cotizaciones || []).forEach((c) => erroresPrecioCotizacion(i, c).forEach((e) => motivos.push(`Ítem ${idx + 1}: ${e.texto}`))); });
             if (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !solicitud.pagosConfirmados) motivos.push("Falta confirmar el plan de pagos.");
             if (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) motivos.push("Falta que Dirección Financiera firme la orden de uno o más proveedores.");
             if (solicitud.status === "recepcion") {
