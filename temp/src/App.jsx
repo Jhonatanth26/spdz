@@ -117,10 +117,7 @@ const TINTES_ITEM = [
   { fondo: "bg-sky-50/60", borde: "border-sky-200", punto: "bg-sky-500" },
 ];
 const tinteItem = (idx) => TINTES_ITEM[(idx || 0) % TINTES_ITEM.length];
-const labelConcepto = (c, centros) => {
-  const cc = (centros || []).find((x) => x.id === c.centroCostoId);
-  return [c.grupo, c.codigo, c.nombre, cc ? (cc.codigo ? `${cc.codigo} · ${cc.nombre}` : cc.nombre) : ""].filter(Boolean).join(" – ");
-};
+const labelConcepto = (c) => [c.grupo, c.codigo, c.nombre, c.centroCosto].filter(Boolean).join(" – ");
 
 // convierte un número a su forma escrita en español, para el "Son: ..." de las órdenes (ej. 7591300 -> "SIETE MILLONES QUINIENTOS NOVENTA Y UN MIL TRESCIENTOS")
 function numeroALetras(n) {
@@ -509,7 +506,7 @@ function datosSemilla() {
     solicitanteId: "u1", fechaCreacion: "2026-07-20", fechaEstimada: "2026-08-05",
     objetivo: "Garantizar el abastecimiento de sal industrial para el proceso de tinturado.",
     justificacion: "El inventario actual cubre solo 5 días de producción; se requiere reposición para no detener la línea.",
-    centroCostoId: "cc2", conceptoGastoId: "cg1",
+    conceptoGastoId: "cg1",
     status: "comparativo",
     revisionCompras: { estado: "aprobada", observacion: "Cantidades correctas.", usuario: "Paula Zapata", fecha: "2026-07-21" },
     items: [{
@@ -548,7 +545,7 @@ function datosSemilla() {
     solicitanteId: "u1", fechaCreacion: "2026-07-22", fechaEstimada: "2026-09-15",
     objetivo: "Mantener la disponibilidad y seguridad de la infraestructura de servidores.",
     justificacion: "El contrato de mantenimiento anterior venció; sin este servicio se pierde soporte y garantía del proveedor.",
-    centroCostoId: "cc4", conceptoGastoId: "cg4",
+    conceptoGastoId: "cg4",
     status: "aprobacion_jefe",
     revisionCompras: { estado: "no_aplica", observacion: "", usuario: "", fecha: "" },
     items: [{
@@ -727,11 +724,11 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   };
 
   const descargarPlantilla = () => {
-    const encabezado = columnas.map((c) => c.key).join(",");
+    const encabezado = columnas.map((c) => c.label).join(",");
     // fila de ejemplo: para columnas de selección, muestra el nombre esperado (ej. una empresa real)
     // en vez de dejarlo en blanco, para que quede claro que se escribe el nombre, no el ID
     const ejemplo = columnas.map((c) => (c.type === "select" && c.options?.length ? c.options[0].label : "")).join(",");
-    const csv = encabezado + "\n" + ejemplo + "\n";
+    const csv = "\uFEFF" + encabezado + "\n" + ejemplo + "\n";
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -740,34 +737,54 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
   };
 
   const importarCSV = (file) => {
-    Papa.parse(file, {
-      header: true, skipEmptyLines: true,
-      complete: (res) => {
-        let importados = 0;
-        let sinCoincidir = [];
-        res.data.forEach((fila) => {
-          const nueva = { id: nextId() };
-          columnas.forEach((c) => {
-            const valorCrudo = (fila[c.key] ?? "").toString().trim();
-            if (c.type === "select" && valorCrudo) {
-              // en un CSV es mucho más práctico escribir el nombre (ej. "SP Dique") que el ID interno —
-              // se busca por nombre primero, y si no coincide con ninguno, se prueba como si ya fuera el ID
-              const porNombre = c.options.find((o) => o.label.trim().toLowerCase() === valorCrudo.toLowerCase());
-              if (porNombre) nueva[c.key] = porNombre.value;
-              else if (c.options.some((o) => o.value === valorCrudo)) nueva[c.key] = valorCrudo;
-              else { nueva[c.key] = ""; sinCoincidir.push(`"${valorCrudo}" (${c.label})`); }
-            } else {
-              nueva[c.key] = valorCrudo;
-            }
+    // el archivo se lee como bytes para decidir la codificación: los CSV guardados desde Excel en Windows
+    // suelen venir en ANSI (Windows-1252) y, leídos como UTF-8, dañan las tildes y las Ñ ("NAVIDEÑOS" → "NAVIDE�OS")
+    const lector = new FileReader();
+    lector.onerror = () => { setMensajeImport("No se pudo leer el archivo CSV."); setTimeout(() => setMensajeImport(""), 4000); };
+    lector.onload = () => {
+      const bytes = new Uint8Array(lector.result);
+      let texto;
+      try { texto = new TextDecoder("utf-8", { fatal: true }).decode(bytes); }
+      catch { texto = new TextDecoder("windows-1252").decode(bytes); }
+      texto = texto.replace(/^\uFEFF/, "");
+      Papa.parse(texto, {
+        header: true, skipEmptyLines: true, transformHeader: (h) => h.trim(),
+        complete: (res) => {
+          let importados = 0, duplicados = 0;
+          const sinCoincidir = [];
+          // un registro idéntico a uno que ya existe (o repetido en el mismo archivo) no se vuelve a cargar
+          const firma = (o) => columnas.map((c) => String(o[c.key] ?? "").trim().toLowerCase()).join("|");
+          const existentes = new Set(datos.map(firma));
+          res.data.forEach((fila) => {
+            const nueva = { id: nextId() };
+            columnas.forEach((c) => {
+              // el encabezado puede ser el nombre técnico (empresaId) o el título visible (Empresa)
+              const valorCrudo = (fila[c.key] ?? fila[c.label] ?? "").toString().trim();
+              if (c.type === "select" && valorCrudo) {
+                // en un CSV es más práctico escribir el nombre (ej. "SP Dique") que el ID interno
+                const porNombre = c.options.find((o) => o.label.trim().toLowerCase() === valorCrudo.toLowerCase());
+                if (porNombre) nueva[c.key] = porNombre.value;
+                else if (c.options.some((o) => o.value === valorCrudo)) nueva[c.key] = valorCrudo;
+                else { nueva[c.key] = ""; sinCoincidir.push(`"${valorCrudo}" (${c.label})`); }
+              } else {
+                nueva[c.key] = valorCrudo;
+              }
+            });
+            if (!Object.values(nueva).some((v) => v && v !== nueva.id)) return;
+            const f = firma(nueva);
+            if (existentes.has(f)) { duplicados++; return; }
+            existentes.add(f);
+            onGuardar(nueva); importados++;
           });
-          if (Object.values(nueva).some((v) => v && v !== nueva.id)) { onGuardar(nueva); importados++; }
-        });
-        const avisoSinCoincidir = sinCoincidir.length ? ` ${sinCoincidir.length} valor(es) no coincidieron con ninguna opción y quedaron vacíos: ${[...new Set(sinCoincidir)].slice(0, 5).join(", ")}${sinCoincidir.length > 5 ? "..." : ""}.` : "";
-        setMensajeImport(`${importados} registro(s) importado(s) correctamente.${avisoSinCoincidir}`);
-        setTimeout(() => setMensajeImport(""), 7000);
-      },
-      error: () => { setMensajeImport("No se pudo leer el archivo CSV."); setTimeout(() => setMensajeImport(""), 4000); },
-    });
+          const avisoSinCoincidir = sinCoincidir.length ? ` ${sinCoincidir.length} valor(es) no coincidieron con ninguna opción y quedaron vacíos: ${[...new Set(sinCoincidir)].slice(0, 5).join(", ")}${sinCoincidir.length > 5 ? "..." : ""}.` : "";
+          const avisoDuplicados = duplicados ? ` ${duplicados} registro(s) repetido(s) se omitieron.` : "";
+          setMensajeImport(`${importados} registro(s) importado(s) correctamente.${avisoDuplicados}${avisoSinCoincidir}`);
+          setTimeout(() => setMensajeImport(""), 9000);
+        },
+        error: () => { setMensajeImport("No se pudo leer el archivo CSV."); setTimeout(() => setMensajeImport(""), 4000); },
+      });
+    };
+    lector.readAsArrayBuffer(file);
   };
 
   return (
@@ -2226,7 +2243,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   );
 }
 
-function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, centrosCosto, conceptosGasto, usuarios, currentUser, solicitudes, onCrear, onCancel }) {
+function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, conceptosGasto, usuarios, currentUser, solicitudes, onCrear, onCancel }) {
   const [tipo, setTipo] = useState("compra");
   const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
   const [areaId, setAreaId] = useState(currentUser.areaId || areas[0].id);
@@ -2331,7 +2348,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     const statusInicial = esAmbosRoles ? "cotizando" : esJefeDeSuPropiaArea ? "aprobacion_director" : "aprobacion_jefe";
     onCrear({
       id: nextId(), folio,
-      tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCostoId: conceptosGasto.find((c) => c.id === conceptoGastoId)?.centroCostoId || null, conceptoGastoId, solicitanteId: currentUser.id,
+      tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCosto: conceptosGasto.find((c) => c.id === conceptoGastoId)?.centroCosto || "", conceptoGastoId, solicitanteId: currentUser.id,
       fechaCreacion: hoy(), fechaEstimada, objetivo, justificacion,
       status: statusInicial,
       presupuestoAlEnviar: { presupuesto: areaSel?.presupuesto || 0, comprometido: comprometidoArea, disponible: disponibleArea, total: totalGeneral.total },
@@ -2392,7 +2409,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Solicitante</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500">{currentUser.nombre} (firma automática)</div></div>
-        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">—</option>{conceptosGasto.filter((c) => !c.empresaId || c.empresaId === empresaId).sort((a, b) => (a.grupo || "").localeCompare(b.grupo || "") || (a.codigo || "").localeCompare(b.codigo || "")).map((c) => <option key={c.id} value={c.id}>{labelConcepto(c, centrosCosto)}</option>)}</select></div>
+        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">—</option>{conceptosGasto.filter((c) => !c.empresaId || c.empresaId === empresaId).sort((a, b) => (a.grupo || "").localeCompare(b.grupo || "") || (a.codigo || "").localeCompare(b.codigo || "")).map((c) => <option key={c.id} value={c.id}>{labelConcepto(c)}</option>)}</select></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
@@ -4015,10 +4032,9 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNoti
 /* ---------------------------------------------------------
    ORDEN DE COMPRA / TRABAJO — documento consolidado
 --------------------------------------------------------- */
-function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, proveedores, centrosCosto, conceptosGasto }) {
+function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, proveedores, conceptosGasto }) {
   const d = desgloseSolicitud(solicitud);
   const exportarPDF = () => window.print();
-  const centroCosto = centrosCosto.find((c) => c.id === solicitud.centroCostoId);
   const conceptoGasto = conceptosGasto.find((c) => c.id === solicitud.conceptoGastoId);
   const nombreProv = (c) => proveedores.find((p) => p.id === c.proveedorId)?.nombre || c.proveedorNombre || "—";
   const pagoActivo = solicitud.tipo === "servicio";
@@ -4093,7 +4109,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       </div>
 
       <div className="grid grid-cols-2 gap-2 text-xs text-slate-600">
-        <div><b>Centro de costo:</b> {centroCosto ? (centroCosto.codigo ? `${centroCosto.codigo} · ${centroCosto.nombre}` : centroCosto.nombre) : "—"}</div><div><b>Concepto de gasto:</b> {conceptoGasto ? labelConcepto(conceptoGasto, centrosCosto) : "—"}</div>
+        <div><b>Centro de costo:</b> {solicitud.centroCosto || conceptoGasto?.centroCosto || "—"}</div><div><b>Concepto de gasto:</b> {conceptoGasto ? labelConcepto(conceptoGasto) : "—"}</div>
       </div>
 
       {/* ÍTEMS Y PROVEEDOR ADJUDICADO */}
@@ -4416,7 +4432,7 @@ function accionLabel(solicitud, total) {
   }
 }
 
-function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, centrosCosto, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver, crearNotificacion, guardarItemCatalogo, solicitudes }) {
+function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver, crearNotificacion, guardarItemCatalogo, solicitudes }) {
   const [observacion, setObservacion] = useState("");
   const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
   // Compras corrige el nombre que escribió el solicitante y queda guardado en el catálogo de ítems
@@ -4885,7 +4901,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       <div className="print-wrapper-oculto" style={{ display: "none" }}>
-        <OrdenDocumento solicitud={solicitud} empresa={empresa} area={area} departamento={departamento} solicitante={solicitante} proveedores={proveedores} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} />
+        <OrdenDocumento solicitud={solicitud} empresa={empresa} area={area} departamento={departamento} solicitante={solicitante} proveedores={proveedores} conceptosGasto={conceptosGasto} />
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
@@ -5297,7 +5313,6 @@ function Catalogos({
   proveedores, guardarProveedor, eliminarProveedor,
   usuarios, guardarUsuario, eliminarUsuario,
   itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo,
-  centrosCosto, guardarCentroCosto, eliminarCentroCosto,
   conceptosGasto, guardarConceptoGasto, eliminarConceptoGasto,
   permisos, togglePermiso,
 }) {
@@ -5305,7 +5320,7 @@ function Catalogos({
   const tabs = [
     { key: "empresas", label: "Empresas", icon: Building2 }, { key: "areas", label: "Áreas", icon: Layers }, { key: "departamentos", label: "Departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
-    { key: "centros", label: "Centros de costo", icon: Layers }, { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
+    { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
     ...(currentUser?.rol === "Administrador" ? [{ key: "permisos", label: "Permisos", icon: Lock }] : []),
   ];
 
@@ -5373,8 +5388,7 @@ function Catalogos({
         </>
       )}
       {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
-      {sub === "centros" && <CrudTable titulo="Centros de costo" icon={Layers} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Nombre" }]} datos={centrosCosto} onGuardar={guardarCentroCosto} onEliminar={eliminarCentroCosto} plantilla={{ empresaId: "", codigo: "", nombre: "" }} />}
-      {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }, { key: "centroCostoId", label: "Centro de costo", type: "select", options: centrosCosto.map((c) => ({ value: c.id, label: c.codigo ? `${c.codigo} · ${c.nombre}` : c.nombre })) }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ empresaId: "", grupo: "", codigo: "", nombre: "", centroCostoId: "" }} />}
+      {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }, { key: "centroCosto", label: "Centro de costo" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ empresaId: "", grupo: "", codigo: "", nombre: "", centroCosto: "" }} />}
       {sub === "permisos" && currentUser?.rol === "Administrador" && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <div className="px-5 py-3 border-b border-slate-100">
@@ -5520,17 +5534,12 @@ export default function App() {
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, unidad_default: r.unidadDefault, categoria: r.categoria }),
     orderBy: 'nombre',
   });
-  const { datos: centrosCosto, cargando: cargandoCentros, guardar: guardarCentroCosto, eliminar: eliminarCentroCosto, guardarVarios: importarCentros } = useSupabaseTable('centros_costo', {
-    orderBy: 'nombre',
-    desdeDb: (r) => ({ id: r.id, empresaId: r.empresa_id, codigo: r.codigo || "", nombre: r.nombre }),
-    haciaDb: (r) => ({ id: r.id, empresa_id: r.empresaId || null, codigo: r.codigo || "", nombre: r.nombre }),
-  });
   const { datos: conceptosGasto, cargando: cargandoConceptos, guardar: guardarConceptoGasto, eliminar: eliminarConceptoGasto, guardarVarios: importarConceptos } = useSupabaseTable('conceptos_gasto', {
     orderBy: 'nombre',
-    desdeDb: (r) => ({ id: r.id, empresaId: r.empresa_id, grupo: r.grupo || "", codigo: r.codigo || "", nombre: r.nombre, centroCostoId: r.centro_costo_id || "" }),
-    haciaDb: (r) => ({ id: r.id, empresa_id: r.empresaId || null, grupo: r.grupo || "", codigo: r.codigo || "", nombre: r.nombre, centro_costo_id: r.centroCostoId || null }),
+    desdeDb: (r) => ({ id: r.id, empresaId: r.empresa_id, grupo: r.grupo || "", codigo: r.codigo || "", nombre: r.nombre, centroCosto: r.centro_costo || "" }),
+    haciaDb: (r) => ({ id: r.id, empresa_id: r.empresaId || null, grupo: r.grupo || "", codigo: r.codigo || "", nombre: r.nombre, centro_costo: r.centroCosto || "" }),
   });
-  const cargandoCatalogos = cargandoAreas || cargandoDepartamentos || cargandoEmpresas || cargandoProveedores || cargandoUsuarios || cargandoItems || cargandoCentros || cargandoConceptos;
+  const cargandoCatalogos = cargandoAreas || cargandoDepartamentos || cargandoEmpresas || cargandoProveedores || cargandoUsuarios || cargandoItems || cargandoConceptos;
 
   const [historico, setHistorico] = useState(HISTORICO_INIT);
   const { solicitudes, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB } = useSolicitudes();
@@ -5687,11 +5696,11 @@ export default function App() {
 
       <main className="flex-1 p-6 pt-2 overflow-auto">
         {creando ? (
-          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
         ) : solicitudAbierta ? (
-          <SolicitudDetalle solicitudes={solicitudes} guardarItemCatalogo={guardarItemCatalogo} solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} centrosCosto={centrosCosto} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
+          <SolicitudDetalle solicitudes={solicitudes} guardarItemCatalogo={guardarItemCatalogo} solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onVerCalendario={() => setTab("calendarioPagos")} />
         ) : tab === "misPendientes" && puedeVerMisPendientes(currentUser) ? (
@@ -5738,7 +5747,6 @@ export default function App() {
             proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
             usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario}
             itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
-            centrosCosto={centrosCosto} guardarCentroCosto={guardarCentroCosto} eliminarCentroCosto={eliminarCentroCosto}
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
             permisos={permisos} togglePermiso={togglePermiso}
           />
@@ -5757,7 +5765,6 @@ export default function App() {
             departamento={departamentos.find((d) => d.id === exportando.departamentoId)}
             solicitante={usuarios.find((u) => u.id === exportando.solicitanteId)}
             proveedores={proveedores}
-            centrosCosto={centrosCosto}
             conceptosGasto={conceptosGasto}
           />
         </div>
