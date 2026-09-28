@@ -2050,6 +2050,74 @@ function InputMiles({ value, onChange, className, placeholder, disabled }) {
   return <input type="text" inputMode="numeric" value={texto} onChange={manejarCambio} placeholder={placeholder} className={className} disabled={disabled} />;
 }
 
+// Lista desplegable con búsqueda: se escribe y la lista se va filtrando (sin importar tildes ni mayúsculas;
+// cada palabra escrita debe aparecer en la opción, en cualquier orden). Pensada para catálogos largos,
+// como el plan de cuentas (Grupo – Código – Cuenta – Centro de costo).
+const normalizarBusqueda = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+function SelectorBuscable({ opciones, value, onChange, placeholder, maxVisibles = 80, disabled }) {
+  const [abierto, setAbierto] = useState(false);
+  const [texto, setTexto] = useState("");
+  const [activo, setActivo] = useState(0);
+  const contRef = useRef(null);
+  const listaRef = useRef(null);
+  const seleccionada = opciones.find((o) => o.value === value);
+
+  const filtradas = useMemo(() => {
+    const palabras = normalizarBusqueda(texto).split(/\s+/).filter(Boolean);
+    if (!palabras.length) return opciones;
+    return opciones.filter((o) => { const n = normalizarBusqueda(o.label); return palabras.every((p) => n.includes(p)); });
+  }, [opciones, texto]);
+  const visibles = filtradas.slice(0, maxVisibles);
+
+  useEffect(() => {
+    const cerrarSiFuera = (e) => { if (contRef.current && !contRef.current.contains(e.target)) { setAbierto(false); setTexto(""); } };
+    document.addEventListener("mousedown", cerrarSiFuera);
+    return () => document.removeEventListener("mousedown", cerrarSiFuera);
+  }, []);
+  useEffect(() => { setActivo(0); }, [texto]);
+  useEffect(() => { if (abierto) listaRef.current?.children[activo]?.scrollIntoView?.({ block: "nearest" }); }, [activo, abierto]);
+
+  const elegir = (o) => { onChange(o ? o.value : ""); setAbierto(false); setTexto(""); };
+  const teclado = (e) => {
+    if (e.key === "ArrowDown") { e.preventDefault(); setAbierto(true); setActivo((i) => Math.min(visibles.length - 1, i + 1)); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setActivo((i) => Math.max(0, i - 1)); }
+    else if (e.key === "Enter") { if (abierto && visibles[activo]) { e.preventDefault(); elegir(visibles[activo]); } }
+    else if (e.key === "Escape") { setAbierto(false); setTexto(""); }
+  };
+
+  return (
+    <div ref={contRef} className="relative mt-1">
+      <input
+        type="text"
+        disabled={disabled}
+        value={abierto ? texto : (seleccionada?.label || "")}
+        onChange={(e) => { setTexto(e.target.value); setAbierto(true); }}
+        onFocus={() => { setAbierto(true); setTexto(""); }}
+        onClick={() => setAbierto(true)}
+        onKeyDown={teclado}
+        placeholder={seleccionada ? seleccionada.label : placeholder}
+        autoComplete="off"
+        className="w-full border border-slate-200 rounded-lg px-3 py-2 pr-8 text-sm placeholder:text-slate-400"
+      />
+      {value && !disabled && (
+        <button type="button" title="Quitar selección" onMouseDown={(e) => { e.preventDefault(); elegir(null); }} className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"><XCircle size={15} /></button>
+      )}
+      {abierto && (
+        <div className="absolute z-30 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-lg shadow-lg">
+          <div ref={listaRef} className="max-h-64 overflow-y-auto">
+            {visibles.length === 0 ? (
+              <div className="px-3 py-3 text-xs text-slate-400">Sin resultados para "{texto}". Prueba con menos palabras.</div>
+            ) : visibles.map((o, i) => (
+              <div key={o.value} onMouseDown={(e) => { e.preventDefault(); elegir(o); }} onMouseEnter={() => setActivo(i)} className={`px-3 py-2 text-sm cursor-pointer ${i === activo ? "bg-indigo-50 text-indigo-700" : "text-slate-700"} ${o.value === value ? "font-medium" : ""}`}>{o.label}</div>
+            ))}
+          </div>
+          {filtradas.length > visibles.length && <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t border-slate-100 bg-slate-50 rounded-b-lg">Mostrando {visibles.length} de {filtradas.length} — sigue escribiendo para filtrar.</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir, onEscribir, className }) {
   const [abierto, setAbierto] = useState(false);
   const [indiceActivo, setIndiceActivo] = useState(0);
@@ -2249,6 +2317,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const [areaId, setAreaId] = useState(currentUser.areaId || areas[0].id);
   const [departamentoId, setDepartamentoId] = useState("");
   const [conceptoGastoId, setConceptoGastoId] = useState("");
+  const opcionesConcepto = useMemo(() => conceptosGasto
+    .filter((c) => !c.empresaId || c.empresaId === empresaId)
+    .sort((a, b) => ((a.grupo || a.codigo) ? 0 : 1) - ((b.grupo || b.codigo) ? 0 : 1) || (a.grupo || "").localeCompare(b.grupo || "") || (a.codigo || "").localeCompare(b.codigo || ""))
+    .map((c) => ({ value: c.id, label: labelConcepto(c) })), [conceptosGasto, empresaId]);
   const [fechaEstimada, setFechaEstimada] = useState("");
   const [objetivo, setObjetivo] = useState("");
   const [justificacion, setJustificacion] = useState("");
@@ -2409,7 +2481,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
         <div><label className="text-xs font-medium text-slate-500">Solicitante</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500">{currentUser.nombre} (firma automática)</div></div>
-        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><select value={conceptoGastoId} onChange={(e) => setConceptoGastoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">—</option>{conceptosGasto.filter((c) => !c.empresaId || c.empresaId === empresaId).sort((a, b) => (a.grupo || "").localeCompare(b.grupo || "") || (a.codigo || "").localeCompare(b.codigo || "")).map((c) => <option key={c.id} value={c.id}>{labelConcepto(c)}</option>)}</select></div>
+        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><SelectorBuscable opciones={opcionesConcepto} value={conceptoGastoId} onChange={setConceptoGastoId} placeholder="Escribe para buscar: grupo, código, cuenta o centro de costo..." /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
         <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
