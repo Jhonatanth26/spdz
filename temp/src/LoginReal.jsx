@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { Lock } from "lucide-react";
 import { supabase } from "./lib/supabaseClient";
+import { LOGO_FULL } from "./lib/logo";
 
 function LoginReal({ onIniciarSesion }) {
   const [email, setEmail] = useState("");
@@ -28,8 +29,7 @@ function LoginReal({ onIniciarSesion }) {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
       <div className="bg-white border border-slate-200 rounded-2xl p-8 w-full max-w-sm">
         <div className="flex items-center gap-2 mb-6">
-          <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold">GC</div>
-          <div><div className="font-semibold text-slate-800">Gestión de Compras</div><div className="text-xs text-slate-400">Ingresa con tu correo</div></div>
+          <img src={LOGO_FULL} alt="Compra SPD&ZF" className="h-9 w-auto" />
         </div>
         <label className="text-xs font-medium text-slate-500">Correo electrónico</label>
         <input

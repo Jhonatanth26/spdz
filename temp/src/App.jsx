@@ -11,6 +11,7 @@ import { firmarPDF } from "./lib/firmarPdf";
 import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
+import { LOGO_FULL } from "./lib/logo";
 import {
   ShoppingCart, Wrench, Building2, CheckCircle2, XCircle, Clock,
   FileText, TrendingUp, ChevronRight, Plus, Trash2, Pencil,
@@ -5742,8 +5743,7 @@ export default function App() {
         <div className={`flex items-center gap-2 mb-4 ${menuExpandido ? "px-1 justify-between" : "justify-center"}`}>
           {menuExpandido && (
             <div className="flex items-center gap-2 min-w-0">
-              <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold text-sm shrink-0">GC</div>
-              <div className="min-w-0"><div className="text-sm font-semibold text-slate-800 leading-tight truncate">Gestión de Compras</div><div className="text-[11px] text-slate-400 leading-tight">Multiempresa</div></div>
+              <img src={LOGO_FULL} alt="Compra SPD&ZF" className="h-7 w-auto shrink-0" />
             </div>
           )}
           <button title={menuExpandido ? "Contraer menú" : "Expandir menú"} onClick={() => setMenuExpandido(!menuExpandido)} className="text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg p-1.5 shrink-0">
