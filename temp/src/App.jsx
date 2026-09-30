@@ -5428,8 +5428,9 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
             {esAdmin && <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} /></td>}
             <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
             <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
-            <td className="px-4 py-2.5">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td><td className="px-4 py-2.5"><Badge tone={toneDemora(s)}>{diasTranscurridos(s)} día{diasTranscurridos(s) === 1 ? "" : "s"}</Badge></td>
+            <td className="px-4 py-2.5">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td>
             <td className="px-4 py-2.5 text-slate-600">{area?.nombre}</td>
+            <td className="px-4 py-2.5"><Badge tone={toneDemora(s)}>{diasTranscurridos(s)} día{diasTranscurridos(s) === 1 ? "" : "s"}</Badge></td>
             <td className="px-4 py-2.5 text-slate-600">{empresa?.nombre}</td>
             <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{s.fechaCreacion}</td>
             <td className="px-4 py-2.5 text-slate-600 max-w-[220px] truncate" title={s.objetivo}>{s.objetivo}</td>
