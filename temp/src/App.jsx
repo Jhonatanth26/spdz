@@ -9,6 +9,7 @@ import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_
 import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
 import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
+import { unificarArchivosPDF } from "./lib/unificarArchivos";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import { LOGO_FULL } from "./lib/logo";
@@ -18,7 +19,7 @@ import {
   Calendar, Award, ArrowLeft, LayoutDashboard, ListChecks, BarChart3,
   DollarSign, PackageCheck, CalendarClock, Boxes, Users, Truck,
   Settings, Target, ClipboardList, Lock, LogOut, History, PenTool, ShieldCheck,
-  Paperclip, Mail, Camera, Timer, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell,
+  Paperclip, Mail, Camera, Timer, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive,
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip,
@@ -248,6 +249,26 @@ function numeroALetras(n) {
 const autoResize = (e) => { e.target.style.height = "auto"; e.target.style.height = e.target.scrollHeight + "px"; };
 const hoy = () => new Date().toISOString().slice(0, 10);
 const ahoraISO = () => new Date().toISOString();
+// días transcurridos desde que se creó la solicitud: si ya terminó (completada o rechazada), hasta esa fecha;
+// si sigue en curso, hasta ahora. Sirve para mostrar cuánto lleva cada solicitud y para ordenar por las más demoradas.
+function diasTranscurridos(s) {
+  const inicio = s.historialEstados?.[0]?.fecha || s.fechaCreacion;
+  if (!inicio) return 0;
+  const FIN_ETAPAS = ["completada", "rechazada"];
+  const fin = FIN_ETAPAS.includes(s.status)
+    ? [...(s.historialEstados || [])].reverse().find((h) => h.status === s.status)?.fecha || ahoraISO()
+    : ahoraISO();
+  const ms = new Date(fin) - new Date(inicio);
+  return Math.max(0, Math.round(ms / 86400000));
+}
+// color según cuánto lleva: solo se marca como demorada una solicitud todavía en curso (una ya cerrada no "se demora" más)
+function toneDemora(s) {
+  if (["completada", "rechazada"].includes(s.status)) return "slate";
+  const d = diasTranscurridos(s);
+  if (d >= 15) return "red";
+  if (d >= 7) return "amber";
+  return "slate";
+}
 let idCounter = 4000;
 const nextId = () => (idCounter++).toString();
 
@@ -300,7 +321,6 @@ function erroresPrecioCotizacion(item, cot) {
   const tasaEst = item.moneda && item.moneda !== "COP" ? (parseFloat(item.tasaCambio) || 1) : 1;
   const estimadoCOP = (parseFloat(item.precioEstimado) || 0) * tasaEst;
   const inicialCOP = (inicial * tasaCot) / factor;
-  if (estimadoCOP > 0 && inicial > 0 && inicialCOP - estimadoCOP > 0.5) errores.push({ tipo: "estimado", texto: `El precio inicial (${fmt(inicialCOP)} por ${item.unidad}) supera el precio estimado por el solicitante (${fmt(estimadoCOP)}).` });
   if (finalNeg > 0 && inicial > 0 && finalNeg - inicial > 0.0001) errores.push({ tipo: "final", texto: "El precio final negociado no puede ser mayor que el precio inicial cotizado por el proveedor." });
   return errores;
 }
@@ -2986,12 +3006,29 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
 
             {sinIva && !compacto && <div className="text-[11px] text-slate-400">El AIU de este proveedor se digita en el panel «Costos indirectos (AIU) por ítem y por proveedor», más abajo.</div>}
 
+            {sinIva && compacto && (
+              <div className="grid grid-cols-3 gap-2">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] text-slate-400">Admón. % (este proveedor)</label>
+                  <input type="number" min="0" max="100" step="0.1" value={c.aiu?.administracionPct ?? ""} onChange={(e) => update(i, "aiu", { ...(c.aiu || {}), administracionPct: pctValido(e.target.value) })} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] text-slate-400">Utilidad %</label>
+                  <input type="number" min="0" max="100" step="0.1" value={c.aiu?.utilidadPct ?? ""} onChange={(e) => update(i, "aiu", { ...(c.aiu || {}), utilidadPct: pctValido(e.target.value) })} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[10px] text-slate-400">Imprevistos %</label>
+                  <input type="number" min="0" max="100" step="0.1" value={c.aiu?.imprevistosPct ?? ""} onChange={(e) => update(i, "aiu", { ...(c.aiu || {}), imprevistosPct: pctValido(e.target.value) })} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                </div>
+              </div>
+            )}
+
             {sinIva && c.precioUnitario && (() => {
-              const aiuC = aiuDe(c);
+              const aiuC = compacto ? (c.aiu || {}) : aiuDe(c);
               const admC = d.subtotal * (parseFloat(aiuC.administracionPct) || 0) / 100;
               const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
               const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
-              const totalCotizacion = compacto ? d.subtotal : d.subtotal + admC + utilC + imprevC + utilC * 0.19;
+              const totalCotizacion = d.subtotal + admC + utilC + imprevC + utilC * 0.19;
               return <PlanPagoCotizacion pagos={c.pagos} total={totalCotizacion} onChange={(pagos) => update(i, "pagos", pagos)} />;
             })()}
 
@@ -3000,7 +3037,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (() => {
                 const factor = parseFloat(c.factorConversion) || 1;
                 const precioPorUnidad = precioEquivalente(c);
-                const aiuC = aiuDe(c);
+                const aiuC = compacto ? (c.aiu || {}) : aiuDe(c);
                 const admC = d.subtotal * (parseFloat(aiuC.administracionPct) || 0) / 100;
                 const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
                 const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
@@ -3011,8 +3048,8 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                     {factor !== 1 && <div>1 {c.unidadCotizada} = {factor} {item.unidad} → {fmt(precioFinalEfectivo(c) * (c.moneda && c.moneda !== "COP" ? (parseFloat(c.tasaCambio) || 1) : 1))} ÷ {factor} = <b>{fmt(precioPorUnidad)}</b> por {item.unidad}</div>}
                     <div>{item.cantidad} {item.unidad} × {fmt(precioPorUnidad)} = Costo Directo <b>{fmt(d.subtotal)}</b></div>
                     {!sinIva && <div>+ IVA {c.ivaPct}%: <b>{fmt(d.iva)}</b></div>}
-                    {sinIva && !compacto && (admC > 0 || utilC > 0 || imprevC > 0) && <div>+ AIU: <b>{fmt(admC + utilC + imprevC + ivaUtilC)}</b></div>}
-                    <div className="text-emerald-700 font-semibold text-sm pt-0.5 border-t border-emerald-200 mt-1">= Total: {fmt(sinIva ? (compacto ? d.subtotal : totalConAiu) : d.total)}</div>
+                    {sinIva && (admC > 0 || utilC > 0 || imprevC > 0) && <div>+ AIU: <b>{fmt(admC + utilC + imprevC + ivaUtilC)}</b></div>}
+                    <div className="text-emerald-700 font-semibold text-sm pt-0.5 border-t border-emerald-200 mt-1">= Total: {fmt(sinIva ? totalConAiu : d.total)}</div>
                   </div>
                 );
               })()}
@@ -3532,7 +3569,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggl
 /* ---------------------------------------------------------
    ORDEN ENVIADA AL PROVEEDOR
 --------------------------------------------------------- */
-function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar, area, solicitante, abierto, onToggle }) {
+function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuardar, area, solicitante, usuarios, crearNotificacion, abierto, onToggle }) {
   const [firmandoIdx, setFirmandoIdx] = useState(null);
   const [generandoIdx, setGenerandoIdx] = useState(null);
   const { mostrar: mostrarToast } = useToast();
@@ -3548,6 +3585,9 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
     return existente || { ...n, archivoOriginalUrl: "", archivoFirmadoUrl: "", fecha: "", usuario: "" };
   });
 
+  const avisarOrdenCargada = (proveedorNombre) => {
+    (usuarios || []).filter((u) => puedeAprobarFinanciera(u)).forEach((u) => crearNotificacion?.(u.id, `Se cargó la orden de ${solicitud.folio} para ${proveedorNombre} — queda pendiente de tu firma.`, solicitud.id));
+  };
   const actualizarOrden = (idx, cambios) => {
     const copia = ordenes.map((o, i) => (i === idx ? { ...o, ...cambios } : o));
     onGuardar({ ordenesProveedor: copia });
@@ -3586,7 +3626,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       const planesPago = baseItems.filter((it) => planConfirmadoItem(solicitud, it)).map((it) => ({ numero: solicitud.items.findIndex((x) => x.id === it.id) + 1, nombre: it.nombre, pagos: planOficialItem(solicitud, it) })).filter((pl) => planTieneValores(pl.pagos));
       const bytes = await generarOrdenServicioPDF({ solicitud, empresa, proveedor: buscarProveedorDeOrden(orden, proveedores), proveedorNombre: orden.proveedorNombre, area: area?.nombre, solicitanteNombre: solicitante?.nombre, items: itemsParaPdf, planesPago, ...totales });
       const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
-      if (ruta) { actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); mostrarToast("Orden de servicio generada — pendiente de firma"); }
+      if (ruta) { actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); mostrarToast("Orden de servicio generada — pendiente de firma"); avisarOrdenCargada(orden.proveedorNombre); }
       else alert("No se pudo generar el documento. Intenta de nuevo.");
     } catch (e) {
       console.error("Error generando la orden de servicio:", e);
@@ -3638,7 +3678,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
               )}
             </div>
           ) : puedeGenerar ? (
-            <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar solicitud de compra para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => { actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); mostrarToast("Solicitud de compra cargada — pendiente de firma"); }} carpeta="ordenes-originales" soloPdf />
+            <AdjuntarArchivo nombre={o.archivoOriginalUrl} label={`Adjuntar solicitud de compra para ${o.proveedorNombre} (solo PDF)`} onSeleccionar={(url) => { actualizarOrden(i, { archivoOriginalUrl: url, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); mostrarToast("Solicitud de compra cargada — pendiente de firma"); avisarOrdenCargada(o.proveedorNombre); }} carpeta="ordenes-originales" soloPdf />
           ) : (
             !o.archivoOriginalUrl && <span className="text-[11px] text-amber-600">Pendiente de que Compras suba la orden del sistema contable.</span>
           )}
@@ -4026,11 +4066,13 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
 
 function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNotificacion, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
-  const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []) });
+  const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []), facturaUrl: solicitud.recepcion.facturaUrl || "", actas: solicitud.recepcion.actas || [] });
   const [enviado, setEnviado] = useState(false);
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); setEnviado(false); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
   const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
+  const agregarActa = (url) => set({ actas: [...r.actas, url] });
+  const quitarActa = (i) => set({ actas: r.actas.filter((_, idx) => idx !== i) });
   // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
   // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
   const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
@@ -4062,6 +4104,24 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNoti
             </div>
           ))}
           <AdjuntarArchivo nombre={null} label={r.archivos.length ? "Adjuntar otro archivo (PDF/foto)" : "Adjuntar soporte de recepción (PDF/foto)"} onSeleccionar={agregarArchivo} />
+        </div>
+      </div>
+      <div className="grid sm:grid-cols-2 gap-3">
+        <div>
+          <label className="text-xs font-medium text-slate-500 mb-1 block">Factura del proveedor</label>
+          <AdjuntarArchivo nombre={r.facturaUrl || null} label="Adjuntar factura del proveedor (PDF)" carpeta="facturas" onSeleccionar={(url) => set({ facturaUrl: url })} />
+        </div>
+        <div>
+          <label className="text-xs font-medium text-slate-500 mb-1 block">Actas de trabajo (opcional, puedes adjuntar varias)</label>
+          <div className="space-y-1.5">
+            {r.actas.map((url, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <AdjuntarArchivo nombre={url} onSeleccionar={() => {}} />
+                <button onClick={() => quitarActa(i)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <AdjuntarArchivo nombre={null} label={r.actas.length ? "Adjuntar otra acta" : "Adjuntar acta de trabajo (PDF/foto)"} carpeta="actas-trabajo" onSeleccionar={agregarActa} />
+          </div>
         </div>
       </div>
       <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Comentarios {estado === "observaciones" ? "(describe las observaciones)" : "(opcional)"}</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
@@ -4500,6 +4560,43 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const [rechazando, setRechazando] = useState(false);
   const [motivoRechazo, setMotivoRechazo] = useState("");
   const { mostrar: mostrarToast } = useToast();
+  const [unificando, setUnificando] = useState(false);
+  // recopila TODO lo adjuntado a la solicitud (cotizaciones, órdenes, soportes de recepción, factura, actas) y arma
+  // un único PDF descargable, con índice — pensado para tener el expediente completo listo en una auditoría.
+  const unificarArchivosAuditoria = async () => {
+    const items = [];
+    solicitud.items.forEach((it, i) => (it.cotizaciones || []).forEach((c) => {
+      if (c.archivoNombre) items.push({ titulo: `Ítem ${i + 1} (${it.nombre}) — cotización de ${c.proveedorNombre || proveedores.find((p) => p.id === c.proveedorId)?.nombre || "proveedor"}`, path: c.archivoNombre });
+    }));
+    (solicitud.ocEnviada?.ordenesProveedor || []).forEach((o) => {
+      if (o.archivoOriginalUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (documento generado)`, path: o.archivoOriginalUrl });
+      if (o.archivoFirmadoUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (firmada)`, path: o.archivoFirmadoUrl });
+    });
+    (solicitud.recepcion?.archivos || []).forEach((path, i) => items.push({ titulo: `Recepción — soporte ${i + 1}`, path }));
+    if (solicitud.recepcion?.facturaUrl) items.push({ titulo: "Factura del proveedor", path: solicitud.recepcion.facturaUrl });
+    (solicitud.recepcion?.actas || []).forEach((path, i) => items.push({ titulo: `Acta de trabajo ${i + 1}`, path }));
+    if (!items.length) { mostrarToast("Esta solicitud no tiene archivos adjuntos para unificar.", "alerta"); return; }
+    setUnificando(true);
+    try {
+      const conUrl = await Promise.all(items.map(async (it) => ({ ...it, url: await obtenerUrlFirmada(it.path) })));
+      const listos = conUrl.filter((it) => it.url).map((it) => ({ titulo: it.titulo, url: it.url, tipo: /\.pdf(\?|$)/i.test(it.path) ? "pdf" : "imagen" }));
+      const sinUrl = conUrl.length - listos.length;
+      if (!listos.length) { mostrarToast("No se pudo acceder a ninguno de los archivos adjuntos.", "alerta"); return; }
+      const { bytes, resultados } = await unificarArchivosPDF({ folio: solicitud.folio, titulo: `Expediente de auditoría — ${solicitud.folio}`, items: listos });
+      const blob = new Blob([bytes], { type: "application/pdf" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = `Auditoria_${solicitud.folio}.pdf`; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+      const incluidos = resultados.filter((r) => r.ok).length;
+      const fallidos = resultados.length - incluidos + sinUrl;
+      mostrarToast(fallidos > 0 ? `Expediente descargado: ${incluidos} de ${resultados.length + sinUrl} archivo(s) incluido(s) — ${fallidos} no se pudieron incluir.` : `Expediente descargado con los ${incluidos} archivo(s) de la solicitud.`, fallidos > 0 ? "alerta" : "ok", { duracion: 7000 });
+    } catch (e) {
+      console.error("Error unificando archivos:", e);
+      mostrarToast("No se pudo generar el expediente unificado. Inténtalo de nuevo.", "alerta");
+    }
+    setUnificando(false);
+  };
   const area = areas.find((a) => a.id === solicitud.areaId);
   const departamento = departamentos.find((d) => d.id === solicitud.departamentoId);
   const empresa = empresas.find((e) => e.id === solicitud.empresaId);
@@ -4720,14 +4817,21 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
   return (
     <div className="space-y-5">
-      <button onClick={onVolver} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"><ArrowLeft size={15} /> Volver a solicitudes</button>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <button onClick={onVolver} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"><ArrowLeft size={15} /> Volver a solicitudes</button>
+        {puedeVerHistorico(currentUser) && (
+          <button onClick={unificarArchivosAuditoria} disabled={unificando} title="Une en un solo PDF todos los archivos adjuntos de esta solicitud (cotizaciones, órdenes, recepción, factura, actas)" className="flex items-center gap-1.5 text-xs border border-slate-200 rounded-md px-2.5 py-1.5 text-slate-600 hover:border-indigo-400 hover:text-indigo-600 disabled:opacity-60">
+            <Archive size={13} /> {unificando ? "Unificando..." : "Unificar archivos para auditoría"}
+          </button>
+        )}
+      </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-5">
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
             <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone={solicitud.recepcion.tipoRecepcion === "observaciones" ? "amber" : "green"}>{solicitud.recepcion.tipoRecepcion === "observaciones" ? "Recibida con observaciones" : "Recibida"}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{currentUser.rol === "Administrador" && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> Eliminar solicitud</button>}</div>
-            <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span></div>
+            <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span><span className="flex items-center gap-1"><Clock size={13} /> {diasTranscurridos(solicitud)} día{diasTranscurridos(solicitud) === 1 ? "" : "s"} {["completada", "rechazada"].includes(solicitud.status) ? "en total" : "en curso"}</span></div>
           </div>
           <div className="text-right">
             <div className="text-xs text-slate-400">Total solicitud (con IVA)</div>
@@ -4953,7 +5057,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <PagosPorItem abierto={fases.abierto("pagos")} onToggle={() => fases.alternar("pagos")} solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} />
       )}
 
-      <OcEnviadaPanel abierto={fases.abierto("orden")} onToggle={() => fases.alternar("orden")} solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} area={area} solicitante={solicitante} onGuardar={(oc) => patch({ ocEnviada: oc })} />
+      <OcEnviadaPanel abierto={fases.abierto("orden")} onToggle={() => fases.alternar("orden")} solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} area={area} solicitante={solicitante} usuarios={usuarios} crearNotificacion={crearNotificacion} onGuardar={(oc) => patch({ ocEnviada: oc })} />
 
       {(solicitud.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl) && (
         <SeccionColapsable icono={FileText} titulo="Copia de la orden enviada al proveedor" abierto={fases.abierto("copia")} onToggle={() => fases.alternar("copia")}>
@@ -5153,6 +5257,7 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
   const [fDesde, setFDesde] = useState("");
   const [fHasta, setFHasta] = useState("");
   const [busqueda, setBusqueda] = useState("");
+  const [fOrden, setFOrden] = useState("normal");
 
   const creadores = usuarios.filter((u) => solicitudes.some((s) => s.solicitanteId === u.id));
   const texto = busqueda.trim().toLowerCase();
@@ -5170,11 +5275,12 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
       s.items.some((it) => it.nombre.toLowerCase().includes(texto)) ||
       proveedoresAdjudicados(s, proveedores).toLowerCase().includes(texto))
   );
-  const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fTipo !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta || busqueda;
-  const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFTipo("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); setBusqueda(""); };
+  const ordenadas = fOrden === "demoradas" ? [...filtradas].sort((a, b) => diasTranscurridos(b) - diasTranscurridos(a)) : filtradas;
+  const hayFiltros = fArea !== "todas" || fEmpresa !== "todas" || fEstado !== "todos" || fTipo !== "todos" || fCreadoPor !== "todos" || fDesde || fHasta || busqueda || fOrden !== "normal";
+  const limpiarFiltros = () => { setFArea("todas"); setFEmpresa("todas"); setFEstado("todos"); setFTipo("todos"); setFCreadoPor("todos"); setFDesde(""); setFHasta(""); setBusqueda(""); setFOrden("normal"); };
 
   const exportarExcel = () => {
-    const filas = filtradas.map((s) => {
+    const filas = ordenadas.map((s) => {
       const area = areas.find((a) => a.id === s.areaId);
       const empresa = empresas.find((e) => e.id === s.empresaId);
       const solicitante = usuarios.find((u) => u.id === s.solicitanteId);
@@ -5242,10 +5348,14 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
           <label className="text-[11px] font-medium text-slate-500">hasta</label>
           <input type="date" value={fHasta} onChange={(e) => setFHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" />
         </div>
+        <div>
+          <label className="text-[11px] font-medium text-slate-500">Ordenar por</label>
+          <select value={fOrden} onChange={(e) => setFOrden(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="normal">Más recientes primero</option><option value="demoradas">Más demoradas primero</option></select>
+        </div>
         {hayFiltros && <button onClick={limpiarFiltros} className="text-xs text-slate-500 underline mb-1.5">Limpiar filtros</button>}
         <div className="text-xs text-slate-400 ml-auto mb-1.5">{filtradas.length} de {solicitudes.length} solicitudes</div>
       </div>
-      <ListaSolicitudes solicitudes={filtradas} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={onAbrir} onExportar={onExportar} onEliminarSeleccionadas={onEliminarSeleccionadas} />
+      <ListaSolicitudes solicitudes={ordenadas} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={onAbrir} onExportar={onExportar} onEliminarSeleccionadas={onEliminarSeleccionadas} />
     </div>
   );
 }
@@ -5311,14 +5421,14 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
       <table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10"><tr>
           {esAdmin && <th className="px-4 py-2 w-8"><input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} /></th>}
-          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
+          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Tiempo</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-left px-4 py-2 font-medium">Estado</th><th></th><th></th></tr></thead>
         <tbody>{solicitudesPagina.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
           const puedeReenviar = currentUser && puedeGestionarCotizaciones(currentUser) && (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl);
           return (<tr key={s.id} className={`border-t border-slate-100 hover:bg-slate-50 cursor-pointer ${seleccionadas.includes(s.id) ? "bg-rose-50/40" : ""}`} onClick={() => onAbrir(s.id)}>
             {esAdmin && <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} /></td>}
             <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
             <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
-            <td className="px-4 py-2.5">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td>
+            <td className="px-4 py-2.5">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td><td className="px-4 py-2.5"><Badge tone={toneDemora(s)}>{diasTranscurridos(s)} día{diasTranscurridos(s) === 1 ? "" : "s"}</Badge></td>
             <td className="px-4 py-2.5 text-slate-600">{area?.nombre}</td>
             <td className="px-4 py-2.5 text-slate-600">{empresa?.nombre}</td>
             <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{s.fechaCreacion}</td>
@@ -5743,7 +5853,7 @@ export default function App() {
         <div className={`flex items-center gap-2 mb-4 ${menuExpandido ? "px-1 justify-between" : "justify-center"}`}>
           {menuExpandido && (
             <div className="flex items-center gap-2 min-w-0">
-              <img src={LOGO_FULL} alt="Compra SPD&ZF" className="h-7 w-auto shrink-0" />
+              <img src={LOGO_FULL} alt="Compra SPD&ZF" className="h-10 w-auto shrink-0" />
             </div>
           )}
           <button title={menuExpandido ? "Contraer menú" : "Expandir menú"} onClick={() => setMenuExpandido(!menuExpandido)} className="text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg p-1.5 shrink-0">
