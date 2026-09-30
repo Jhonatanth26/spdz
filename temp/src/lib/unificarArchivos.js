@@ -1,10 +1,107 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
+const NEGRO = rgb(0.08, 0.08, 0.1)
+const GRIS = rgb(0.42, 0.42, 0.47)
+
+// Página(s) de resumen de la solicitud: sus datos generales y la línea de tiempo completa (cada cambio de estado, cada
+// aprobación o rechazo, con quién y cuándo). Es lo primero que trae el expediente unificado — antes de esto, el PDF
+// solo traía los archivos adjuntos, pero no la traza de la solicitud en sí. Todo el texto ya viene armado desde la
+// app (con las etiquetas y formatos que ya usa el resto del sistema); aquí solo se diagrama.
+// timeline: [{ fecha, texto }] — ya ordenada cronológicamente.
+export async function generarResumenSolicitudPDF({ folio, tipo, area, empresa, solicitante, fechaCreacion, fechaEstimada, objetivo, justificacion, estadoActual, total, timeline = [] }) {
+  const pdfDoc = await PDFDocument.create()
+  const fR = await pdfDoc.embedFont(StandardFonts.Helvetica)
+  const fB = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
+  const W = 612, H = 792, M = 50, PIE = 40
+  let pagina, y
+  const nueva = () => { pagina = pdfDoc.addPage([W, H]); y = H - M }
+  nueva()
+
+  const limpio = (s) => String(s ?? '').replace(/[\r\n\t]+/g, ' ').replace(/[^\x20-\x7E\u00A0-\u00FF\u2013\u2014\u2018\u2019\u201C\u201D\u2022\u2026\u20AC]/g, '?')
+  const ancho = (s, size, bold) => (bold ? fB : fR).widthOfTextAtSize(limpio(s), size)
+  const txt = (s, x, yy, size, o = {}) => pagina.drawText(limpio(s), { x, y: yy, size, font: o.bold ? fB : fR, color: o.color || NEGRO })
+  const partir = (str, maxW, size, bold) => {
+    const salida = []
+    String(str ?? '').split(/\r?\n/).forEach((parrafo) => {
+      let actual = ''
+      String(parrafo).split(/\s+/).filter(Boolean).forEach((palabra) => {
+        const prueba = actual ? `${actual} ${palabra}` : palabra
+        if (ancho(prueba, size, bold) <= maxW) { actual = prueba; return }
+        if (actual) salida.push(actual)
+        actual = ancho(palabra, size, bold) <= maxW ? palabra : palabra.slice(0, Math.max(1, Math.floor(maxW / (size * 0.55))))
+      })
+      salida.push(actual)
+    })
+    return salida.length ? salida : ['']
+  }
+  const salto = (alto) => { if (y - alto < PIE) nueva() }
+
+  txt('Resumen de la solicitud', M, y - 18, 17, { bold: true })
+  y -= 42
+  txt(`Solicitud ${folio || ''}${tipo ? ` — ${tipo}` : ''}`, M, y, 11, { color: GRIS })
+  y -= 22
+
+  const filasDatos = [
+    ['Empresa', empresa || '—'], ['Área', area || '—'], ['Solicitante', solicitante || '—'],
+    ['Fecha de creación', fechaCreacion || '—'], ['Fecha estimada', fechaEstimada || '—'],
+    ['Estado actual', estadoActual || '—'], ['Total (con lo aplicado a hoy)', total || '—'],
+  ]
+  filasDatos.forEach(([et, val]) => {
+    salto(13)
+    txt(et + ':', M, y, 9, { bold: true, color: GRIS })
+    txt(String(val), M + 150, y, 9)
+    y -= 13
+  })
+  y -= 6
+  if (objetivo) {
+    const l = partir(`Objetivo: ${objetivo}`, W - 2 * M, 9, false)
+    salto(l.length * 12)
+    l.forEach((linea) => { txt(linea, M, y, 9); y -= 12 })
+    y -= 4
+  }
+  if (justificacion) {
+    const l = partir(`Justificación: ${justificacion}`, W - 2 * M, 9, false)
+    salto(l.length * 12)
+    l.forEach((linea) => { txt(linea, M, y, 9); y -= 12 })
+    y -= 4
+  }
+  y -= 10
+  salto(20)
+  txt('Línea de tiempo', M, y, 12, { bold: true })
+  y -= 6
+  pagina.drawLine({ start: { x: M, y }, end: { x: W - M, y }, thickness: 0.6, color: rgb(0.8, 0.8, 0.83) })
+  y -= 16
+
+  if (!timeline.length) {
+    txt('Esta solicitud todavía no tiene eventos registrados.', M, y, 9, { color: GRIS })
+    y -= 13
+  }
+  const anchoFecha = 118
+  timeline.forEach((ev) => {
+    const lineas = partir(ev.texto, W - 2 * M - anchoFecha, 9, false)
+    const alto = Math.max(13, lineas.length * 12)
+    salto(alto)
+    txt(ev.fecha || '—', M, y, 8.5, { color: GRIS })
+    lineas.forEach((linea, k) => txt(linea, M + anchoFecha, y - k * 12, 9))
+    y -= alto
+  })
+
+  const paginas = pdfDoc.getPages()
+  paginas.forEach((pg, idx) => {
+    pg.drawText('Resumen generado automáticamente por el Sistema de Gestión de Compras.', { x: M, y: 24, size: 7, font: fR, color: GRIS })
+    const t = `Página ${idx + 1} de ${paginas.length}`
+    pg.drawText(t, { x: W - M - fR.widthOfTextAtSize(t, 7), y: 24, size: 7, font: fR, color: GRIS })
+  })
+  return pdfDoc.save()
+}
+
 // Une los archivos de una solicitud (cotizaciones adjuntas, órdenes, soportes de recepción, factura, actas...) en un
 // solo PDF, con una portada a modo de índice. Pensado para tener el expediente completo listo en el momento de una
 // auditoría, sin tener que abrir archivo por archivo.
 //
-// items: [{ titulo, url, tipo: 'pdf' | 'imagen' }] — url debe ser accesible (una URL firmada de Storage, por ejemplo).
+// items: [{ titulo, tipo: 'pdf' | 'imagen', url }] o [{ titulo, tipo, bytes }] — con "bytes" (Uint8Array/ArrayBuffer)
+// se usa el contenido directamente (para páginas ya generadas por la propia app, como el resumen); con "url" se
+// descarga primero (por ejemplo una URL firmada de Storage).
 // Un archivo que no se pueda leer (borrado, dañado, formato no soportado) no detiene el proceso: queda anotado en el
 // índice como "no se pudo incluir" y el resto se sigue procesando.
 // Devuelve los bytes del PDF (Uint8Array) y, aparte, la lista de resultados (qué se incluyó y qué no).
@@ -13,8 +110,6 @@ export async function unificarArchivosPDF({ folio, titulo, items = [] }) {
   const fR = await pdfDoc.embedFont(StandardFonts.Helvetica)
   const fB = await pdfDoc.embedFont(StandardFonts.HelveticaBold)
   const W = 612, H = 792, M = 50
-  const GRIS = rgb(0.42, 0.42, 0.47)
-  const NEGRO = rgb(0.08, 0.08, 0.1)
   const ROJO = rgb(0.75, 0.2, 0.2)
 
   const portada = pdfDoc.addPage([W, H])
@@ -26,7 +121,7 @@ export async function unificarArchivosPDF({ folio, titulo, items = [] }) {
     let ok = false
     let error = null
     try {
-      const bytes = await fetch(it.url).then((r) => {
+      const bytes = it.bytes ? it.bytes : await fetch(it.url).then((r) => {
         if (!r.ok) throw new Error(`HTTP ${r.status}`)
         return r.arrayBuffer()
       })

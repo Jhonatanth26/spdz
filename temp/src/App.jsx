@@ -9,7 +9,7 @@ import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_
 import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
 import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
-import { unificarArchivosPDF } from "./lib/unificarArchivos";
+import { unificarArchivosPDF, generarResumenSolicitudPDF } from "./lib/unificarArchivos";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import { LOGO_FULL } from "./lib/logo";
@@ -4563,8 +4563,63 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const [unificando, setUnificando] = useState(false);
   // recopila TODO lo adjuntado a la solicitud (cotizaciones, órdenes, soportes de recepción, factura, actas) y arma
   // un único PDF descargable, con índice — pensado para tener el expediente completo listo en una auditoría.
+  // arma la línea de tiempo completa: cada cambio de estado (historialEstados) y, con quién y cuándo, cada
+  // aprobación, rechazo, revisión de Compras, recepción y evaluación de proveedor que ya haya quedado registrada
+  // fecha completa (con hora, como ya se usa en el historial del proceso en pantalla) o, si solo hay día
+  // (ej. las de las firmas, que se guardan sin hora), la fecha en letras — sin pasar por Date() para esas,
+  // que corre el día hacia atrás para Colombia (UTC-5) al convertir una fecha-sin-hora a huso horario local.
+  const MESES_LARGO = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+  const fmtFechaEvento = (fecha) => {
+    if (!fecha) return "";
+    if (String(fecha).includes("T")) return new Date(fecha).toLocaleString("es-CO");
+    const [y, m, d] = String(fecha).split("-");
+    return m && d ? `${parseInt(d, 10)} de ${MESES_LARGO[parseInt(m, 10) - 1]} de ${y}` : String(fecha);
+  };
+  const lineaTiempoSolicitud = () => {
+    const eventos = [];
+    (solicitud.historialEstados || []).forEach((h) => {
+      const label = h.status === "rechazada" ? "Rechazada" : PASOS.find((p) => p.key === h.status)?.label || h.status;
+      eventos.push({ fecha: h.fecha, texto: `Pasa a: ${label}` });
+    });
+    const ROL_LABEL = { jefe: "Jefe de Área", director: "Director de Área", financiera: "Dirección Financiera", gerencia: "Gerencia" };
+    Object.entries(ROL_LABEL).forEach(([campo, rolLabel]) => {
+      const f = solicitud.firmas?.[campo];
+      if (!f?.fecha) return;
+      eventos.push({ fecha: f.fecha, texto: f.aprobado ? `Aprobada por ${f.nombre} (${rolLabel})` : `Rechazada por ${f.nombre} (${rolLabel})${f.observacion ? `: "${f.observacion}"` : ""}` });
+    });
+    if (solicitud.revisionCompras?.fecha && solicitud.revisionCompras.estado !== "pendiente") {
+      eventos.push({ fecha: solicitud.revisionCompras.fecha, texto: solicitud.revisionCompras.estado === "aprobada" ? `Revisión de Compras aprobada por ${solicitud.revisionCompras.usuario}` : `Revisión de Compras rechazada por ${solicitud.revisionCompras.usuario}${solicitud.revisionCompras.observacion ? `: "${solicitud.revisionCompras.observacion}"` : ""}` });
+    }
+    if (solicitud.ultimoRechazo?.fecha) {
+      eventos.push({ fecha: solicitud.ultimoRechazo.fecha, texto: `Rechazada por ${solicitud.ultimoRechazo.nombre} (${solicitud.ultimoRechazo.rol})${solicitud.ultimoRechazo.observacion ? `: "${solicitud.ultimoRechazo.observacion}"` : ""}` });
+    }
+    if (solicitud.recepcion?.fecha && solicitud.recepcion.recibidoSatisfaccion) {
+      eventos.push({ fecha: solicitud.recepcion.fecha, texto: `Recepción registrada ${solicitud.recepcion.tipoRecepcion === "observaciones" ? "con observaciones" : "a satisfacción"} por ${solicitud.recepcion.usuario}` });
+    }
+    if (solicitud.evaluacionProveedor?.completada && solicitud.evaluacionProveedor.fechaCompletado) {
+      eventos.push({ fecha: solicitud.evaluacionProveedor.fechaCompletado, texto: "Evaluación del proveedor completada" });
+    }
+    // para ordenar: una fecha sin hora (las de firmas/revisión/recepción) se trata como el final de ese día, para
+    // que un evento del mismo día con hora exacta (un cambio de estado) quede antes — si no, un "Aprobada por..."
+    // sin hora podía terminar apareciendo ANTES de "Pasa a: Aprobación..." del mismo día, lo cual no puede ser.
+    const claveOrden = (f) => (String(f).includes("T") ? String(f) : `${f}T23:59:59`);
+    return eventos.sort((a, b) => claveOrden(a.fecha).localeCompare(claveOrden(b.fecha))).map((ev) => ({ ...ev, fecha: fmtFechaEvento(ev.fecha) }));
+  };
   const unificarArchivosAuditoria = async () => {
     const items = [];
+    try {
+      const resumenBytes = await generarResumenSolicitudPDF({
+        folio: solicitud.folio, tipo: solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo",
+        area: area?.nombre, empresa: empresa?.nombre, solicitante: solicitante?.nombre,
+        fechaCreacion: solicitud.fechaCreacion, fechaEstimada: solicitud.fechaEstimada || "—",
+        objetivo: solicitud.objetivo, justificacion: solicitud.justificacion,
+        estadoActual: estadoMostrado(solicitud), total: fmt(totalSolicitud(solicitud)),
+        timeline: lineaTiempoSolicitud(),
+      });
+      items.push({ titulo: "Resumen y línea de tiempo de la solicitud", tipo: "pdf", bytes: resumenBytes });
+    } catch (e) {
+      console.error("Error generando el resumen de la solicitud:", e);
+    }
     solicitud.items.forEach((it, i) => (it.cotizaciones || []).forEach((c) => {
       if (c.archivoNombre) items.push({ titulo: `Ítem ${i + 1} (${it.nombre}) — cotización de ${c.proveedorNombre || proveedores.find((p) => p.id === c.proveedorId)?.nombre || "proveedor"}`, path: c.archivoNombre });
     }));
@@ -4578,9 +4633,16 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     if (!items.length) { mostrarToast("Esta solicitud no tiene archivos adjuntos para unificar.", "alerta"); return; }
     setUnificando(true);
     try {
-      const conUrl = await Promise.all(items.map(async (it) => ({ ...it, url: await obtenerUrlFirmada(it.path) })));
-      const listos = conUrl.filter((it) => it.url).map((it) => ({ titulo: it.titulo, url: it.url, tipo: /\.pdf(\?|$)/i.test(it.path) ? "pdf" : "imagen" }));
-      const sinUrl = conUrl.length - listos.length;
+      // los que ya vienen listos (el resumen, generado por la propia app) pasan tal cual — solo los que tienen una
+      // ruta en Storage necesitan resolverse a una URL firmada primero
+      const conBytes = items.filter((it) => it.bytes);
+      const conRuta = items.filter((it) => !it.bytes);
+      const conUrl = await Promise.all(conRuta.map(async (it) => ({ ...it, url: await obtenerUrlFirmada(it.path) })));
+      const listos = [
+        ...conBytes.map((it) => ({ titulo: it.titulo, bytes: it.bytes, tipo: it.tipo || "pdf" })),
+        ...conUrl.filter((it) => it.url).map((it) => ({ titulo: it.titulo, url: it.url, tipo: /\.pdf(\?|$)/i.test(it.path) ? "pdf" : "imagen" })),
+      ];
+      const sinUrl = conUrl.length - conUrl.filter((it) => it.url).length;
       if (!listos.length) { mostrarToast("No se pudo acceder a ninguno de los archivos adjuntos.", "alerta"); return; }
       const { bytes, resultados } = await unificarArchivosPDF({ folio: solicitud.folio, titulo: `Expediente de auditoría — ${solicitud.folio}`, items: listos });
       const blob = new Blob([bytes], { type: "application/pdf" });
