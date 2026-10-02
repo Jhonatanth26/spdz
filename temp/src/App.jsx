@@ -1140,7 +1140,9 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
     (s.ocEnviada?.ordenesProveedor || []).forEach((o) => {
       if (!o.archivoFirmadoUrl) return;
       const prov = buscarProveedorDeOrden(o, proveedores);
-      const itemsDelProveedor = s.items.filter((it) => (it.cotizaciones || []).some((c) => c.anticipoObligatorio && mismoProveedor({ proveedorId: c.proveedorId, proveedorNombre: c.proveedorNombre }, o)));
+      const cotsAnticipo = s.items.flatMap((it) => (it.cotizaciones || []).filter((c) => c.anticipoObligatorio && mismoProveedor({ proveedorId: c.proveedorId, proveedorNombre: c.proveedorNombre }, o)));
+      const itemsDelProveedor = cotsAnticipo;
+      const valorAnticipoExigido = cotsAnticipo.reduce((acc, c) => acc + (parseFloat(c.anticipoValorObligatorio) || 0), 0);
       filas.push({
         id: `${s.id}-${o.proveedorId || o.proveedorNombre}`,
         solicitudId: s.id,
@@ -1157,6 +1159,7 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
         etiquetaFactura: prov?.personaNatural === "si" ? "Cuenta de cobro" : "Factura",
         tieneComprobanteRecepcion,
         anticipoObligatorio: itemsDelProveedor.length > 0,
+        anticipoValorObligatorio: valorAnticipoExigido,
       });
     });
   });
@@ -1206,7 +1209,7 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
                 <td className="px-4 py-2 font-medium text-slate-700 cursor-pointer hover:text-indigo-600" onClick={() => onAbrir?.(f.solicitudId)}>{f.folio}</td>
                 <td className="px-4 py-2 text-slate-600">{f.tipo}</td>
                 <td className="px-4 py-2 text-slate-600">{f.empresa}</td>
-                <td className="px-4 py-2 text-slate-600">{f.proveedor} {f.anticipoObligatorio && <span title="Pago anticipado obligatorio para este proveedor" className="text-amber-600 inline-block align-middle"><Timer size={12} /></span>}</td>
+                <td className="px-4 py-2 text-slate-600">{f.proveedor} {f.anticipoObligatorio && <span title={f.anticipoValorObligatorio > 0 ? `Anticipo obligatorio: ${fmt(f.anticipoValorObligatorio)}` : "Pago anticipado obligatorio para este proveedor"} className="text-amber-600 inline-block align-middle"><Timer size={12} /></span>}</td>
                 <td className="px-4 py-2 text-right font-medium">{fmt(f.total)}</td>
                 <td className="px-4 py-2">{f.estadoOrden === "enviada" ? <Badge tone="green">Enviada</Badge> : <span title={f.notaEstadoOrden}><Badge tone={f.estadoOrden === "cancelada" ? "red" : "amber"}>{ESTADO_ETIQUETA[f.estadoOrden]}</Badge></span>}</td>
                 <td className="px-4 py-2 text-center">{f.tieneFactura ? <Badge tone="green">{f.etiquetaFactura}</Badge> : <Badge tone="red">Falta {f.etiquetaFactura.toLowerCase()}</Badge>}</td>
@@ -2983,10 +2986,18 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             </div>
 
-            <label className="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer">
-              <input type="checkbox" checked={!!c.anticipoObligatorio} onChange={(e) => update(i, "anticipoObligatorio", e.target.checked)} />
-              ⚠ Este proveedor exige el pago antes de despachar (pago anticipado obligatorio)
-            </label>
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer">
+                <input type="checkbox" checked={!!c.anticipoObligatorio} onChange={(e) => update(i, "anticipoObligatorio", e.target.checked)} />
+                ⚠ Este proveedor exige el pago antes de despachar (pago anticipado obligatorio)
+              </label>
+              {c.anticipoObligatorio && (
+                <div className="flex items-center gap-1">
+                  <label className="text-[10px] text-slate-400">Valor del anticipo</label>
+                  <input type="number" value={c.anticipoValorObligatorio ?? ""} onChange={(e) => update(i, "anticipoValorObligatorio", e.target.value)} placeholder="$" className="w-28 border border-slate-200 rounded-md px-2 py-1 text-xs" />
+                </div>
+              )}
+            </div>
 
             {erroresPrecioCotizacion(item, c).map((e, k) => (
               <div key={k} className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-md px-2 py-1.5">
@@ -3156,7 +3167,7 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
         <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">{sinIva ? "Costo Directo" : "Total (COP)"}</th>{sinIva && !ocultarAiu && <th className="text-right px-3 py-2">Total c/AIU</th>}<th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
         <tbody>{scored.map((c, i) => (
           <tr key={i} className={`border-t border-slate-100 ${i === bestIdx ? "bg-emerald-50/60" : ""}`}>
-            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.anticipoObligatorio && <span title="Este proveedor exige el pago antes de despachar" className="text-amber-600"><Timer size={13} /></span>} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
+            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.anticipoObligatorio && <span title={parseFloat(c.anticipoValorObligatorio) > 0 ? `Exige un anticipo de ${fmt(parseFloat(c.anticipoValorObligatorio))} antes de despachar` : "Este proveedor exige el pago antes de despachar"} className="text-amber-600"><Timer size={13} /></span>} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
             <td className="px-3 py-2 text-right">{c.precioUnitario ? `${c.moneda && c.moneda !== "COP" ? c.moneda + " " : ""}${Number(c.precioUnitario).toLocaleString("es-CO")}` : "—"}</td>
             <td className="px-3 py-2 text-right">{c.descuentoValor ? (c.descuentoTipo === "valor" ? `-${Number(c.descuentoValor).toLocaleString("es-CO")}` : `-${c.descuentoValor}%`) : "—"}</td>
             <td className="px-3 py-2 text-right">{c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}</td>
@@ -3432,11 +3443,27 @@ function planFaltaFecha(p) {
 }
 // plan con el que arranca un ítem: el oficial si ya existe; si no, lo que sugirió el solicitante (reescalado al
 // total actual del ítem, por si cambió con el AIU); si tampoco hay sugerencia, vacío
+// el anticipo que un proveedor exige para despachar (si tiene un valor puesto): se mira el proveedor ya elegido;
+// si todavía no se ha elegido ninguno, el primero de los cotizados que lo exija
+function anticipoObligatorioDe(it) {
+  const cotSeleccionada = it.cotizacionSeleccionada != null ? it.cotizaciones?.[it.cotizacionSeleccionada] : null;
+  const cot = cotSeleccionada || (it.cotizaciones || []).find((c) => c.anticipoObligatorio);
+  if (!cot?.anticipoObligatorio) return 0;
+  return parseFloat(cot.anticipoValorObligatorio) || 0;
+}
 function planInicialItem(s, it, totalItem) {
   const hayOficial = planTieneValores(it.pagos) || (s.items.length === 1 && planTieneValores(s.pagos));
   if (hayOficial) return planOficialItem(s, it);
   const sug = planSugeridoItem(s, it);
-  return planTieneValores(sug) ? reescalarPlanPago(sug, totalItem) : planPagosVacio();
+  if (planTieneValores(sug)) return reescalarPlanPago(sug, totalItem);
+  // sin ningún plan todavía: si el proveedor exige un anticipo con valor, se arma el plan solo —
+  // anticipo = lo que el proveedor exige, final = el resto del total (las fechas las sigue poniendo quien edite)
+  const anticipoExigido = anticipoObligatorioDe(it);
+  if (anticipoExigido > 0) {
+    const anticipo = Math.min(anticipoExigido, totalItem);
+    return { ...planPagosVacio(), anticipo: { valor: anticipo, fecha: "" }, final: { valor: Math.max(0, totalItem - anticipo), fecha: "" } };
+  }
+  return planPagosVacio();
 }
 
 function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confirmado, opcional, editable, puedeReabrirPlan, onGuardar, onConfirmar, onEditarDeNuevo, abierto = true, onToggle }) {
@@ -3455,6 +3482,9 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
   // si ya hay un proveedor elegido, se mira ese; si no, se avisa si CUALQUIERA de los cotizados lo exige
   const cotSeleccionada = item.cotizacionSeleccionada != null ? item.cotizaciones?.[item.cotizacionSeleccionada] : null;
   const cotAnticipo = cotSeleccionada ? !!cotSeleccionada.anticipoObligatorio : (item.cotizaciones || []).some((c) => c.anticipoObligatorio);
+  const anticipoExigido = anticipoObligatorioDe(item);
+  // si lo que queda guardado como anticipo es menor a lo que el proveedor exige, se avisa (no bloquea, pero debe verse)
+  const anticipoInsuficiente = cotAnticipo && anticipoExigido > 0 && (parseFloat(pagos.anticipo?.valor) || 0) < anticipoExigido - 0.5;
 
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) { const error = validarOrdenFechas(pagos, campo, val); if (error) { alert(error); return; } }
@@ -3487,7 +3517,12 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
           <span className="truncate">{numero}. {item.nombre}</span>
         </button>
         <div className="flex items-center gap-2 shrink-0">
-          {cotAnticipo && <span title="Este proveedor exige el pago antes de despachar — prioriza el anticipo" className="text-amber-600 flex items-center gap-0.5"><Timer size={13} /><span className="text-[10px] font-medium hidden sm:inline">Pago anticipado</span></span>}
+          {cotAnticipo && (
+            <span title={anticipoExigido > 0 ? `Este proveedor exige un anticipo de ${fmt(anticipoExigido)} antes de despachar` : "Este proveedor exige el pago antes de despachar"} className="text-amber-600 flex items-center gap-0.5">
+              <Timer size={13} /><span className="text-[10px] font-medium hidden sm:inline">Pago anticipado{anticipoExigido > 0 ? ` (${fmt(anticipoExigido)})` : ""}</span>
+            </span>
+          )}
+          {anticipoInsuficiente && <Badge tone="red">Anticipo insuficiente — faltan {fmt(anticipoExigido - (parseFloat(pagos.anticipo?.valor) || 0))}</Badge>}
           <span className="text-xs text-slate-500">{fmt(totalItem)}</span>
           {confirmado
             ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado{item.pagosConfirmadosPor ? ` por ${item.pagosConfirmadosPor.nombre}` : ""}</Badge>
