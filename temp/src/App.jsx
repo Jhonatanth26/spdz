@@ -91,7 +91,7 @@ const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "met
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
 const COLORS = ["#4f46e5", "#f59e0b", "#10b981", "#ef4444", "#0ea5e9", "#a855f7"];
-const ROLES = ["Solicitante", "Jefe de Área", "Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia", "Compras", "Administrador"];
+const ROLES = ["Solicitante", "Jefe de Área", "Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Contabilidad", "Gerencia", "Compras", "Administrador"];
 
 const PASOS = [
   { key: "solicitud", label: "Solicitud creada" },
@@ -123,7 +123,7 @@ const tinteItem = (idx) => TINTES_ITEM[(idx || 0) % TINTES_ITEM.length];
 // En el detalle de la solicitud se ve (en solo lectura para quien no es Compras) cuando ya está definido: desde la
 // etapa de cotización, o antes si Compras ya lo cargó (ej. una solicitud devuelta que vuelve al jefe o al director).
 // fases (secciones) del detalle de la solicitud que se pueden expandir o contraer
-const FASES_DETALLE = ["presupuesto", "items", "adjuntar", "sugerido", "revision", "cotizaciones", "comparativo", "aiu", "pagos", "orden", "copia", "reenviar", "recepcion", "evaluacion", "firmas"].map((id) => ({ id }));
+const FASES_DETALLE = ["presupuesto", "items", "adjuntar", "sugerido", "revision", "cotizaciones", "comparativo", "aiu", "pagos", "orden", "copia", "reenviar", "estadoOrden", "recepcion", "evaluacion", "firmas"].map((id) => ({ id }));
 const ETAPAS_SIN_AIU = ["solicitud", "aprobacion_jefe", "aprobacion_director"];
 const tieneAiuDefinido = (s) => tieneAiuValores(s.aiu) || (s.items || []).some((it) => tieneAiuValores(it.aiu) || (it.cotizaciones || []).some((c) => tieneAiuValores(c.aiu)));
 const aiuVisible = (s) => s.tipo === "servicio" && (s.items || []).some((it) => (it.cotizaciones || []).length > 0) && (!ETAPAS_SIN_AIU.includes(s.status) || tieneAiuDefinido(s));
@@ -562,7 +562,9 @@ const PERMISOS_DISPONIBLES = [
   { key: "ver_mis_pendientes", label: "Ver la pantalla \"Mis pendientes\"" },
   { key: "ver_calendario_pagos", label: "Ver el Calendario de pagos" },
   { key: "ver_ordenes_enviadas", label: "Ver el reporte de Órdenes enviadas a proveedores" },
-  { key: "ver_plan_inversion", label: "Ver el Plan de inversión" },
+  { key: "ver_plan_inversion", label: "Ver el Cronograma de pagos" },
+  { key: "editar_plan_inversion", label: "Editar el Cronograma de pagos (fechas y montos)" },
+  { key: "editar_pagos_finales", label: "Modificar fechas y montos finales de pago después de emitida la orden (Dirección Financiera / Contabilidad)" },
   { key: "ver_evaluaciones_proveedores", label: "Ver el reporte de Evaluación de proveedores" },
 ];
 
@@ -606,6 +608,8 @@ const puedeVerMisPendientes = (u) => u.rol === "Administrador" || tienePermiso(u
 const puedeVerCalendarioPagos = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_calendario_pagos");
 const puedeVerOrdenesEnviadas = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_ordenes_enviadas");
 const puedeVerPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_plan_inversion");
+const puedeEditarPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "editar_plan_inversion");
+const puedeEditarPagosFinales = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "editar_pagos_finales");
 const puedeVerEvaluaciones = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_evaluaciones_proveedores");
 
 /* ---------------------------------------------------------
@@ -1125,11 +1129,18 @@ function Dashboard({ areas, solicitudes, proveedores, currentUser, onAbrir, onVe
    ÓRDENES ENVIADAS A PROVEEDORES — consolidado para contabilidad
 --------------------------------------------------------- */
 function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir }) {
+  const ESTADO_ETIQUETA = { cancelada: "Cancelada", cambiada: "Cambiada" };
   const filas = [];
   solicitudes.forEach((s) => {
     if (!["oc_enviada", "recepcion", "completada"].includes(s.status)) return;
+    // facturas / cuentas de cobro y comprobante de recepción (remisión, acta o correo) viven en la recepción de
+    // la SOLICITUD (no por proveedor) — con varios proveedores adjudicados, esto aplica al conjunto de la solicitud
+    const facturas = s.recepcion?.facturas || (s.recepcion?.facturaUrl ? [{ url: s.recepcion.facturaUrl }] : []);
+    const tieneComprobanteRecepcion = (s.recepcion?.archivos?.length > 0) || (s.recepcion?.actas?.length > 0);
     (s.ocEnviada?.ordenesProveedor || []).forEach((o) => {
       if (!o.archivoFirmadoUrl) return;
+      const prov = buscarProveedorDeOrden(o, proveedores);
+      const itemsDelProveedor = s.items.filter((it) => (it.cotizaciones || []).some((c) => c.anticipoObligatorio && mismoProveedor({ proveedorId: c.proveedorId, proveedorNombre: c.proveedorNombre }, o)));
       filas.push({
         id: `${s.id}-${o.proveedorId || o.proveedorNombre}`,
         solicitudId: s.id,
@@ -1140,16 +1151,23 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
         fecha: o.fecha,
         total: totalSolicitud(s),
         archivo: o.archivoFirmadoUrl,
+        estadoOrden: o.estadoOrden && o.estadoOrden !== "enviada" ? o.estadoOrden : "enviada",
+        notaEstadoOrden: o.notaEstadoOrden || "",
+        tieneFactura: facturas.length > 0,
+        etiquetaFactura: prov?.personaNatural === "si" ? "Cuenta de cobro" : "Factura",
+        tieneComprobanteRecepcion,
+        anticipoObligatorio: itemsDelProveedor.length > 0,
       });
     });
   });
   filas.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")); // más reciente primero
 
   const descargar = () => {
-    const encabezado = ["Fecha envío", "Consecutivo", "Tipo", "Empresa", "Proveedor", "Total solicitud"];
-    const cuerpo = filas.map((f) => [f.fecha, f.folio, f.tipo, f.empresa, f.proveedor, f.total]);
+    const encabezado = ["Fecha envío", "Consecutivo", "Tipo", "Empresa", "Proveedor", "Total solicitud", "Estado de la orden", "Factura / cuenta de cobro", "Comprobante de recepción", "Pago anticipado obligatorio"];
+    const siNo = (b) => (b ? "Sí" : "Falta");
+    const cuerpo = filas.map((f) => [f.fecha, f.folio, f.tipo, f.empresa, f.proveedor, f.total, ESTADO_ETIQUETA[f.estadoOrden] || "Enviada", siNo(f.tieneFactura), siNo(f.tieneComprobanteRecepcion), f.anticipoObligatorio ? "Sí" : ""]);
     const hoja = XLSX.utils.aoa_to_sheet([encabezado, ...cuerpo]);
-    hoja["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 30 }, { wch: 16 }];
+    hoja["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 20 }, { wch: 20 }, { wch: 18 }];
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, "Órdenes enviadas");
     XLSX.writeFile(libro, `Ordenes_enviadas_${hoy()}.xlsx`);
@@ -1177,6 +1195,9 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
               <th className="text-left px-4 py-2 font-medium">Empresa</th>
               <th className="text-left px-4 py-2 font-medium">Proveedor</th>
               <th className="text-right px-4 py-2 font-medium">Total solicitud</th>
+              <th className="text-left px-4 py-2 font-medium">Estado de la orden</th>
+              <th className="text-center px-4 py-2 font-medium">Factura</th>
+              <th className="text-center px-4 py-2 font-medium">Comprobante recepción</th>
               <th className="text-center px-4 py-2 font-medium">PDF</th>
             </tr></thead>
             <tbody>{filas.map((f) => (
@@ -1185,8 +1206,11 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
                 <td className="px-4 py-2 font-medium text-slate-700 cursor-pointer hover:text-indigo-600" onClick={() => onAbrir?.(f.solicitudId)}>{f.folio}</td>
                 <td className="px-4 py-2 text-slate-600">{f.tipo}</td>
                 <td className="px-4 py-2 text-slate-600">{f.empresa}</td>
-                <td className="px-4 py-2 text-slate-600">{f.proveedor}</td>
+                <td className="px-4 py-2 text-slate-600">{f.proveedor} {f.anticipoObligatorio && <span title="Pago anticipado obligatorio para este proveedor" className="text-amber-600 inline-block align-middle"><Timer size={12} /></span>}</td>
                 <td className="px-4 py-2 text-right font-medium">{fmt(f.total)}</td>
+                <td className="px-4 py-2">{f.estadoOrden === "enviada" ? <Badge tone="green">Enviada</Badge> : <span title={f.notaEstadoOrden}><Badge tone={f.estadoOrden === "cancelada" ? "red" : "amber"}>{ESTADO_ETIQUETA[f.estadoOrden]}</Badge></span>}</td>
+                <td className="px-4 py-2 text-center">{f.tieneFactura ? <Badge tone="green">{f.etiquetaFactura}</Badge> : <Badge tone="red">Falta {f.etiquetaFactura.toLowerCase()}</Badge>}</td>
+                <td className="px-4 py-2 text-center">{f.tieneComprobanteRecepcion ? <Badge tone="green">Sí</Badge> : <Badge tone="red">Falta</Badge>}</td>
                 <td className="px-4 py-2 text-center"><EnlacePrivado path={f.archivo} className="text-indigo-600 underline text-xs">Descargar</EnlacePrivado></td>
               </tr>
             ))}</tbody>
@@ -1605,7 +1629,7 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
 }
 
 /* ---------------------------------------------------------
-   PLAN DE INVERSIÓN — cronograma editable por proyecto, con
+   CRONOGRAMA DE PAGOS — cronograma editable por proyecto, con
    distribución por periodos (mes/semana), exportable a Excel y PDF.
 --------------------------------------------------------- */
 const NOMBRES_MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
@@ -1620,7 +1644,7 @@ function parsearRangoDias(rango) {
   if (m) return { desde: parseInt(m[1]), hasta: parseInt(m[2]) };
   return { desde: 1, hasta: 31 };
 }
-// reparte los pagos del plan de una solicitud entre los periodos del plan de inversión, según la
+// reparte los pagos del plan de una solicitud entre los periodos del cronograma de pagos, según la
 // fecha de cada pago (anticipo/intermedio/final, o pago único). Si no existe un periodo para el
 // mes de un pago, lo crea automáticamente. Devuelve los periodos (con los nuevos agregados) y los
 // valores a poner en la fila de ese proyecto.
@@ -1738,7 +1762,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
   }, [exportandoPDF]);
 
   const plan = planLocal;
-  const puedeEditar = ["Administrador", "Gerencia", "Dirección Financiera"].includes(currentUser.rol);
+  const puedeEditar = puedeEditarPlanInversion(currentUser);
 
   // actualiza la pantalla al instante, y guarda en Supabase con un pequeño retraso (no en cada
   // tecla) para no saturar la base de datos en una tabla con tantos campos
@@ -1750,7 +1774,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
   };
 
   const crearPlan = async () => {
-    const nuevo = { id: nextId(), titulo: "Cronograma y Plan de Inversión", empresaId: empresas[0]?.id || null, anio: new Date().getFullYear(), periodos: [], proyectos: [] };
+    const nuevo = { id: nextId(), titulo: "Cronograma de Pagos", empresaId: empresas[0]?.id || null, anio: new Date().getFullYear(), periodos: [], proyectos: [] };
     const creado = await guardarPlanDB(nuevo);
     if (creado?.id) { setPlanActivoId(creado.id); setPlanLocal(creado); }
   };
@@ -1847,7 +1871,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     const hoja = XLSX.utils.aoa_to_sheet(filas);
     hoja["!cols"] = [{ wch: 6 }, { wch: 45 }, { wch: 16 }, ...plan.periodos.map(() => ({ wch: 14 }))];
     const libro = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(libro, hoja, "Plan de inversión");
+    XLSX.utils.book_append_sheet(libro, hoja, "Cronograma de pagos");
     XLSX.writeFile(libro, `${(plan.titulo || "Plan_inversion").replace(/[^a-zA-Z0-9]/g, "_")}_${plan.anio}.xlsx`);
   };
 
@@ -1857,7 +1881,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-lg font-semibold text-slate-800">Plan de inversión</h2>
+          <h2 className="text-lg font-semibold text-slate-800">Cronograma de pagos</h2>
           <p className="text-xs text-slate-400 mt-1">Cronograma editable por proyecto, con distribución en el tiempo — exportable a Excel y PDF.</p>
         </div>
         <div className="flex items-center gap-2 no-print">
@@ -1876,7 +1900,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
 
       {!plan ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">
-          {puedeEditar ? <>No hay ningún plan de inversión todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear el primero</button></> : "No hay ningún plan de inversión todavía."}
+          {puedeEditar ? <>No hay ningún cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear el primero</button></> : "No hay ningún cronograma de pagos todavía."}
         </div>
       ) : (
         <>
@@ -2959,6 +2983,11 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             </div>
 
+            <label className="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer">
+              <input type="checkbox" checked={!!c.anticipoObligatorio} onChange={(e) => update(i, "anticipoObligatorio", e.target.checked)} />
+              ⚠ Este proveedor exige el pago antes de despachar (pago anticipado obligatorio)
+            </label>
+
             {erroresPrecioCotizacion(item, c).map((e, k) => (
               <div key={k} className="text-[11px] text-rose-600 bg-rose-50 border border-rose-200 rounded-md px-2 py-1.5">
                 ⚠ {e.texto}{e.tipo === "estimado" && !compacto ? " Si el precio real es mayor, devuelve la solicitud (Rechazar) con el motivo para que el solicitante actualice el precio estimado." : ""}
@@ -3127,7 +3156,7 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
         <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">{sinIva ? "Costo Directo" : "Total (COP)"}</th>{sinIva && !ocultarAiu && <th className="text-right px-3 py-2">Total c/AIU</th>}<th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
         <tbody>{scored.map((c, i) => (
           <tr key={i} className={`border-t border-slate-100 ${i === bestIdx ? "bg-emerald-50/60" : ""}`}>
-            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
+            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.anticipoObligatorio && <span title="Este proveedor exige el pago antes de despachar" className="text-amber-600"><Timer size={13} /></span>} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
             <td className="px-3 py-2 text-right">{c.precioUnitario ? `${c.moneda && c.moneda !== "COP" ? c.moneda + " " : ""}${Number(c.precioUnitario).toLocaleString("es-CO")}` : "—"}</td>
             <td className="px-3 py-2 text-right">{c.descuentoValor ? (c.descuentoTipo === "valor" ? `-${Number(c.descuentoValor).toLocaleString("es-CO")}` : `-${c.descuentoValor}%`) : "—"}</td>
             <td className="px-3 py-2 text-right">{c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}</td>
@@ -3423,6 +3452,9 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
   const hayPlan = planTieneValores(pagos);
   const descuadrado = confirmado && Math.abs(restante) > 0.5;
   const faltaFecha = planFaltaFecha(pagos);
+  // si ya hay un proveedor elegido, se mira ese; si no, se avisa si CUALQUIERA de los cotizados lo exige
+  const cotSeleccionada = item.cotizacionSeleccionada != null ? item.cotizaciones?.[item.cotizacionSeleccionada] : null;
+  const cotAnticipo = cotSeleccionada ? !!cotSeleccionada.anticipoObligatorio : (item.cotizaciones || []).some((c) => c.anticipoObligatorio);
 
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) { const error = validarOrdenFechas(pagos, campo, val); if (error) { alert(error); return; } }
@@ -3455,6 +3487,7 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
           <span className="truncate">{numero}. {item.nombre}</span>
         </button>
         <div className="flex items-center gap-2 shrink-0">
+          {cotAnticipo && <span title="Este proveedor exige el pago antes de despachar — prioriza el anticipo" className="text-amber-600 flex items-center gap-0.5"><Timer size={13} /><span className="text-[10px] font-medium hidden sm:inline">Pago anticipado</span></span>}
           <span className="text-xs text-slate-500">{fmt(totalItem)}</span>
           {confirmado
             ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado{item.pagosConfirmadosPor ? ` por ${item.pagosConfirmadosPor.nombre}` : ""}</Badge>
@@ -3514,7 +3547,8 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggl
     return { it, totalItem, conf, inicial, esSugerido: !hayOficial && planTieneValores(inicial), descuadrado: conf && Math.abs(totalItem - totalPagado(planOficialItem(solicitud, it))) > 0.5 };
   });
   // una vez generada la orden el plan queda fijo, salvo un plan confirmado que no cuadra (válvula de corrección)
-  const puedeTocar = (f) => puedeEditarRol && (!ocYaEnviada || f.descuadrado);
+  const puedeAjustarPostOrden = puedeEditarPagosFinales(currentUser);
+  const puedeTocar = (f) => puedeEditarRol && (!ocYaEnviada || f.descuadrado || puedeAjustarPostOrden);
   const conPlan = filas.filter((f) => f.conf || planTieneValores(f.inicial));
   const todosConfirmados = opcional ? (conPlan.length > 0 && conPlan.every((f) => f.conf)) : filas.every((f) => f.conf);
   const hayAlgoPorConfirmar = filas.some((f) => !f.conf && (!opcional || planTieneValores(f.inicial)));
@@ -3537,7 +3571,9 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggl
 
   return (
     <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos por ítem" descripcion={opcional ? "En las solicitudes de compra el plan de pagos es opcional: no bloquea la aprobación." : undefined} acciones={todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : (puedeEditarRol && !ocYaEnviada && hayAlgoPorConfirmar && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>)} abierto={abierto} onToggle={onToggle}>
-      {ocYaEnviada && <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">🔒 La orden ya fue generada — las condiciones de pago quedaron fijas.</div>}
+      {ocYaEnviada && (puedeAjustarPostOrden
+        ? <div className="text-[11px] text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2">La orden ya fue generada, pero tienes permiso para ajustar las fechas y los montos finales de pago (factura parcial, cambio de fecha, etc.).</div>
+        : <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">🔒 La orden ya fue generada — las condiciones de pago quedaron fijas. Dirección Financiera o Contabilidad pueden ajustarlas si es necesario.</div>)}
       {sinPrecio && !ocYaEnviada && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">⚠ Todavía no hay precios cargados — se habilita en cuanto Compras cotice.</div>}
       {!tienePermiso && !ocYaEnviada && !sinPrecio && <div className="text-[11px] text-slate-400">Tu rol no tiene el permiso para editar y confirmar el plan de pagos. El administrador puede activarlo en Catálogo → Permisos.</div>}
       <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />
@@ -3789,6 +3825,77 @@ function ReenviarOrdenesPanel({ solicitud, proveedores, guardarProveedor, empres
       })}
       <button onClick={reenviar} disabled={!seleccionadas.length || enviando} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40">{enviando ? "Enviando..." : `Reenviar (${seleccionadas.length})`}</button>
       {mensaje && <div className="text-[11px] text-emerald-600">{mensaje}</div>}
+    </SeccionColapsable>
+  );
+}
+
+
+// permite registrar que una orden ya enviada se CANCELÓ o se CAMBIÓ (precio, cantidades, alcance...) — para que quede
+// visible tanto en la solicitud como en el reporte de "Órdenes enviadas" y no se pierda de vista en la contabilidad
+function EstadoOrdenPanel({ solicitud, proveedores, currentUser, onGuardar, onReabrirPorCambio, abierto, onToggle }) {
+  const [editando, setEditando] = useState(null); // idx de la orden que se está editando, o null
+  const [motivo, setMotivo] = useState("");
+  if (!puedeGestionarCotizaciones(currentUser) && !puedeAprobarFinanciera(currentUser)) return null;
+  if (!["oc_enviada", "recepcion"].includes(solicitud.status)) return null;
+
+  const ordenesFirmadas = (solicitud.ocEnviada.ordenesProveedor || []).filter((o) => o.archivoFirmadoUrl);
+  if (!ordenesFirmadas.length) return null;
+
+  // "Cancelada" solo deja una marca informativa (la orden con este proveedor no sigue, sin más trámite).
+  // "Cambiada" sí es consecuente: implica que el precio, la cantidad o el alcance cambiaron, así que la solicitud
+  // se REABRE a Revisión y cotizaciones — Compras vuelve a cotizar y hay que volver a aprobar y generar la orden.
+  const marcarCancelada = (idx) => {
+    if (!motivo.trim()) { alert("Escribe brevemente qué pasó (motivo de la cancelación)."); return; }
+    const copia = solicitud.ocEnviada.ordenesProveedor.map((o) => (o === ordenesFirmadas[idx] ? { ...o, estadoOrden: "cancelada", notaEstadoOrden: motivo.trim(), estadoOrdenPor: currentUser.nombre, estadoOrdenFecha: hoy() } : o));
+    onGuardar({ ordenesProveedor: copia });
+    setEditando(null); setMotivo("");
+  };
+  const volverAEnviada = (idx) => {
+    const copia = solicitud.ocEnviada.ordenesProveedor.map((o) => (o === ordenesFirmadas[idx] ? { ...o, estadoOrden: "enviada", notaEstadoOrden: "" } : o));
+    onGuardar({ ordenesProveedor: copia });
+  };
+  const marcarCambiada = (idx) => {
+    if (!motivo.trim()) { alert("Escribe brevemente qué cambió (motivo)."); return; }
+    if (!confirm(`Esto REABRE la solicitud ${solicitud.folio}: vuelve a "Revisión y cotizaciones" y Dirección Financiera / Gerencia deberán volver a aprobar antes de generar una nueva orden. ¿Continuar?`)) return;
+    onReabrirPorCambio(ordenesFirmadas[idx], motivo.trim());
+    setEditando(null); setMotivo("");
+  };
+
+  const ETIQUETA = { cancelada: "Cancelada", cambiada: "Cambiada" };
+  const TONO = { cancelada: "red", cambiada: "amber" };
+
+  return (
+    <SeccionColapsable icono={XCircle} titulo="Estado de la orden" descripcion="Si una orden ya enviada se cancela, se registra aquí (nota informativa). Si cambia (precio, cantidades, alcance...), la solicitud se reabre para rehacer cotización, aprobaciones y orden." abierto={abierto} onToggle={onToggle}>
+      {ordenesFirmadas.map((o, idx) => (
+        <div key={idx} className="border border-slate-200 rounded-lg p-3 space-y-2">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <span className="text-sm font-medium text-slate-700 flex items-center gap-2"><Truck size={13} /> {o.proveedorNombre}</span>
+            {o.estadoOrden && o.estadoOrden !== "enviada" ? (
+              <Badge tone={TONO[o.estadoOrden]}>{ETIQUETA[o.estadoOrden]}</Badge>
+            ) : (
+              <Badge tone="green">Enviada</Badge>
+            )}
+          </div>
+          {o.estadoOrden && o.estadoOrden !== "enviada" && (
+            <div className="text-[11px] text-slate-500">{o.notaEstadoOrden}{o.estadoOrdenPor ? ` — ${o.estadoOrdenPor}, ${o.estadoOrdenFecha}` : ""}</div>
+          )}
+          {editando === idx ? (
+            <div className="space-y-1.5">
+              <textarea value={motivo} onChange={(e) => setMotivo(e.target.value)} rows={2} placeholder="¿Qué pasó? (ej. el proveedor no tenía stock, cambió el precio acordado...)" className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              <div className="flex gap-2 flex-wrap">
+                <button onClick={() => marcarCancelada(idx)} className="text-xs bg-rose-600 text-white px-2.5 py-1 rounded-md font-medium">Marcar como cancelada</button>
+                <button onClick={() => marcarCambiada(idx)} className="text-xs bg-amber-600 text-white px-2.5 py-1 rounded-md font-medium">Marcar como cambiada (reabre la solicitud)</button>
+                <button onClick={() => { setEditando(null); setMotivo(""); }} className="text-xs text-slate-500 px-2.5 py-1">Cancelar</button>
+              </div>
+            </div>
+          ) : (
+            <div className="flex gap-2">
+              <button onClick={() => { setEditando(idx); setMotivo(o.notaEstadoOrden || ""); }} className="text-xs text-slate-500 underline">{o.estadoOrden === "cancelada" ? "Editar" : "Registrar cancelación o cambio"}</button>
+              {o.estadoOrden === "cancelada" && <button onClick={() => volverAEnviada(idx)} className="text-xs text-slate-500 underline">Volver a “Enviada”</button>}
+            </div>
+          )}
+        </div>
+      ))}
     </SeccionColapsable>
   );
 }
@@ -4064,15 +4171,29 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
 }
 
 
-function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNotificacion, abierto, onToggle }) {
+function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], onGuardar, crearNotificacion, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
-  const [r, setR] = useState({ ...solicitud.recepcion, archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []), facturaUrl: solicitud.recepcion.facturaUrl || "", actas: solicitud.recepcion.actas || [] });
+  const [r, setR] = useState({
+    ...solicitud.recepcion,
+    archivos: solicitud.recepcion.archivos || (solicitud.recepcion.archivoNombre ? [solicitud.recepcion.archivoNombre] : []),
+    // las solicitudes de antes de este cambio traían una sola factura (facturaUrl) — se migra a la lista automáticamente
+    facturas: solicitud.recepcion.facturas || (solicitud.recepcion.facturaUrl ? [{ id: nextId(), numero: "", url: solicitud.recepcion.facturaUrl }] : []),
+    actas: solicitud.recepcion.actas || [],
+  });
   const [enviado, setEnviado] = useState(false);
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); setEnviado(false); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
   const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
   const agregarActa = (url) => set({ actas: [...r.actas, url] });
   const quitarActa = (i) => set({ actas: r.actas.filter((_, idx) => idx !== i) });
+  // facturas parciales: a medida que el proveedor va despachando, puede llegar más de una (2, 3...).
+  // si el proveedor adjudicado es persona natural, lo que entrega es una cuenta de cobro, no una factura.
+  const adjudicados = proveedoresAdjudicadosDetalle(solicitud, proveedores).map((n) => buscarProveedorDeOrden(n, proveedores));
+  const esPersonaNatural = adjudicados.length > 0 && adjudicados.every((p) => p?.personaNatural === "si");
+  const etiquetaDoc = esPersonaNatural ? "cuenta de cobro" : "factura";
+  const agregarFactura = (url) => set({ facturas: [...r.facturas, { id: nextId(), numero: "", url }] });
+  const quitarFactura = (id) => set({ facturas: r.facturas.filter((f) => f.id !== id) });
+  const editarNumeroFactura = (id, numero) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, numero } : f)) });
   // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
   // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
   const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
@@ -4108,8 +4229,17 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, onGuardar, crearNoti
       </div>
       <div className="grid sm:grid-cols-2 gap-3">
         <div>
-          <label className="text-xs font-medium text-slate-500 mb-1 block">Factura del proveedor</label>
-          <AdjuntarArchivo nombre={r.facturaUrl || null} label="Adjuntar factura del proveedor (PDF)" carpeta="facturas" onSeleccionar={(url) => set({ facturaUrl: url })} />
+          <label className="text-xs font-medium text-slate-500 mb-1 block">{esPersonaNatural ? "Cuenta(s) de cobro del proveedor" : "Factura(s) del proveedor"} <span className="text-slate-400 font-normal">(pueden ser varias, a medida que despache)</span></label>
+          <div className="space-y-1.5">
+            {r.facturas.map((f, i) => (
+              <div key={f.id} className="flex items-center gap-1.5">
+                <input value={f.numero} onChange={(e) => editarNumeroFactura(f.id, e.target.value)} placeholder="N.° (opcional)" className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+                <AdjuntarArchivo nombre={f.url} onSeleccionar={() => {}} />
+                <button onClick={() => quitarFactura(f.id)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
+              </div>
+            ))}
+            <AdjuntarArchivo nombre={null} label={r.facturas.length ? `Adjuntar otra ${etiquetaDoc} (parcial)` : `Adjuntar ${etiquetaDoc} del proveedor (PDF)`} carpeta="facturas" onSeleccionar={agregarFactura} />
+          </div>
         </div>
         <div>
           <label className="text-xs font-medium text-slate-500 mb-1 block">Actas de trabajo (opcional, puedes adjuntar varias)</label>
@@ -4623,12 +4753,14 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     solicitud.items.forEach((it, i) => (it.cotizaciones || []).forEach((c) => {
       if (c.archivoNombre) items.push({ titulo: `Ítem ${i + 1} (${it.nombre}) — cotización de ${c.proveedorNombre || proveedores.find((p) => p.id === c.proveedorId)?.nombre || "proveedor"}`, path: c.archivoNombre });
     }));
-    (solicitud.ocEnviada?.ordenesProveedor || []).forEach((o) => {
-      if (o.archivoOriginalUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (documento generado)`, path: o.archivoOriginalUrl });
-      if (o.archivoFirmadoUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (firmada)`, path: o.archivoFirmadoUrl });
+    [...(solicitud.ocEnviada?.ordenesProveedor || []), ...(solicitud.ocEnviada?.historialOrdenes || [])].forEach((o) => {
+      // una orden archivada (reemplazada por un cambio) se marca para que quede claro en el expediente que ya no es la vigente
+      const estado = o.estadoOrden && o.estadoOrden !== "enviada" ? ` — ${o.estadoOrden === "cambiada" ? "reemplazada por cambio" : "cancelada"}` : "";
+      if (o.archivoOriginalUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (documento generado)${estado}`, path: o.archivoOriginalUrl });
+      if (o.archivoFirmadoUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (firmada)${estado}`, path: o.archivoFirmadoUrl });
     });
     (solicitud.recepcion?.archivos || []).forEach((path, i) => items.push({ titulo: `Recepción — soporte ${i + 1}`, path }));
-    if (solicitud.recepcion?.facturaUrl) items.push({ titulo: "Factura del proveedor", path: solicitud.recepcion.facturaUrl });
+    (solicitud.recepcion?.facturas || (solicitud.recepcion?.facturaUrl ? [{ numero: "", url: solicitud.recepcion.facturaUrl }] : [])).forEach((f, i) => items.push({ titulo: `Factura del proveedor${f.numero ? ` N.° ${f.numero}` : ` ${i + 1}`}`, path: f.url }));
     (solicitud.recepcion?.actas || []).forEach((path, i) => items.push({ titulo: `Acta de trabajo ${i + 1}`, path }));
     if (!items.length) { mostrarToast("Esta solicitud no tiene archivos adjuntos para unificar.", "alerta"); return; }
     setUnificando(true);
@@ -4686,6 +4818,29 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     if (revision) cambios.revisionCompras = { estado: "pendiente", observacion: "", usuario: "", fecha: "" };
     patch(cambios);
     mostrarToast("Solicitud reabierta para corregir");
+  };
+
+  // la orden de un proveedor cambió (precio, cantidades, alcance...) después de enviada: la solicitud se reabre a
+  // "Revisión y cotizaciones" para que Compras vuelva a cotizar; las aprobaciones que dependen del precio
+  // (Dirección Financiera y Gerencia) se reinician — jefe y director NO, porque la necesidad en sí no cambió.
+  // La orden que quedó marcada como "cambiada" se archiva en ocEnviada.historialOrdenes, sin perderla, para que
+  // siga apareciendo en el expediente de auditoría aunque ya no sea la vigente.
+  const reabrirPorCambioDeOrden = (ordenCambiada, motivo) => {
+    const ordenesActuales = (solicitud.ocEnviada.ordenesProveedor || []).map((o) => (o === ordenCambiada ? { ...o, estadoOrden: "cambiada", notaEstadoOrden: motivo, estadoOrdenPor: currentUser.nombre, estadoOrdenFecha: hoy() } : o));
+    const historialOrdenes = [...(solicitud.ocEnviada.historialOrdenes || []), ...ordenesActuales.filter((o) => o === ordenCambiada || mismoProveedor(o, ordenCambiada))];
+    patch({
+      status: "cotizando",
+      historialEstados: empujarHistorial("cotizando"),
+      revisionCompras: { estado: "pendiente", observacion: "", usuario: "", fecha: "" },
+      firmas: {
+        ...solicitud.firmas,
+        financiera: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
+        gerencia: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
+      },
+      ocEnviada: { ordenesProveedor: ordenesActuales.filter((o) => !mismoProveedor(o, ordenCambiada)), historialOrdenes },
+      notificaciones: notificar(`La orden de ${solicitud.folio} para ${ordenCambiada.proveedorNombre} cambió: "${motivo}". La solicitud vuelve a Revisión y cotizaciones y deberá aprobarse de nuevo.`),
+    });
+    mostrarToast(`Solicitud reabierta a Revisión y cotizaciones por cambio en la orden de ${ordenCambiada.proveedorNombre}`, "alerta", { duracion: 7000 });
   };
 
   // el solicitante confirma que ya corrigió y avisa por correo a quien le toca aprobar ahora
@@ -5132,8 +5287,9 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       <ReenviarOrdenesPanel abierto={fases.abierto("reenviar")} onToggle={() => fases.alternar("reenviar")} solicitud={solicitud} proveedores={proveedores} guardarProveedor={guardarProveedor} empresa={empresa} currentUser={currentUser} />
+      <EstadoOrdenPanel abierto={fases.abierto("estadoOrden")} onToggle={() => fases.alternar("estadoOrden")} solicitud={solicitud} proveedores={proveedores} currentUser={currentUser} onGuardar={(oc) => patch({ ocEnviada: oc })} onReabrirPorCambio={reabrirPorCambioDeOrden} />
 
-      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel abierto={fases.abierto("recepcion")} onToggle={() => fases.alternar("recepcion")} solicitud={solicitud} currentUser={currentUser} usuarios={usuarios} onGuardar={(r) => patch({ recepcion: r })} crearNotificacion={crearNotificacion} />}
+      {["recepcion", "completada"].includes(solicitud.status) && <RecepcionPanel abierto={fases.abierto("recepcion")} onToggle={() => fases.alternar("recepcion")} solicitud={solicitud} currentUser={currentUser} usuarios={usuarios} proveedores={proveedores} onGuardar={(r) => patch({ recepcion: r })} crearNotificacion={crearNotificacion} />}
 
       {["recepcion", "completada"].includes(solicitud.status) && (
         <EvaluacionPanel
@@ -5620,9 +5776,10 @@ function Catalogos({
           { key: "representanteLegal", label: "Representante legal" },
           { key: "email", label: "Correo (obligatorio)", requerido: true },
           { key: "email2", label: "Correo adicional (opcional)" },
+          { key: "personaNatural", label: "Persona natural (recibe cuenta de cobro, no factura)", type: "select", options: [{ value: "no", label: "No — factura" }, { value: "si", label: "Sí — cuenta de cobro" }] },
         ]}
         datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro}
-        plantilla={{ nombre: "", tipoProveedor: "", nit: "", ciudad: "", direccion: "", telefono: "", representanteLegal: "", email: "", email2: "" }} />}
+        plantilla={{ nombre: "", tipoProveedor: "", nit: "", ciudad: "", direccion: "", telefono: "", representanteLegal: "", email: "", email2: "", personaNatural: "no" }} />}
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
@@ -5966,7 +6123,7 @@ export default function App() {
             {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
             {puedeVerCalendarioPagos(currentUser) && <NavBtn id="calendarioPagos" icon={CalendarClock} label="Calendario de pagos" />}
             {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Órdenes enviadas" />}
-            {puedeVerPlanInversion(currentUser) && <NavBtn id="planInversion" icon={TrendingUp} label="Plan de inversión" />}
+            {puedeVerPlanInversion(currentUser) && <NavBtn id="planInversion" icon={TrendingUp} label="Cronograma de pagos" />}
             {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
           </>
         )}
