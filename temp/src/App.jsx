@@ -2578,7 +2578,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       if (!el) return;
       const r = el.getBoundingClientRect();
       const flotante = r.bottom > window.innerHeight + 1;
-      setBarra((b) => (b.flotante === flotante && Math.abs(b.left - r.left) < 1 && Math.abs(b.width - r.width) < 1 ? b : { flotante, left: r.left, width: r.width }));
+      setBarra((b) => (b.flotante === flotante && Math.abs(b.left - r.left) < 0.01 && Math.abs(b.width - r.width) < 0.01 ? b : { flotante, left: r.left, width: r.width }));
     };
     medir();
     window.addEventListener("scroll", medir, true);
@@ -2699,7 +2699,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   };
 
   return (
-    <div className="flex gap-5 items-start w-full max-w-[1500px] mx-auto">
+    <div className="flex gap-5 items-start w-full">
     <div className="bg-white rounded-xl border border-slate-200 p-6 flex-1 min-w-0">
       <h2 className="text-lg font-semibold text-slate-800 mb-5">Nueva solicitud</h2>
       {/* en pantallas anchas los campos se reparten en 12 columnas (4 filas en vez de 9); en pantallas medianas, 2 columnas; en celular, 1 */}
