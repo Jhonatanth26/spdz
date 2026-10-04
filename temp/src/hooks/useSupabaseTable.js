@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { supabase } from '../lib/supabaseClient'
 
 // Hook genérico para leer y guardar cualquier tabla de catálogo en Supabase.
@@ -11,9 +11,13 @@ export function useSupabaseTable(tabla, { desdeDb = (r) => r, haciaDb = (r) => r
   const [datos, setDatos] = useState([])
   const [cargando, setCargando] = useState(true)
   const [error, setError] = useState(null)
+  // "cargando" solo vale TRUE la primera vez. Las recargas posteriores (después de guardar, editar o eliminar) se
+  // hacen "en silencio": la app usa "cargando" para reemplazar TODA la pantalla por "Cargando...", y eso desmontaba
+  // el catálogo en el que estabas y te devolvía al primero cada vez que guardabas algo.
+  const yaCargoUnaVez = useRef(false)
 
   const recargar = useCallback(async () => {
-    setCargando(true)
+    if (!yaCargoUnaVez.current) setCargando(true)
     let query = supabase.from(tabla).select('*')
     if (orderBy) query = query.order(orderBy)
     const { data, error } = await query
@@ -24,6 +28,7 @@ export function useSupabaseTable(tabla, { desdeDb = (r) => r, haciaDb = (r) => r
       setError(null)
       setDatos((data || []).map(desdeDb))
     }
+    yaCargoUnaVez.current = true
     setCargando(false)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabla])
@@ -59,11 +64,30 @@ export function useSupabaseTable(tabla, { desdeDb = (r) => r, haciaDb = (r) => r
     await recargar()
   }
 
+  // guarda muchos registros de una vez (actualiza los que ya existen y crea los nuevos) y recarga UNA sola vez al final,
+  // en vez de una recarga por cada registro. Devuelve, por cada registro, { registro, error } (error = null si salió bien).
+  const guardarLote = async (registros, { enParalelo = 8 } = {}) => {
+    const resultados = new Array(registros.length)
+    for (let i = 0; i < registros.length; i += enParalelo) {
+      await Promise.all(registros.slice(i, i + enParalelo).map(async (registro, k) => {
+        const esNuevo = !datos.some((d) => d.id === registro.id)
+        const { id, ...resto } = haciaDb(registro)
+        const { error } = esNuevo
+          ? await supabase.from(tabla).insert(resto)
+          : await supabase.from(tabla).update(resto).eq('id', registro.id)
+        if (error) console.error(`Error guardando en "${tabla}":`, error.message)
+        resultados[i + k] = { registro, error: error || null }
+      }))
+    }
+    await recargar()
+    return resultados
+  }
+
   const eliminar = async (id) => {
     const { error } = await supabase.from(tabla).delete().eq('id', id)
     if (error) { console.error(`Error eliminando de "${tabla}":`, error.message); return error }
     await recargar()
   }
 
-  return { datos, cargando, error, guardar, guardarVarios, eliminar, recargar }
+  return { datos, cargando, error, guardar, guardarVarios, guardarLote, eliminar, recargar }
 }

@@ -11,6 +11,7 @@ import { firmarPDF } from "./lib/firmarPdf";
 import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
 import { unificarArchivosPDF, generarResumenSolicitudPDF } from "./lib/unificarArchivos";
 import { COLUMNAS_EMPLEADOS, validarEmpleados, importarEmpleadosEnLotes } from "./lib/importarEmpleados";
+import { filasExportarAreas, filasDirectoresValidos, filasInstruccionesAreas, validarAreas, registrosParaGuardarAreas } from "./lib/areasExcel";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import { LOGO_FULL } from "./lib/logo";
@@ -5760,6 +5761,141 @@ function EmpresasLogos({ empresas, onGuardar }) {
 }
 
 /* ---------------------------------------------------------
+   ACTUALIZAR ÁREAS DESDE EXCEL (solo Administrador)
+   Exporta las áreas con su director y presupuesto actuales; se editan en Excel y se vuelve a subir el archivo: antes de
+   guardar nada se ve qué cambiaría en cada fila, y al confirmar se actualiza todo de una vez (una sola recarga).
+--------------------------------------------------------- */
+function ActualizarAreas({ areas, usuarios, guardarAreasLote }) {
+  const { mostrar: mostrarToast } = useToast();
+  const [filas, setFilas] = useState(null);
+  const [archivo, setArchivo] = useState("");
+  const [error, setError] = useState("");
+  const [leyendo, setLeyendo] = useState(false);
+  const [aplicando, setAplicando] = useState(false);
+  const [resultado, setResultado] = useState(null); // { ok, fallos: [{ nombre, mensaje }] }
+
+  const exportar = () => {
+    const libro = XLSX.utils.book_new();
+    const hojaAreas = XLSX.utils.aoa_to_sheet(filasExportarAreas(areas, usuarios));
+    hojaAreas["!cols"] = [{ wch: 34 }, { wch: 20 }, { wch: 30 }];
+    // el presupuesto como número con separador de miles (se ve 100,000,000 pero sigue siendo un número)
+    areas.forEach((_, i) => { const celda = hojaAreas[XLSX.utils.encode_cell({ r: i + 1, c: 1 })]; if (celda) celda.z = "#,##0"; });
+    const hojaDir = XLSX.utils.aoa_to_sheet(filasDirectoresValidos(areas, usuarios));
+    hojaDir["!cols"] = [{ wch: 30 }, { wch: 34 }, { wch: 24 }, { wch: 40 }];
+    const hojaAyuda = XLSX.utils.aoa_to_sheet(filasInstruccionesAreas);
+    hojaAyuda["!cols"] = [{ wch: 130 }];
+    XLSX.utils.book_append_sheet(libro, hojaAreas, "Áreas");
+    XLSX.utils.book_append_sheet(libro, hojaDir, "Directores válidos");
+    XLSX.utils.book_append_sheet(libro, hojaAyuda, "Cómo actualizar");
+    XLSX.writeFile(libro, `Areas_${hoy()}.xlsx`);
+  };
+
+  const leerArchivo = async (file) => {
+    setLeyendo(true); setError(""); setFilas(null); setResultado(null); setArchivo(file.name);
+    try {
+      const buffer = await file.arrayBuffer();
+      let crudas;
+      if (/\.csv$/i.test(file.name)) {
+        const bytes = new Uint8Array(buffer);
+        let texto;
+        try { texto = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { texto = new TextDecoder("windows-1252").decode(bytes); }
+        crudas = Papa.parse(texto.replace(/^\uFEFF/, ""), { header: true, skipEmptyLines: true }).data;
+      } else {
+        const libro = XLSX.read(buffer, { type: "array" });
+        // si es el archivo exportado, la hoja se llama "Áreas"; si no, se toma la primera
+        const nombreHoja = libro.SheetNames.find((n) => n.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase() === "areas") || libro.SheetNames[0];
+        crudas = XLSX.utils.sheet_to_json(libro.Sheets[nombreHoja], { defval: "", raw: false });
+      }
+      crudas = crudas.filter((f) => Object.values(f).some((v) => String(v ?? "").trim() !== ""));
+      if (!crudas.length) { setError("El archivo no trae filas con datos."); setLeyendo(false); return; }
+      setFilas(validarAreas(crudas, { areas, usuarios }));
+    } catch (e) {
+      console.error("Error leyendo el archivo de áreas:", e);
+      setError("No se pudo leer el archivo. Usa el Excel que exportaste aquí (o un CSV con las mismas columnas).");
+    }
+    setLeyendo(false);
+  };
+
+  const aplicables = (filas || []).filter((f) => f.estado === "actualiza");
+  const conError = (filas || []).filter((f) => f.estado === "error").length;
+  const sinCambios = (filas || []).filter((f) => f.estado === "sin_cambios").length;
+
+  const aplicar = async () => {
+    if (!aplicables.length || aplicando) return;
+    if (!confirm(`Se van a actualizar ${aplicables.length} área(s). ¿Continuar?`)) return;
+    setAplicando(true);
+    const res = await guardarAreasLote(registrosParaGuardarAreas(filas));
+    setAplicando(false); setFilas(null);
+    const fallos = res.filter((r) => r.error).map((r) => ({ nombre: r.registro.nombre, mensaje: r.error.message }));
+    setResultado({ ok: res.length - fallos.length, fallos });
+    mostrarToast(fallos.length ? `${res.length - fallos.length} de ${res.length} áreas actualizadas — revisa las que fallaron` : `${res.length} área(s) actualizada(s)`, fallos.length ? "alerta" : "ok", { duracion: 7000 });
+  };
+
+  return (
+    <SeccionColapsable icono={UploadIcon} titulo="Actualizar directores y presupuestos desde Excel" defaultAbierto={false}
+      descripcion="Exporta las áreas tal como están, cambia en Excel lo que necesites y vuelve a subir el archivo: se actualiza todo de una vez.">
+      <div className="text-xs text-slate-500 space-y-1">
+        <div><b>1.</b> Exporta: baja el Excel con cada área, su director y su presupuesto actuales (más una hoja con los directores que puedes asignar).</div>
+        <div><b>2.</b> Edita en Excel solo la columna <b>Director responsable</b> (y el presupuesto si lo necesitas). Celda vacía = no cambia; escribe <b>QUITAR</b> para dejar un área sin director.</div>
+        <div><b>3.</b> Súbelo: verás qué cambiaría en cada área <b>antes de guardar nada</b>.</div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={exportar} className="flex items-center gap-1.5 text-xs border border-slate-200 rounded-md px-2.5 py-1.5 text-slate-600 hover:border-indigo-400 hover:text-indigo-600"><FileText size={13} /> Exportar áreas a Excel</button>
+        <label className={`flex items-center gap-1.5 text-xs rounded-md px-2.5 py-1.5 font-medium cursor-pointer ${aplicando ? "bg-slate-200 text-slate-400" : "bg-indigo-600 text-white"}`}>
+          <UploadIcon size={13} /> {leyendo ? "Leyendo..." : "Subir archivo modificado"}
+          <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={leyendo || aplicando} onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) leerArchivo(f); }} />
+        </label>
+        {archivo && <span className="text-[11px] text-slate-400">{archivo}</span>}
+      </div>
+      {error && <div className="text-xs text-rose-600">{error}</div>}
+
+      {filas && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge tone="green">{aplicables.length} con cambios</Badge>
+            <Badge tone="slate">{sinCambios} sin cambios</Badge>
+            <Badge tone={conError ? "red" : "slate"}>{conError} con error</Badge>
+            {conError > 0 && <span className="text-slate-400">Las filas con error no se guardan: corrígelas en el archivo y vuelve a subirlo.</span>}
+          </div>
+          <div className="overflow-auto max-h-80 border border-slate-200 rounded-lg">
+            <table className="w-full text-[11px]">
+              <thead className="bg-slate-50 text-slate-500 sticky top-0"><tr>
+                {["Fila", "Estado", "Área", "Qué cambia / observaciones"].map((h) => <th key={h} className="text-left px-2 py-1.5 font-medium whitespace-nowrap">{h}</th>)}
+              </tr></thead>
+              <tbody>{filas.map((f) => (
+                <tr key={f.fila} className={`border-t border-slate-100 ${f.estado === "error" ? "bg-rose-50/60" : ""}`}>
+                  <td className="px-2 py-1 text-slate-400">{f.fila}</td>
+                  <td className="px-2 py-1">{f.estado === "error" ? <Badge tone="red">Error</Badge> : f.estado === "actualiza" ? <Badge tone="green">Cambia</Badge> : <Badge tone="slate">Sin cambios</Badge>}</td>
+                  <td className="px-2 py-1 text-slate-700 whitespace-nowrap">{f.area?.nombre || f.nombre || "—"}</td>
+                  <td className="px-2 py-1">{f.errores.length ? <span className="text-rose-600">{f.errores.join(" · ")}</span> : f.cambios.length ? <span className="text-slate-600">{f.cambios.join(" · ")}</span> : <span className="text-slate-300">—</span>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <button onClick={aplicar} disabled={!aplicables.length || aplicando} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
+            {aplicando ? "Guardando..." : `Aplicar ${aplicables.length} cambio(s)`}
+          </button>
+        </div>
+      )}
+
+      {resultado && (
+        <div className="space-y-1.5">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge tone="green">{resultado.ok} actualizada(s)</Badge>
+            <Badge tone={resultado.fallos.length ? "red" : "slate"}>{resultado.fallos.length} fallaron</Badge>
+          </div>
+          {resultado.fallos.length > 0 && (
+            <div className="border border-rose-200 bg-rose-50/50 rounded-lg p-2 space-y-0.5 max-h-40 overflow-auto">
+              {resultado.fallos.map((r) => <div key={r.nombre} className="text-[11px] text-rose-700"><b>{r.nombre}</b> — {r.mensaje}</div>)}
+            </div>
+          )}
+        </div>
+      )}
+    </SeccionColapsable>
+  );
+}
+
+/* ---------------------------------------------------------
    IMPORTAR EMPLEADOS (solo Administrador)
    A partir de un Excel o CSV crea, de una sola vez, el acceso de cada persona (con su DOCUMENTO como contraseña
    inicial) y su perfil, ya vinculados. Antes de crear nada se muestra una vista previa con lo que está bien y lo
@@ -5932,7 +6068,7 @@ function Catalogos({
   currentUser,
   solicitudes,
   empresas, guardarEmpresa, eliminarEmpresa,
-  areas, guardarArea, eliminarArea,
+  areas, guardarArea, eliminarArea, guardarAreasLote,
   departamentos, guardarDepartamento, eliminarDepartamento,
   proveedores, guardarProveedor, eliminarProveedor,
   usuarios, guardarUsuario, eliminarUsuario, recargarUsuarios,
@@ -5975,6 +6111,7 @@ function Catalogos({
             El <b>director responsable</b> de cada área es quien aprueba sus solicitudes. Solo un Administrador puede asignarlo o cambiarlo. Si una misma dirección cubre varias áreas, asigna a esa persona en cada una.
             {areas.some((a) => !a.directorId) && <div className="mt-1 text-amber-600">Sin director asignado: <b>{areas.filter((a) => !a.directorId).map((a) => a.nombre).join(", ")}</b>. Mientras tanto aprueba quien tenga el rol Director de Área con esa área a su cargo.</div>}
           </div>
+          {currentUser?.rol === "Administrador" && <ActualizarAreas areas={areas} usuarios={usuarios} guardarAreasLote={guardarAreasLote} />}
           <CrudTable titulo="Áreas" icon={Layers} currentUser={currentUser}
             columnas={[
               { key: "nombre", label: "Nombre" },
@@ -6127,7 +6264,7 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
 
 export default function App() {
   // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
-  const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea } = useSupabaseTable('areas', {
+  const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea, guardarLote: guardarAreasLote } = useSupabaseTable('areas', {
     desdeDb: areaDesdeDb,
     haciaDb: areaHaciaDb,
     orderBy: 'nombre',
@@ -6424,7 +6561,7 @@ export default function App() {
             currentUser={currentUser}
             solicitudes={solicitudes}
             empresas={empresas} guardarEmpresa={guardarEmpresa} eliminarEmpresa={eliminarEmpresa}
-            areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea}
+            areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea} guardarAreasLote={guardarAreasLote}
             departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
             proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
             usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios}
