@@ -2566,7 +2566,27 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       {planTieneValores(it.pagosSugeridos) && <span className="text-indigo-600" title="Tiene plan de pagos sugerido"><CalendarClock size={12} /></span>}
     </>
   );
-  const abItems = useAbiertosItems(items, true); // en el formulario todo arranca abierto; al agregar un ítem, los anteriores se contraen
+  const abItems = useAbiertosItems(items, true);
+  // barra de acciones: queda al final del formulario, pero si ese lugar está más abajo del borde visible de la pantalla se muestra
+  // pegada abajo (así, con varios ítems, no hay que bajar hasta el final para enviar). Se mide con JS porque el "sticky" de CSS no
+  // funciona dentro del contenedor principal de la app (tiene overflow-auto).
+  const refBarra = useRef(null);
+  const [barra, setBarra] = useState({ flotante: false, left: 0, width: 0 });
+  useEffect(() => {
+    const medir = () => {
+      const el = refBarra.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const flotante = r.bottom > window.innerHeight + 1;
+      setBarra((b) => (b.flotante === flotante && Math.abs(b.left - r.left) < 1 && Math.abs(b.width - r.width) < 1 ? b : { flotante, left: r.left, width: r.width }));
+    };
+    medir();
+    window.addEventListener("scroll", medir, true);
+    window.addEventListener("resize", medir);
+    const observador = typeof ResizeObserver !== "undefined" ? new ResizeObserver(medir) : null;
+    if (observador) { observador.observe(document.body); if (refBarra.current) observador.observe(refBarra.current); }
+    return () => { window.removeEventListener("scroll", medir, true); window.removeEventListener("resize", medir); observador?.disconnect(); };
+  }, []); // en el formulario todo arranca abierto; al agregar un ítem, los anteriores se contraen
   const addItem = () => { abItems.todos(false); setItems([...items, { id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [] }]); };
   const removeItem = (id) => setItems(items.filter((i) => i.id !== id));
   const updateItem = (id, field, val) => setItems((prev) => prev.map((i) => (i.id === id ? { ...i, [field]: val } : i)));
@@ -2679,25 +2699,26 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   };
 
   return (
-    <div className="flex gap-5 items-start max-w-6xl">
+    <div className="flex gap-5 items-start w-full max-w-[1500px] mx-auto">
     <div className="bg-white rounded-xl border border-slate-200 p-6 flex-1 min-w-0">
       <h2 className="text-lg font-semibold text-slate-800 mb-5">Nueva solicitud</h2>
-      <div className="grid grid-cols-2 gap-4 mb-5">
-        <div>
+      {/* en pantallas anchas los campos se reparten en 12 columnas (4 filas en vez de 9); en pantallas medianas, 2 columnas; en celular, 1 */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 mb-5">
+        <div className="xl:col-span-8">
           <label className="text-xs font-medium text-slate-500">Tipo de solicitud</label>
           <div className="flex gap-2 mt-1">
             <button onClick={() => setTipo("compra")} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${tipo === "compra" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}><ShoppingCart size={15} /> Solicitud de compra</button>
             <button onClick={() => setTipo("servicio")} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg border text-sm font-medium ${tipo === "servicio" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}><Wrench size={15} /> Orden de servicio/trabajo</button>
           </div>
         </div>
-        <div><label className="text-xs font-medium text-slate-500">Empresa</label><select value={empresaId} onChange={(e) => { setEmpresaId(e.target.value); setConceptoGastoId(""); }} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
-        <div><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
-        <div><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
-        <div><label className="text-xs font-medium text-slate-500">Solicitante</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500">{currentUser.nombre} (firma automática)</div></div>
-        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><SelectorBuscable opciones={opcionesConcepto} value={conceptoGastoId} onChange={setConceptoGastoId} placeholder="Escribe para buscar: grupo, código, cuenta o centro de costo..." /></div>
-        <div className="col-span-2"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
-        <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
-        <div className="col-span-2"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
+        <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Solicitante <span className="text-slate-400 font-normal">(firma automática)</span></label><div title={currentUser.nombre} className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-600 truncate">{currentUser.nombre}</div></div>
+        <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Empresa</label><select value={empresaId} onChange={(e) => { setEmpresaId(e.target.value); setConceptoGastoId(""); }} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
+        <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
+        <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
+        <div className="md:col-span-2 xl:col-span-8"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><SelectorBuscable opciones={opcionesConcepto} value={conceptoGastoId} onChange={setConceptoGastoId} placeholder="Buscar por grupo, código, cuenta o centro de costo…" /></div>
+        <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
+        <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
+        <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
       </div>
 
       <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
@@ -2732,7 +2753,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             <div className="flex gap-2 items-start flex-wrap">
               <input type="number" min="0" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.unidad} onChange={(e) => updateItem(it.id, "unidad", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
-              <InputMiles placeholder="Precio est." value={it.precioEstimado} onChange={(v) => updateItem(it.id, "precioEstimado", v)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+              <InputMiles placeholder="Precio est." value={it.precioEstimado} onChange={(v) => updateItem(it.id, "precioEstimado", v)} className="w-28 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.moneda} onChange={(e) => cambiarMonedaItem(it.id, e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
               {it.moneda !== "COP" && (
                 <div className="flex items-center gap-1">
@@ -2745,9 +2766,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
                 <option value="valor">Desc. $</option>
               </select>
               {it.descuentoTipo === "valor" ? (
-                <InputMiles placeholder="Descuento en $" value={it.descuentoValor} onChange={(v) => updateItem(it.id, "descuentoValor", v)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+                <InputMiles placeholder="Descuento en $" value={it.descuentoValor} onChange={(v) => updateItem(it.id, "descuentoValor", v)} className="w-36 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               ) : (
-                <input type="number" min="0" placeholder="Descuento en %" value={it.descuentoValor} onChange={(e) => updateItem(it.id, "descuentoValor", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
+                <input type="number" min="0" placeholder="Descuento en %" value={it.descuentoValor} onChange={(e) => updateItem(it.id, "descuentoValor", e.target.value)} className="w-36 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               )}
               {tipo !== "servicio" && <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
@@ -2778,14 +2799,24 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         ))}
       </div>
 
-      <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm text-slate-500 border border-slate-200">Cancelar</button>
-        <button onClick={submit} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium">Enviar solicitud</button>
+      {/* barra de acciones (ver la explicación de "refBarra" arriba): ocupa siempre su lugar al final del formulario y, si ese lugar queda
+          fuera de la pantalla, se dibuja pegada al borde inferior con el mismo ancho que el formulario */}
+      <div ref={refBarra} className="-mx-6 -mb-6 h-16">
+        <div
+          style={barra.flotante ? { left: barra.left, width: barra.width } : undefined}
+          className={`h-16 px-6 bg-white border-t border-slate-200 flex gap-2 items-center justify-between ${barra.flotante ? "fixed bottom-0 z-30 shadow-[0_-8px_14px_-10px_rgba(15,23,42,0.35)]" : "rounded-b-xl"}`}
+        >
+          <span className="text-[11px] text-slate-400 hidden sm:block">{items.length} ítem(s) · Total {fmt(totalGeneral.total)}</span>
+          <div className="flex gap-2 ml-auto">
+            <button onClick={onCancel} className="px-4 py-2 rounded-lg text-sm text-slate-500 border border-slate-200">Cancelar</button>
+            <button onClick={submit} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium">Enviar solicitud</button>
+          </div>
+        </div>
       </div>
     </div>
 
     {/* Resumen a la derecha — aprovecha el espacio en blanco */}
-    <div className="w-72 shrink-0 sticky top-4 hidden lg:block">
+    <div className="w-80 shrink-0 sticky top-4 hidden lg:block">
       <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
         <div className="font-medium text-slate-700 text-sm">Resumen</div>
         <div className="text-xs text-slate-500 space-y-1">
