@@ -602,6 +602,11 @@ const tieneAreaACargo = (u, areaId) => u.areaId === areaId || (u.areasAdicionale
 let __directorPorArea = {};
 const construirMapaDirectores = (areas) => Object.fromEntries((areas || []).filter((a) => a.directorId).map((a) => [a.id, a.directorId]));
 const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
+// quiénes pueden ser el director responsable de un área: además de los directores de área, la cabeza de una dirección puede tener
+// otro rol (el gerente general tiene rol Gerencia; quien lleva la Dirección Financiera, rol Dirección Financiera)
+const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
+// se muestra en la pantalla para poder confirmar qué versión de la app está publicada
+const VERSION_APP = "directores v4";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -2634,7 +2639,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
     // solo el director de área aprueba. Si quien crea la solicitud es el propio director de esa área, queda
     // auto-aprobada (no tiene sentido que se apruebe a sí mismo con un clic aparte) y pasa directo a Compras.
-    const esDirectorDeSuArea = ROLES_DIRECTOR.includes(currentUser.rol) && esDirectorDeArea(currentUser, areaId);
+    const esDirectorDeSuArea = esDirectorDeArea(currentUser, areaId);
     const statusInicial = esDirectorDeSuArea ? "cotizando" : "aprobacion_director";
     onCrear({
       id: nextId(), folio,
@@ -5079,7 +5084,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     aprobacion_financiera: ["Dirección Financiera"],
     aprobacion_gerencia: ["Gerencia"],
   };
-  const pasoLeConcierne = (ROLES_RELEVANTES_POR_PASO[solicitud.status] || []).includes(currentUser.rol);
+  const pasoLeConcierne = (ROLES_RELEVANTES_POR_PASO[solicitud.status] || []).includes(currentUser.rol) || (solicitud.status === "aprobacion_director" && directorDelArea(solicitud.areaId, usuarios)?.id === currentUser.id);
 
   return (
     <div className="space-y-5">
@@ -5372,7 +5377,9 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       {!autorizado && pasoLeConcierne && solicitud.status !== "completada" && solicitud.status !== "rechazada" && (
         <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2"><ShieldCheck size={14} />
           {solicitud.status === "aprobacion_director" && directorDelArea(solicitud.areaId, usuarios)
-            ? <>Esta solicitud la aprueba <b>{directorDelArea(solicitud.areaId, usuarios).nombre}</b>, director asignado del área {area?.nombre}.</>
+            ? (directorDelArea(solicitud.areaId, usuarios).id === currentUser.id
+              ? <>Eres el director asignado del área {area?.nombre}, pero tu rol ({currentUser.rol}) no tiene el permiso «Aprobar como director de área». Pídele al Administrador que lo active en Catálogo → Permisos.</>
+              : <>Esta solicitud la aprueba <b>{directorDelArea(solicitud.areaId, usuarios).nombre}</b>, director asignado del área {area?.nombre}.</>)
             : <>Tu rol ({currentUser.rol}) no tiene permiso para actuar sobre este paso del flujo.</>}
         </div>
       )}
@@ -5764,6 +5771,60 @@ function EmpresasLogos({ empresas, onGuardar }) {
 }
 
 /* ---------------------------------------------------------
+   AYUDA PARA ASIGNAR DIRECTORES (Catálogo → Áreas)
+   Responde a "¿por qué no veo a esta persona en la lista de directores?": muestra cuántas personas hay con cada rol que
+   puede dirigir un área y deja buscar a cualquiera para ver su rol y si puede ser director.
+--------------------------------------------------------- */
+function AyudaDirectores({ usuarios }) {
+  const [q, setQ] = useState("");
+  const sinTildes = (t) => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+  const GRUPOS = [
+    { titulo: "Directores de área", roles: ["Director de Área", "Jefe de Área y Director"], crear: "Director de Área" },
+    { titulo: "Dirección Financiera", roles: ["Dirección Financiera"], crear: "Dirección Financiera" },
+    { titulo: "Gerencia (gerente general)", roles: ["Gerencia"], crear: "Gerencia" },
+  ];
+  const resumen = GRUPOS.map((g) => ({ ...g, personas: usuarios.filter((u) => g.roles.includes(u.rol)) }));
+  const buscado = sinTildes(q);
+  const encontrados = buscado.length >= 2 ? usuarios.filter((u) => sinTildes(u.nombre).includes(buscado) || sinTildes(u.email).includes(buscado)).slice(0, 6) : [];
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-200 space-y-1.5">
+      <div className="text-slate-500">Personas que se pueden asignar como director responsable:</div>
+      <div className="flex flex-wrap gap-x-4 gap-y-0.5">
+        {resumen.map((g) => (
+          <span key={g.titulo} className={g.personas.length ? "text-slate-600" : "text-amber-600"}>
+            <b>{g.titulo}:</b> {g.personas.length ? g.personas.map((u) => u.nombre).join(", ") : "ninguna"}
+          </span>
+        ))}
+      </div>
+      {resumen.filter((g) => !g.personas.length).map((g) => (
+        <div key={g.titulo} className="text-amber-600">
+          No hay ningún usuario con rol «{g.crear}», por eso nadie de {g.titulo.toLowerCase()} aparece en la lista. Entra a <b>Usuarios y roles</b>, edita a esa persona y cámbiale el rol a «{g.crear}».
+        </div>
+      ))}
+      <div className="flex items-center gap-2">
+        <span className="text-slate-500 shrink-0">¿No ves a alguien? Búscalo:</span>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="nombre o correo" className="border border-slate-200 rounded-md px-2 py-1 text-xs w-48 bg-white" />
+      </div>
+      {buscado.length >= 2 && !encontrados.length && (
+        <div className="text-amber-600">No hay ningún usuario con ese nombre o correo. Primero tiene que existir en <b>Usuarios y roles</b> (créalo ahí o impórtalo desde Excel).</div>
+      )}
+      {encontrados.map((u) => {
+        const puede = ROLES_ASIGNABLES_DIRECTOR.includes(u.rol);
+        return (
+          <div key={u.id} className="flex flex-wrap items-center gap-2">
+            <b className="text-slate-700">{u.nombre}</b><span className="text-slate-400">{u.email}</span>
+            <Badge tone={puede ? "green" : "amber"}>Rol: {u.rol}</Badge>
+            {puede
+              ? <span className="text-emerald-600">Sí puede ser director: ya aparece en la lista.</span>
+              : <span className="text-amber-600">No aparece porque su rol no puede dirigir un área. En <b>Usuarios y roles</b> cámbiale el rol a Director de Área, Dirección Financiera o Gerencia.</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    ACTUALIZAR ÁREAS DESDE EXCEL (solo Administrador)
    Exporta las áreas con su director y presupuesto actuales; se editan en Excel y se vuelve a subir el archivo: antes de
    guardar nada se ve qué cambiaría en cada fila, y al confirmar se actualiza todo de una vez (una sola recarga).
@@ -5783,7 +5844,7 @@ function ActualizarAreas({ areas, usuarios, guardarAreasLote }) {
     hojaAreas["!cols"] = [{ wch: 34 }, { wch: 20 }, { wch: 30 }];
     // el presupuesto como número con separador de miles (se ve 100,000,000 pero sigue siendo un número)
     areas.forEach((_, i) => { const celda = hojaAreas[XLSX.utils.encode_cell({ r: i + 1, c: 1 })]; if (celda) celda.z = "#,##0"; });
-    const hojaDir = XLSX.utils.aoa_to_sheet(filasDirectoresValidos(areas, usuarios));
+    const hojaDir = XLSX.utils.aoa_to_sheet(filasDirectoresValidos(areas, usuarios, ROLES_ASIGNABLES_DIRECTOR));
     hojaDir["!cols"] = [{ wch: 30 }, { wch: 34 }, { wch: 24 }, { wch: 40 }];
     const hojaAyuda = XLSX.utils.aoa_to_sheet(filasInstruccionesAreas);
     hojaAyuda["!cols"] = [{ wch: 130 }];
@@ -5811,7 +5872,7 @@ function ActualizarAreas({ areas, usuarios, guardarAreasLote }) {
       }
       crudas = crudas.filter((f) => Object.values(f).some((v) => String(v ?? "").trim() !== ""));
       if (!crudas.length) { setError("El archivo no trae filas con datos."); setLeyendo(false); return; }
-      setFilas(validarAreas(crudas, { areas, usuarios }));
+      setFilas(validarAreas(crudas, { areas, usuarios, roles: ROLES_ASIGNABLES_DIRECTOR }));
     } catch (e) {
       console.error("Error leyendo el archivo de áreas:", e);
       setError("No se pudo leer el archivo. Usa el Excel que exportaste aquí (o un CSV con las mismas columnas).");
@@ -6016,6 +6077,9 @@ function ImportarEmpleados({ areas, usuarios, onTerminar }) {
             <Badge tone={conError ? "red" : "slate"}>{conError} con error</Badge>
             {conError > 0 && <span className="text-slate-400">Las filas con error no se importan: corrígelas en el archivo y vuelve a subirlo.</span>}
           </div>
+          {nuevas > 0 && !filas.some((f) => f.estado === "nuevo" && f.rol) && (
+            <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">Ninguna persona nueva trae <b>Rol</b> en el archivo: todas quedarán como <b>Solicitante</b>. Si hay directores, gerente general o Dirección Financiera, ponles su rol en la columna Rol (Director de Área, Gerencia, Dirección Financiera) antes de importar; si no, no podrán aprobar ni aparecerán como directores de un área.</div>
+          )}
           <div className="overflow-auto max-h-80 border border-slate-200 rounded-lg">
             <table className="w-full text-[11px]">
               <thead className="bg-slate-50 text-slate-500 sticky top-0"><tr>
@@ -6111,7 +6175,13 @@ function Catalogos({
       {sub === "areas" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-            El <b>director responsable</b> de cada área es quien aprueba sus solicitudes. Solo un Administrador puede asignarlo o cambiarlo. Si una misma dirección cubre varias áreas, asigna a esa persona en cada una.
+            El <b>director responsable</b> de cada área es quien aprueba sus solicitudes. Solo un Administrador puede asignarlo o cambiarlo. Puede ser un Director de Área, la Dirección Financiera o la Gerencia (por ejemplo, el gerente general en el área «Gerencia General»). Si una misma dirección cubre varias áreas, asigna a esa persona en cada una.
+            <div className="mt-0.5 text-[10px] text-slate-300">Versión de la app: {VERSION_APP}</div>
+            {(() => {
+              const sinPermiso = areas.filter((a) => a.directorId).map((a) => ({ area: a, u: usuarios.find((x) => x.id === a.directorId) })).filter(({ u }) => u && !tienePermiso(u.rol, "aprobar_director"));
+              return sinPermiso.length > 0 && <div className="mt-1 text-amber-600">Ojo: no podrán aprobar porque su rol no tiene el permiso «Aprobar como director de área»: <b>{sinPermiso.map(({ area, u }) => `${u.nombre} (${u.rol}) en ${area.nombre}`).join("; ")}</b>. Actívalo para ese rol en Catálogo → Permisos.</div>;
+            })()}
+            {currentUser?.rol === "Administrador" && <AyudaDirectores usuarios={usuarios} />}
             {areas.some((a) => !a.directorId) && <div className="mt-1 text-amber-600">Sin director asignado: <b>{areas.filter((a) => !a.directorId).map((a) => a.nombre).join(", ")}</b>. Mientras tanto aprueba quien tenga el rol Director de Área con esa área a su cargo.</div>}
           </div>
           {currentUser?.rol === "Administrador" && <ActualizarAreas areas={areas} usuarios={usuarios} guardarAreasLote={guardarAreasLote} />}
@@ -6119,7 +6189,7 @@ function Catalogos({
             columnas={[
               { key: "nombre", label: "Nombre" },
               { key: "presupuesto", label: "Presupuesto mensual", type: "number" },
-              { key: "directorId", label: "Director responsable", type: "select", options: usuarios.filter((u) => ROLES_DIRECTOR.includes(u.rol)).map((u) => ({ value: u.id, label: u.nombre })), soloAdmin: true },
+              { key: "directorId", label: "Director responsable", type: "select", options: usuarios.filter((u) => ROLES_ASIGNABLES_DIRECTOR.includes(u.rol)).map((u) => ({ value: u.id, label: u.nombre })), soloAdmin: true },
             ]}
             datos={areas} onGuardar={guardarArea} onEliminar={eliminarArea} plantilla={{ nombre: "", presupuesto: 0, directorId: "" }} />
         </>
@@ -6507,7 +6577,7 @@ export default function App() {
             </div>
           )}
           <button title="Cerrar sesión" onClick={() => { cerrarSesion(); setAbierta(null); setCreando(false); }} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-100 w-full ${!menuExpandido ? "justify-center" : ""}`}><LogOut size={13} className="shrink-0" /> {menuExpandido && "Cerrar sesión"}</button>
-          {menuExpandido && <div className="text-[11px] text-slate-400 px-2 leading-relaxed mt-2">Umbral Dir. Financiera: {fmt(UMBRAL_DIRECCION)}<br />Umbral Gerencia: {fmt(UMBRAL_GERENCIA)}</div>}
+          {menuExpandido && <div className="text-[11px] text-slate-400 px-2 leading-relaxed mt-2">Umbral Dir. Financiera: {fmt(UMBRAL_DIRECCION)}<br />Umbral Gerencia: {fmt(UMBRAL_GERENCIA)}<br /><span className="text-slate-300">Versión: {VERSION_APP}</span></div>}
         </div>
       </aside>
 

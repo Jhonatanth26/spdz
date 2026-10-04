@@ -29,8 +29,8 @@ export function filasExportarAreas(areas, usuarios) {
 }
 
 // lista de apoyo: a quién se puede poner como director (con su correo, para no confundir homónimos) y qué dirige hoy
-export function filasDirectoresValidos(areas, usuarios) {
-  const directores = usuarios.filter((u) => ROLES_DIRECTOR.includes(u.rol)).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'))
+export function filasDirectoresValidos(areas, usuarios, roles = ROLES_ASIGNABLES_DIRECTOR) {
+  const directores = usuarios.filter((u) => roles.includes(u.rol)).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'))
   return [['Nombre', 'Correo', 'Rol', 'Dirige hoy'], ...directores.map((u) => [u.nombre, u.email || '', u.rol, areas.filter((a) => a.directorId === u.id).map((a) => a.nombre).join('; ')])]
 }
 
@@ -60,8 +60,8 @@ export function leerPresupuesto(txt) {
 
 // ---------- lo que se vuelve a subir ----------
 // Devuelve una fila validada por cada fila del archivo: qué cambiaría o por qué no se puede. No toca nada todavía.
-export function validarAreas(filasCrudas, { areas = [], usuarios = [] } = {}) {
-  const directores = usuarios.filter((u) => ROLES_DIRECTOR.includes(u.rol))
+export function validarAreas(filasCrudas, { areas = [], usuarios = [], roles = ROLES_ASIGNABLES_DIRECTOR } = {}) {
+  const directores = usuarios.filter((u) => roles.includes(u.rol))
   const areaPorNombre = new Map(areas.map((a) => [norm(a.nombre), a]))
   const dirPorId = new Map(usuarios.map((u) => [u.id, u]))
   const vistas = new Map()
@@ -98,7 +98,7 @@ export function validarAreas(filasCrudas, { areas = [], usuarios = [] } = {}) {
     else if (dirTxt || correoTxt) {
       const porCorreo = correoTxt ? usuarios.find((u) => String(u.email || '').toLowerCase() === correoTxt) : null
       if (correoTxt && !porCorreo) errores.push(`No hay ningún usuario con el correo «${correoTxt}»`)
-      else if (correoTxt && !ROLES_DIRECTOR.includes(porCorreo.rol)) errores.push(`${porCorreo.nombre} no puede ser director de un área (su rol es ${porCorreo.rol})`)
+      else if (correoTxt && !roles.includes(porCorreo.rol)) errores.push(`${porCorreo.nombre} no puede ser director de un área (su rol es ${porCorreo.rol})`)
       else if (correoTxt && dirTxt && norm(porCorreo.nombre) !== norm(dirTxt)) errores.push(`El nombre «${dirTxt}» y el correo «${correoTxt}» no son de la misma persona (el correo es de ${porCorreo.nombre})`)
       else if (correoTxt) directorId = porCorreo.id
       else {
