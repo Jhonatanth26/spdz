@@ -593,7 +593,19 @@ function tienePermiso(rol, permiso) {
 }
 
 const tieneAreaACargo = (u, areaId) => u.areaId === areaId || (u.areasAdicionales || []).includes(areaId);
-const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (tienePermiso(u.rol, "aprobar_director") && tieneAreaACargo(u, s.areaId));
+// Director responsable de cada área (se asigna en Catálogo → Áreas). Se guarda en memoria como los permisos, para que
+// todas las funciones que deciden "quién aprueba" lo consulten sin tener que pasar la lista de áreas a todas partes.
+let __directorPorArea = {};
+const construirMapaDirectores = (areas) => Object.fromEntries((areas || []).filter((a) => a.directorId).map((a) => [a.id, a.directorId]));
+const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
+// ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
+// todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
+const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
+const directorDelArea = (areaId, usuarios) => (__directorPorArea[areaId] ? usuarios.find((u) => u.id === __directorPorArea[areaId]) || null : usuarios.find((u) => esDirectorDeArea(u, areaId)) || null);
+const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (tienePermiso(u.rol, "aprobar_director") && esDirectorDeArea(u, s.areaId));
+// mapeo de la tabla "areas": director_id solo viaja si hay director o si la columna ya existe (así no falla antes de correr el SQL)
+const areaDesdeDb = (r) => ({ id: r.id, nombre: r.nombre, presupuesto: r.presupuesto_mensual, directorId: r.director_id || "", _hayColDirector: r.director_id !== undefined });
+const areaHaciaDb = (r) => ({ id: r.id, nombre: r.nombre, presupuesto_mensual: Number(r.presupuesto) || 0, ...((r.directorId || r._hayColDirector) ? { director_id: r.directorId || null } : {}) });
 const puedeGestionarCotizaciones = (u) => tienePermiso(u.rol, "gestionar_cotizaciones");
 const puedeAprobarFinanciera = (u) => tienePermiso(u.rol, "aprobar_financiera");
 const puedeAprobarGerencia = (u) => tienePermiso(u.rol, "aprobar_gerencia");
@@ -2614,11 +2626,11 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         if (!yaExiste) guardarItemCatalogo({ nombre: it.nombre.trim(), unidadDefault: it.unidad, categoria: "" });
       }
     });
-    const director = usuarios.find((u) => tieneAreaACargo(u, areaId) && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
+    const director = directorDelArea(areaId, usuarios);
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
     // solo el director de área aprueba. Si quien crea la solicitud es el propio director de esa área, queda
     // auto-aprobada (no tiene sentido que se apruebe a sí mismo con un clic aparte) y pasa directo a Compras.
-    const esDirectorDeSuArea = ["Director de Área", "Jefe de Área y Director"].includes(currentUser.rol) && tieneAreaACargo(currentUser, areaId);
+    const esDirectorDeSuArea = ROLES_DIRECTOR.includes(currentUser.rol) && esDirectorDeArea(currentUser, areaId);
     const statusInicial = esDirectorDeSuArea ? "cotizando" : "aprobacion_director";
     onCrear({
       id: nextId(), folio,
@@ -4895,7 +4907,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
   // el solicitante confirma que ya corrigió y avisa por correo a quien le toca aprobar ahora
   const reenviarParaAprobacion = () => {
-    const responsable = usuarios.find((u) => ["Director de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, solicitud.areaId));
+    const responsable = directorDelArea(solicitud.areaId, usuarios);
     if (responsable?.email) {
       enviarCorreo(
         responsable.email,
@@ -5354,7 +5366,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       <NotificacionesPanel notificaciones={solicitud.notificaciones} />
 
       {!autorizado && pasoLeConcierne && solicitud.status !== "completada" && solicitud.status !== "rechazada" && (
-        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2"><ShieldCheck size={14} /> Tu rol ({currentUser.rol}) no tiene permiso para actuar sobre este paso del flujo.</div>
+        <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-center gap-2"><ShieldCheck size={14} />
+          {solicitud.status === "aprobacion_director" && directorDelArea(solicitud.areaId, usuarios)
+            ? <>Esta solicitud la aprueba <b>{directorDelArea(solicitud.areaId, usuarios).nombre}</b>, director asignado del área {area?.nombre}.</>
+            : <>Tu rol ({currentUser.rol}) no tiene permiso para actuar sobre este paso del flujo.</>}
+        </div>
       )}
 
       {solicitud.status !== "completada" && solicitud.status !== "rechazada" && autorizado && (
@@ -5771,7 +5787,8 @@ function ImportarEmpleados({ areas, usuarios, onTerminar }) {
       ["• Una fila por persona. Nombre, Documento y Correo son obligatorios."],
       ["• El Documento (sin puntos ni espacios) será la contraseña inicial: mínimo 6 caracteres."],
       ["• Área y Rol: copia el nombre tal cual aparece abajo. Si el Rol va vacío, la persona queda como Solicitante."],
-      ["• Áreas adicionales (solo Directores que cubren más de un área): sepáralas con punto y coma."],
+      ["• Directores: ponles Rol = Director de Área. Después, en Catálogo → Áreas, asigna a cada área su director responsable (es quien aprueba)."],
+      ["• Áreas adicionales: solo se usa para áreas que aún no tienen un director asignado en Catálogo → Áreas."],
       ["• Si el correo ya está en el sistema, se actualizan sus datos (no se cambia su contraseña ni su rol si dejas el Rol vacío)."],
       [],
       ["Áreas válidas"], ...areas.map((a) => [a.nombre]),
@@ -5953,9 +5970,19 @@ function Catalogos({
         </>
       )}
       {sub === "areas" && (
-        <CrudTable titulo="Áreas" icon={Layers}
-          columnas={[{ key: "nombre", label: "Nombre" }, { key: "presupuesto", label: "Presupuesto mensual", type: "number" }]}
-          datos={areas} onGuardar={guardarArea} onEliminar={eliminarArea} plantilla={{ nombre: "", presupuesto: 0 }} />
+        <>
+          <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+            El <b>director responsable</b> de cada área es quien aprueba sus solicitudes. Solo un Administrador puede asignarlo o cambiarlo. Si una misma dirección cubre varias áreas, asigna a esa persona en cada una.
+            {areas.some((a) => !a.directorId) && <div className="mt-1 text-amber-600">Sin director asignado: <b>{areas.filter((a) => !a.directorId).map((a) => a.nombre).join(", ")}</b>. Mientras tanto aprueba quien tenga el rol Director de Área con esa área a su cargo.</div>}
+          </div>
+          <CrudTable titulo="Áreas" icon={Layers} currentUser={currentUser}
+            columnas={[
+              { key: "nombre", label: "Nombre" },
+              { key: "presupuesto", label: "Presupuesto mensual", type: "number" },
+              { key: "directorId", label: "Director responsable", type: "select", options: usuarios.filter((u) => ROLES_DIRECTOR.includes(u.rol)).map((u) => ({ value: u.id, label: u.nombre })), soloAdmin: true },
+            ]}
+            datos={areas} onGuardar={guardarArea} onEliminar={eliminarArea} plantilla={{ nombre: "", presupuesto: 0, directorId: "" }} />
+        </>
       )}
       {sub === "departamentos" && (
         <CrudTable titulo="Departamentos" icon={Layers}
@@ -5980,7 +6007,7 @@ function Catalogos({
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-            El rol determina qué puede aprobar cada usuario: <b>Director de Área</b> aprueba las solicitudes de su área (el jefe de área ya no interviene en la aprobación), <b>Dirección Financiera</b> y <b>Gerencia</b> aprueban según el monto, <b>Compras</b> gestiona cotizaciones, histórico y pagos.
+            El rol determina qué puede aprobar cada usuario: <b>Director de Área</b> aprueba las solicitudes de su área — el director de cada área se asigna en <b>Catálogo → Áreas</b> (el jefe de área ya no interviene en la aprobación), <b>Dirección Financiera</b> y <b>Gerencia</b> aprueban según el monto, <b>Compras</b> gestiona cotizaciones, histórico y pagos.
             <br /><b>Importante:</b> editar o agregar una fila aquí solo cambia sus datos de perfil (nombre, cargo, área, rol). Para que una persona pueda <i>iniciar sesión</i> hay dos caminos: <b>importar la base de empleados</b> (más abajo, crea el acceso con el documento como contraseña) o crearla a mano en Supabase → Authentication → Users con el mismo correo.
           </div>
           {currentUser?.rol === "Administrador" && <ImportarEmpleados areas={areas} usuarios={usuarios} onTerminar={recargarUsuarios} />}
@@ -6101,10 +6128,12 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
 export default function App() {
   // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
   const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea } = useSupabaseTable('areas', {
-    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, presupuesto: r.presupuesto_mensual }),
-    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, presupuesto_mensual: Number(r.presupuesto) || 0 }),
+    desdeDb: areaDesdeDb,
+    haciaDb: areaHaciaDb,
     orderBy: 'nombre',
   });
+  // se actualiza durante el render (no en un efecto) para que ningún componente hijo lea un mapa viejo
+  useMemo(() => { __directorPorArea = construirMapaDirectores(areas); }, [areas]);
   const { datos: departamentos, cargando: cargandoDepartamentos, guardar: guardarDepartamento, eliminar: eliminarDepartamento } = useSupabaseTable('departamentos', {
     desdeDb: (r) => ({ id: r.id, nombre: r.nombre, areaId: r.area_id }),
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, area_id: r.areaId }),

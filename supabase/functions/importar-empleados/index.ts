@@ -1,13 +1,8 @@
 // @ts-nocheck
-// (Esto corre en Deno, dentro de Supabase Edge Functions — no en el navegador ni en Node. El editor no conoce el objeto
-//  "Deno" y por eso se queja sin motivo; la línea de arriba solo lo silencia, no afecta al funcionamiento.)
-//
 // Crea (o actualiza) empleados en bloque: su acceso en Supabase Authentication — con el DOCUMENTO como contraseña —
 // y su perfil en la tabla "usuarios", ya vinculados entre sí. Solo lo puede usar un usuario con rol Administrador.
 // El documento llega aquí únicamente para fijar la contraseña inicial: NO se guarda en ninguna tabla.
-//
-// No importa ninguna librería externa (ni deno.land ni esm.sh): habla directamente con la API de Supabase usando
-// fetch, así que no hay nada que descargar al desplegar y no puede fallar por un módulo que no aparece.
+// No importa ninguna librería externa: habla directamente con la API de Supabase usando fetch.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -23,8 +18,6 @@ const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY")
 const json = (cuerpo, status = 200) =>
   new Response(JSON.stringify(cuerpo), { status, headers: { ...corsHeaders, "Content-Type": "application/json" } })
 
-// Llamada a la API de Supabase. Por defecto va con la llave de servicio (puede crear accesos y saltarse las políticas);
-// para saber quién llama se usa la llave pública con el token de esa persona.
 async function llamar(ruta, { metodo = "GET", llave = SERVICE_KEY, token, cuerpo, extra = {} } = {}) {
   const res = await fetch(`${SUPABASE_URL}${ruta}`, {
     method: metodo,
@@ -94,7 +87,7 @@ Deno.serve(async (req) => {
         if (!authId) {
           if (clave.length < 6) throw new Error("El documento (contraseña) debe tener al menos 6 caracteres.")
           const creado = await llamar("/auth/v1/admin/users", { metodo: "POST", cuerpo: { email: correo, password: clave, email_confirm: true } })
-          authId = creado?.user?.id ?? creado?.id // según la versión, la API devuelve el usuario directo o dentro de "user"
+          authId = creado?.user?.id ?? creado?.id
           if (!authId) throw new Error("Supabase no devolvió el id del acceso creado.")
           creoAcceso = true
           authPorCorreo.set(correo, authId)
