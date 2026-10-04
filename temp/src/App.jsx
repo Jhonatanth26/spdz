@@ -99,6 +99,7 @@ const PASOS = [
   { key: "solicitud", label: "Solicitud creada" },
   { key: "aprobacion_jefe", label: "Aprobación jefe de área (flujo anterior)", oculto: true }, // ya no existe en el flujo; solo sirve para leer historiales viejos
   { key: "aprobacion_director", label: "Aprobación director de área" },
+  { key: "aprobacion_gerente", label: "Aprobación gerente general (paso retirado)", oculto: true }, // ya no existe en el flujo; solo sirve para leer historiales
   { key: "cotizando", label: "Revisión y cotizaciones (compras)" },
   { key: "comparativo", label: "Cuadro comparativo" },
   { key: "aprobacion_financiera", label: "Dirección financiera" },
@@ -112,7 +113,9 @@ const PASOS = [
 // pasos que realmente existen hoy (sin el paso del jefe de área, que ya no aprueba nadie)
 const PASOS_ACTIVOS = PASOS.filter((p) => !p.oculto);
 // una solicitud que quedó esperando al jefe de área (flujo anterior) pasa a esperar al director
-const normalizarEstadoLegado = (s) => (s.status === "aprobacion_jefe" ? { ...s, status: "aprobacion_director" } : s);
+// una solicitud que quedó esperando al jefe de área (flujo anterior) pasa a esperar al director; una que quedó en el paso
+// retirado del gerente general ya tenía la aprobación del director, así que sigue a Compras
+const normalizarEstadoLegado = (s) => (s.status === "aprobacion_jefe" ? { ...s, status: "aprobacion_director" } : s.status === "aprobacion_gerente" ? { ...s, status: "cotizando" } : s);
 // etapas en las que la solicitud todavía NO compromete el presupuesto del área (falta la aprobación del director)
 const ESTADOS_SIN_COMPROMISO = ["solicitud", "aprobacion_jefe", "aprobacion_director", "rechazada"];
 
@@ -4581,7 +4584,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       <div className="salto-pagina">
         <div className="text-xs font-medium text-slate-500 mb-2">Historial de firmas y aprobaciones (registro digital interno)</div>
         <div className="grid grid-cols-2 gap-3 text-xs">
-          {[["Solicitante", solicitud.firmas.solicitante], ["Jefe de área", solicitud.firmas.jefe], ["Director de área", solicitud.firmas.director], ["Dirección financiera", solicitud.firmas.financiera], ["Gerencia", solicitud.firmas.gerencia]].map(([rol, f]) => (
+          {[["Solicitante", solicitud.firmas.solicitante], ...(solicitud.firmas.jefe?.nombre ? [["Jefe de área (flujo anterior)", solicitud.firmas.jefe]] : []), ["Director de área", solicitud.firmas.director], ["Dirección financiera", solicitud.firmas.financiera], ["Gerencia", solicitud.firmas.gerencia]].map(([rol, f]) => (
             <div key={rol} className="border border-slate-200 rounded-md p-2">
               <div className="text-[11px] text-slate-400">{rol}</div>
               {f?.nombre ? (
@@ -4774,7 +4777,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       const label = h.status === "rechazada" ? "Rechazada" : PASOS.find((p) => p.key === h.status)?.label || h.status;
       eventos.push({ fecha: h.fecha, texto: `Pasa a: ${label}` });
     });
-    const ROL_LABEL = { jefe: "Jefe de Área", director: "Director de Área", financiera: "Dirección Financiera", gerencia: "Gerencia" };
+    const ROL_LABEL = { jefe: "Jefe de Área (flujo anterior)", director: "Director de Área", financiera: "Dirección Financiera", gerencia: "Gerencia" };
     Object.entries(ROL_LABEL).forEach(([campo, rolLabel]) => {
       const f = solicitud.firmas?.[campo];
       if (!f?.fecha) return;
@@ -5354,9 +5357,9 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       </div>
 
       <SeccionColapsable icono={PenTool} titulo="Firmas" abierto={fases.abierto("firmas")} onToggle={() => fases.alternar("firmas")}>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-3">
           <FirmaBlock rol="solicitante" firma={solicitud.firmas.solicitante} />
-          <FirmaBlock rol="jefe de área" firma={solicitud.firmas.jefe} />
+          {solicitud.firmas.jefe?.nombre && <FirmaBlock rol="jefe de área (flujo anterior)" firma={solicitud.firmas.jefe} />}
           <FirmaBlock rol="director de área" firma={solicitud.firmas.director} />
           <FirmaBlock rol="dirección financiera" firma={solicitud.firmas.financiera} />
           <FirmaBlock rol="gerencia" firma={solicitud.firmas.gerencia} />
