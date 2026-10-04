@@ -58,5 +58,11 @@ export function useAuth() {
     await cargarPerfil(session.user.id)
   }
 
-  return { session, perfil, cargando, iniciarSesion, cerrarSesion, actualizarPerfil }
+  // Cambia la contraseña de quien tiene la sesión iniciada (desde "Mi perfil"). Devuelve el error, si lo hubo.
+  const cambiarContrasena = async (nueva) => {
+    const { error } = await supabase.auth.updateUser({ password: nueva })
+    return error
+  }
+
+  return { session, perfil, cargando, iniciarSesion, cerrarSesion, actualizarPerfil, cambiarContrasena }
 }

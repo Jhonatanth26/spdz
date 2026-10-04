@@ -10,6 +10,7 @@ import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
 import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
 import { unificarArchivosPDF, generarResumenSolicitudPDF } from "./lib/unificarArchivos";
+import { COLUMNAS_EMPLEADOS, validarEmpleados, importarEmpleadosEnLotes } from "./lib/importarEmpleados";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import { LOGO_FULL } from "./lib/logo";
@@ -95,7 +96,7 @@ const ROLES = ["Solicitante", "Jefe de Área", "Director de Área", "Jefe de Ár
 
 const PASOS = [
   { key: "solicitud", label: "Solicitud creada" },
-  { key: "aprobacion_jefe", label: "Aprobación jefe de área" },
+  { key: "aprobacion_jefe", label: "Aprobación jefe de área (flujo anterior)", oculto: true }, // ya no existe en el flujo; solo sirve para leer historiales viejos
   { key: "aprobacion_director", label: "Aprobación director de área" },
   { key: "cotizando", label: "Revisión y cotizaciones (compras)" },
   { key: "comparativo", label: "Cuadro comparativo" },
@@ -106,6 +107,13 @@ const PASOS = [
   { key: "recepcion", label: "Recepción / Ejecución" },
   { key: "completada", label: "Completada" },
 ];
+
+// pasos que realmente existen hoy (sin el paso del jefe de área, que ya no aprueba nadie)
+const PASOS_ACTIVOS = PASOS.filter((p) => !p.oculto);
+// una solicitud que quedó esperando al jefe de área (flujo anterior) pasa a esperar al director
+const normalizarEstadoLegado = (s) => (s.status === "aprobacion_jefe" ? { ...s, status: "aprobacion_director" } : s);
+// etapas en las que la solicitud todavía NO compromete el presupuesto del área (falta la aprobación del director)
+const ESTADOS_SIN_COMPROMISO = ["solicitud", "aprobacion_jefe", "aprobacion_director", "rechazada"];
 
 const fmt = (n) => (n || 0).toLocaleString("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 0 });
 // etiqueta de un concepto de gasto: Grupo – Código – Cuenta – Centro de costo (el centro de costo va anexado al concepto)
@@ -549,7 +557,6 @@ function duracion(iniISO, finISO) {
    todo, sin excepción, para que nunca se pueda quedar sin acceso.
 --------------------------------------------------------- */
 const PERMISOS_DISPONIBLES = [
-  { key: "aprobar_jefe", label: "Aprobar como jefe de área" },
   { key: "aprobar_director", label: "Aprobar como director de área" },
   { key: "aprobar_financiera", label: "Aprobar como Dirección Financiera" },
   { key: "aprobar_gerencia", label: "Aprobar como Gerencia" },
@@ -586,7 +593,6 @@ function tienePermiso(rol, permiso) {
 }
 
 const tieneAreaACargo = (u, areaId) => u.areaId === areaId || (u.areasAdicionales || []).includes(areaId);
-const puedeAprobarJefe = (u, s) => u.rol === "Administrador" || (tienePermiso(u.rol, "aprobar_jefe") && tieneAreaACargo(u, s.areaId));
 const puedeAprobarDirector = (u, s) => u.rol === "Administrador" || (tienePermiso(u.rol, "aprobar_director") && tieneAreaACargo(u, s.areaId));
 const puedeGestionarCotizaciones = (u) => tienePermiso(u.rol, "gestionar_cotizaciones");
 const puedeAprobarFinanciera = (u) => tienePermiso(u.rol, "aprobar_financiera");
@@ -597,9 +603,9 @@ function pasoDelRechazo(solicitud) {
   if (solicitud.firmas?.gerencia?.aprobado === false) return { status: "aprobacion_gerencia", campo: "gerencia" };
   if (solicitud.firmas?.financiera?.aprobado === false) return { status: "aprobacion_financiera", campo: "financiera" };
   if (solicitud.firmas?.director?.aprobado === false) return { status: "aprobacion_director", campo: "director" };
-  if (solicitud.firmas?.jefe?.aprobado === false) return { status: "aprobacion_jefe", campo: "jefe" };
+  if (solicitud.firmas?.jefe?.aprobado === false) return { status: "aprobacion_director", campo: "jefe" }; // rechazo hecho en el flujo anterior
   if (solicitud.revisionCompras?.estado === "rechazada") return { status: "cotizando", campo: null, revision: true };
-  return { status: "aprobacion_jefe", campo: null };
+  return { status: "aprobacion_director", campo: null };
 }
 const puedeVerCatalogos = (u) => tienePermiso(u.rol, "ver_catalogos");
 const puedeVerTodasSolicitudes = (u) => tienePermiso(u.rol, "ver_todas_solicitudes");
@@ -712,7 +718,7 @@ function datosSemilla() {
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-20T09:00:00.000Z" },
-      { status: "aprobacion_jefe", fecha: "2026-07-20T09:05:00.000Z" },
+      { status: "aprobacion_director", fecha: "2026-07-20T09:05:00.000Z" },
       { status: "cotizando", fecha: "2026-07-21T14:00:00.000Z" },
       { status: "comparativo", fecha: ahoraISO() },
     ],
@@ -724,7 +730,7 @@ function datosSemilla() {
     objetivo: "Mantener la disponibilidad y seguridad de la infraestructura de servidores.",
     justificacion: "El contrato de mantenimiento anterior venció; sin este servicio se pierde soporte y garantía del proveedor.",
     conceptoGastoId: "cg4",
-    status: "aprobacion_jefe",
+    status: "aprobacion_director",
     revisionCompras: { estado: "no_aplica", observacion: "", usuario: "", fecha: "" },
     items: [{
       id: nextId(), itemCatalogoId: "i2", nombre: "Mantenimiento anual servidores", cantidad: 1, unidad: "servicio",
@@ -745,7 +751,7 @@ function datosSemilla() {
     recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
     historialEstados: [
       { status: "solicitud", fecha: "2026-07-22T10:00:00.000Z" },
-      { status: "aprobacion_jefe", fecha: "2026-07-22T10:02:00.000Z" },
+      { status: "aprobacion_director", fecha: "2026-07-22T10:02:00.000Z" },
     ],
     notificaciones: [{ fecha: "2026-07-22T10:02:00.000Z", mensaje: "Correo simulado a Laura Restrepo: tienes una nueva solicitud SOL-1002 pendiente de aprobación." }],
   };
@@ -764,10 +770,10 @@ function Badge({ children, tone = "slate", title }) {
 }
 
 function Stepper({ status }) {
-  const idx = PASOS.findIndex((p) => p.key === status);
+  const idx = PASOS_ACTIVOS.findIndex((p) => p.key === status);
   return (
     <div className="flex flex-wrap gap-2">
-      {PASOS.map((p, i) => {
+      {PASOS_ACTIVOS.map((p, i) => {
         const done = i < idx, current = i === idx;
         return (
           <div key={p.key} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border
@@ -1019,9 +1025,22 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
 /* ---------------------------------------------------------
    MI PERFIL (firma tipo foto)
 --------------------------------------------------------- */
-function PerfilUsuario({ currentUser, onGuardar }) {
+function PerfilUsuario({ currentUser, onGuardar, onCambiarContrasena }) {
   const [preview, setPreview] = useState(currentUser.firmaFotoUrl);
   const [subiendo, setSubiendo] = useState(false);
+  const [clave, setClave] = useState("");
+  const [clave2, setClave2] = useState("");
+  const [cambiandoClave, setCambiandoClave] = useState(false);
+  const [msgClave, setMsgClave] = useState(null); // { ok, texto }
+  const cambiarClave = async () => {
+    if (clave.length < 6) { setMsgClave({ ok: false, texto: "La contraseña debe tener al menos 6 caracteres." }); return; }
+    if (clave !== clave2) { setMsgClave({ ok: false, texto: "Las dos contraseñas no coinciden." }); return; }
+    setCambiandoClave(true);
+    const error = await onCambiarContrasena(clave);
+    setCambiandoClave(false);
+    if (error) setMsgClave({ ok: false, texto: `No se pudo cambiar la contraseña: ${error.message}` });
+    else { setClave(""); setClave2(""); setMsgClave({ ok: true, texto: "Contraseña actualizada. Úsala la próxima vez que inicies sesión." }); }
+  };
   const cargarFoto = async (file) => {
     if (!archivoDentroDelLimite(file)) { alert(`El archivo pesa más de ${TAMANO_MAXIMO_MB} MB. Sube uno más liviano.`); return; }
     setSubiendo(true);
@@ -1042,6 +1061,16 @@ function PerfilUsuario({ currentUser, onGuardar }) {
         </label>
       </div>
       <button onClick={() => onGuardar({ ...currentUser, firmaFotoUrl: preview })} className="mt-4 bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium">Guardar perfil</button>
+      {onCambiarContrasena && (
+        <div className="mt-6 pt-5 border-t border-slate-100 space-y-2">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700"><Lock size={14} /> Cambiar contraseña</div>
+          <div className="text-[11px] text-slate-400">Si tu contraseña inicial es tu documento, te recomendamos cambiarla por una que solo tú conozcas.</div>
+          <input type="password" autoComplete="new-password" value={clave} onChange={(e) => setClave(e.target.value)} placeholder="Nueva contraseña (mín. 6 caracteres)" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          <input type="password" autoComplete="new-password" value={clave2} onChange={(e) => setClave2(e.target.value)} placeholder="Repite la nueva contraseña" className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm" />
+          {msgClave && <div className={`text-xs ${msgClave.ok ? "text-emerald-600" : "text-rose-600"}`}>{msgClave.texto}</div>}
+          <button onClick={cambiarClave} disabled={cambiandoClave || !clave} className="bg-slate-700 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">{cambiandoClave ? "Guardando..." : "Cambiar contraseña"}</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1052,7 +1081,7 @@ function PerfilUsuario({ currentUser, onGuardar }) {
 function Dashboard({ areas, solicitudes, proveedores, currentUser, onAbrir, onVerCalendario }) {
   const gastoPorArea = useMemo(() => {
     const map = {}; areas.forEach((a) => (map[a.id] = 0));
-    solicitudes.forEach((s) => { if (!["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)) map[s.areaId] = (map[s.areaId] || 0) + totalSolicitud(s); });
+    solicitudes.forEach((s) => { if (!ESTADOS_SIN_COMPROMISO.includes(s.status)) map[s.areaId] = (map[s.areaId] || 0) + totalSolicitud(s); });
     return map;
   }, [areas, solicitudes]);
 
@@ -2024,14 +2053,14 @@ function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
     (!fHasta || s.fechaCreacion <= fHasta)
   );
 
-  const porArea = areas.map((a) => ({ nombre: a.nombre, monto: base.filter((s) => s.areaId === a.id && !["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0) }));
+  const porArea = areas.map((a) => ({ nombre: a.nombre, monto: base.filter((s) => s.areaId === a.id && !ESTADOS_SIN_COMPROMISO.includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0) }));
   const porTipo = [{ nombre: "Compra", value: base.filter((s) => s.tipo === "compra").length }, { nombre: "Servicio", value: base.filter((s) => s.tipo === "servicio").length }];
   const porEstado = [
-    ...PASOS.filter((p) => p.key !== "recepcion").map((p) => ({ nombre: p.label, value: base.filter((s) => s.status === p.key).length })),
+    ...PASOS_ACTIVOS.filter((p) => p.key !== "recepcion").map((p) => ({ nombre: p.label, value: base.filter((s) => s.status === p.key).length })),
     { nombre: "Recepción / Ejecución (pendiente)", value: base.filter((s) => s.status === "recepcion" && !s.recepcion?.recibidoSatisfaccion).length },
     { nombre: "Recibida (falta evaluación)", value: base.filter((s) => s.status === "recepcion" && s.recepcion?.recibidoSatisfaccion).length },
   ].filter((e) => e.value > 0);
-  const porEmpresaComparativo = empresas.map((e) => ({ nombre: e.nombre, monto: solicitudes.filter((s) => s.empresaId === e.id && !["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0) }));
+  const porEmpresaComparativo = empresas.map((e) => ({ nombre: e.nombre, monto: solicitudes.filter((s) => s.empresaId === e.id && !ESTADOS_SIN_COMPROMISO.includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0) }));
   const proveedorMonto = {};
   base.forEach((s) => s.items.forEach((it) => {
     if (!it.cotizaciones.length) return;
@@ -2538,7 +2567,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   // ya están comprometiendo presupuesto (no descartadas ni todavía sin aprobar el primer paso)
   const areaSel = areas.find((a) => a.id === areaId);
   const comprometidoArea = useMemo(() => {
-    return solicitudes.filter((s) => s.areaId === areaId && !["solicitud", "aprobacion_jefe", "rechazada"].includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0);
+    return solicitudes.filter((s) => s.areaId === areaId && !ESTADOS_SIN_COMPROMISO.includes(s.status)).reduce((acc, s) => acc + totalSolicitud(s), 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [solicitudes, areaId]);
   const disponibleArea = (areaSel?.presupuesto || 0) - comprometidoArea;
@@ -2585,15 +2614,12 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         if (!yaExiste) guardarItemCatalogo({ nombre: it.nombre.trim(), unidadDefault: it.unidad, categoria: "" });
       }
     });
-    const jefe = usuarios.find((u) => tieneAreaACargo(u, areaId) && ["Jefe de Área", "Jefe de Área y Director"].includes(u.rol));
     const director = usuarios.find((u) => tieneAreaACargo(u, areaId) && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
     const folio = "SOL-" + (1000 + Math.floor(Math.random() * 8999));
-    // si quien crea la solicitud es el propio jefe del área seleccionada, queda auto-aprobada en ese paso
-    // (no tiene sentido que se apruebe a sí mismo con un clic aparte) — pero igual pasa por Director de Área,
-    // salvo que la misma persona también tenga el rol combinado, en cuyo caso se salta los dos pasos
-    const esJefeDeSuPropiaArea = ["Jefe de Área", "Jefe de Área y Director"].includes(currentUser.rol) && tieneAreaACargo(currentUser, areaId);
-    const esAmbosRoles = currentUser.rol === "Jefe de Área y Director" && tieneAreaACargo(currentUser, areaId);
-    const statusInicial = esAmbosRoles ? "cotizando" : esJefeDeSuPropiaArea ? "aprobacion_director" : "aprobacion_jefe";
+    // solo el director de área aprueba. Si quien crea la solicitud es el propio director de esa área, queda
+    // auto-aprobada (no tiene sentido que se apruebe a sí mismo con un clic aparte) y pasa directo a Compras.
+    const esDirectorDeSuArea = ["Director de Área", "Jefe de Área y Director"].includes(currentUser.rol) && tieneAreaACargo(currentUser, areaId);
+    const statusInicial = esDirectorDeSuArea ? "cotizando" : "aprobacion_director";
     onCrear({
       id: nextId(), folio,
       tipo, empresaId, areaId, departamentoId: departamentoId || null, centroCosto: conceptosGasto.find((c) => c.id === conceptoGastoId)?.centroCosto || "", conceptoGastoId, solicitanteId: currentUser.id,
@@ -2605,11 +2631,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       items: items.map((i) => ({ ...i, ivaEstimado: tipo === "servicio" ? 0 : i.ivaEstimado, cotizacionSeleccionada: null, observacionSeleccion: "" })),
       firmas: {
         solicitante: { nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), fotoUrl: currentUser.firmaFotoUrl || null },
-        jefe: esJefeDeSuPropiaArea
-          ? { aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), observacion: "Creada y aprobada por el mismo jefe de área.", fotoUrl: currentUser.firmaFotoUrl || null }
-          : { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
-        director: esAmbosRoles
-          ? { aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), observacion: "Aprobado junto con el paso de jefe de área (mismo responsable).", fotoUrl: currentUser.firmaFotoUrl || null }
+        jefe: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null }, // el paso del jefe ya no existe; la clave se conserva por compatibilidad con solicitudes anteriores
+        director: esDirectorDeSuArea
+          ? { aprobado: true, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresas.find((e) => e.id === empresaId)?.nombre || "", fecha: hoy(), observacion: "Creada y aprobada por el mismo director de área.", fotoUrl: currentUser.firmaFotoUrl || null }
           : { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         financiera: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
         gerencia: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null },
@@ -2620,23 +2644,15 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     evaluacionProveedor: evaluacionProveedorVacia(),
       recepcion: { archivos: [], comentario: "", recibidoSatisfaccion: false, usuario: "", fecha: "" },
       historialEstados: [{ status: "solicitud", fecha: ahoraISO() }, { status: statusInicial, fecha: ahoraISO() }],
-      notificaciones: esAmbosRoles
-        ? [{ fecha: ahoraISO(), mensaje: `Solicitud creada y auto-aprobada por ${currentUser.nombre} (jefe de área y director) — lista para cotizar.` }]
-        : esJefeDeSuPropiaArea
-        ? [{ fecha: ahoraISO(), mensaje: director?.email ? `Solicitud auto-aprobada por ${currentUser.nombre} (jefe de área). Correo enviado a ${director.nombre} (${director.email}) para su aprobación.` : `Solicitud auto-aprobada por ${currentUser.nombre} (jefe de área). No hay un director de área con correo configurado para notificar.` }]
-        : [{ fecha: ahoraISO(), mensaje: jefe?.email ? `Correo enviado a ${jefe.nombre} (${jefe.email})` : "Solicitud creada. No hay un jefe de área con correo configurado para notificar." }],
+      notificaciones: esDirectorDeSuArea
+        ? [{ fecha: ahoraISO(), mensaje: `Solicitud creada y auto-aprobada por ${currentUser.nombre} (director de área) — lista para cotizar.` }]
+        : [{ fecha: ahoraISO(), mensaje: director?.email ? `Correo enviado a ${director.nombre} (${director.email})` : "Solicitud creada. No hay un director de área con correo configurado para notificar." }],
     });
-    if (!esJefeDeSuPropiaArea && jefe?.email) {
-      enviarCorreo(
-        jefe.email,
-        `Nueva solicitud pendiente: ${folio}`,
-        `<p>Hola ${jefe.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}) y quedó pendiente de tu aprobación.</p><p><b>Objetivo:</b> ${objetivo}</p>`
-      );
-    } else if (esJefeDeSuPropiaArea && !esAmbosRoles && director?.email) {
+    if (!esDirectorDeSuArea && director?.email) {
       enviarCorreo(
         director.email,
-        `Solicitud pendiente de tu aprobación: ${folio}`,
-        `<p>Hola ${director.nombre},</p><p>La solicitud <b>${folio}</b> fue creada y auto-aprobada por ${currentUser.nombre} (jefe de área) y quedó pendiente de tu aprobación como Director de Área.</p><p><b>Objetivo:</b> ${objetivo}</p>`
+        `Nueva solicitud pendiente: ${folio}`,
+        `<p>Hola ${director.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}) y quedó pendiente de tu aprobación como director de área.</p><p><b>Objetivo:</b> ${objetivo}</p>`
       );
     }
   };
@@ -4687,7 +4703,6 @@ function NotificacionesPanel({ notificaciones }) {
 --------------------------------------------------------- */
 function accionLabel(solicitud, total) {
   switch (solicitud.status) {
-    case "aprobacion_jefe": return "Aprobar como jefe de área";
     case "aprobacion_director": return "Aprobar como director de área";
     case "cotizando": return "Generar cuadro comparativo";
     case "comparativo": return requiereDireccion(total) ? "Enviar a Dirección Financiera" : requiereGerencia(total) ? "Enviar a Gerencia" : "Generar orden";
@@ -4832,7 +4847,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const solicitante = usuarios.find((u) => u.id === solicitud.solicitanteId);
   const total = totalSolicitud(solicitud);
   const areaPresup = areas.find((a) => a.id === solicitud.areaId);
-  const comprometidoAreaDet = (solicitudes || []).filter((x) => x.areaId === solicitud.areaId && x.id !== solicitud.id && !["solicitud", "aprobacion_jefe", "rechazada"].includes(x.status)).reduce((acc, x) => acc + totalSolicitud(x), 0);
+  const comprometidoAreaDet = (solicitudes || []).filter((x) => x.areaId === solicitud.areaId && x.id !== solicitud.id && !ESTADOS_SIN_COMPROMISO.includes(x.status)).reduce((acc, x) => acc + totalSolicitud(x), 0);
   const todasCotizadas = solicitud.items.every((i) => i.cotizaciones.length > 0 && i.cotizaciones.every((c) => c.proveedorId || (c.proveedorNombre || "").trim()) && !cotizacionUnicaSinJustificar(i) && !itemConPrecioInvalido(i));
   const comparativoBloqueado = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
   const patch = (fields) => onUpdate({ ...solicitud, ...fields });
@@ -4880,9 +4895,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
   // el solicitante confirma que ya corrigió y avisa por correo a quien le toca aprobar ahora
   const reenviarParaAprobacion = () => {
-    const responsable = usuarios.find((u) => solicitud.status === "aprobacion_jefe"
-      ? (["Jefe de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, solicitud.areaId))
-      : (["Director de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, solicitud.areaId)));
+    const responsable = usuarios.find((u) => ["Director de Área", "Jefe de Área y Director"].includes(u.rol) && tieneAreaACargo(u, solicitud.areaId));
     if (responsable?.email) {
       enviarCorreo(
         responsable.email,
@@ -4929,7 +4942,6 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
   const puedeActuar = () => {
     switch (solicitud.status) {
-      case "aprobacion_jefe": return puedeAprobarJefe(currentUser, solicitud);
       case "aprobacion_director": return puedeAprobarDirector(currentUser, solicitud);
       case "cotizando": return puedeGestionarCotizaciones(currentUser) && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada");
       case "comparativo": return puedeGestionarCotizaciones(currentUser);
@@ -4946,20 +4958,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     const s = solicitud.status;
     // notifica a TODOS los usuarios de un rol (para Dirección Financiera/Gerencia, que suelen ser varios)
     const notificarRol = (rol, mensaje) => usuarios.filter((u) => u.rol === rol).forEach((u) => crearNotificacion?.(u.id, mensaje, solicitud.id));
-    if (s === "aprobacion_jefe") {
-      if (currentUser.rol === "Jefe de Área y Director") {
-        // la misma persona hace ambos roles: se aprueban los dos pasos de una vez, sin duplicar el clic
-        patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar(), director: { ...firmar(), observacion: "Aprobado junto con el paso de jefe de área (mismo responsable)." } }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada (jefe y director), lista para cotizar.`) });
-        mostrarToast("✓ Solicitud aprobada como jefe de área y director");
-        notificarRol("Compras", `La solicitud ${solicitud.folio} ya está aprobada y lista para cotizar.`);
-      } else {
-        const director = usuarios.find((u) => u.areaId === solicitud.areaId && ["Director de Área", "Jefe de Área y Director"].includes(u.rol));
-        patch({ status: "aprobacion_director", prioridad: prioridadSel, firmas: { ...solicitud.firmas, jefe: firmar() }, historialEstados: empujarHistorial("aprobacion_director"), notificaciones: notificar(director?.email ? `Correo enviado a ${director.nombre} (${director.email}): solicitud ${solicitud.folio} pendiente de tu aprobación.` : `Solicitud aprobada por el jefe de área. No hay un director de área con correo configurado para notificar.`) });
-        mostrarToast("✓ Solicitud aprobada como jefe de área");
-        crearNotificacion?.(director?.id, `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`, solicitud.id);
-      }
-    }
-    else if (s === "aprobacion_director") { patch({ status: "cotizando", firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); mostrarToast("✓ Solicitud aprobada como director de área"); notificarRol("Compras", `La solicitud ${solicitud.folio} ya está aprobada y lista para cotizar.`); }
+    if (s === "aprobacion_director") { patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); mostrarToast("✓ Solicitud aprobada como director de área"); notificarRol("Compras", `La solicitud ${solicitud.folio} ya está aprobada y lista para cotizar.`); }
     else if (s === "cotizando" && todasCotizadas) { patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") }); mostrarToast("Cuadro comparativo generado"); }
     else if (s === "comparativo") {
       const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
@@ -5060,7 +5059,6 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   // solo se avisa "tu rol no tiene permiso" a quien de verdad podría tener algo que ver con este paso
   // (ej. un jefe de área de otra área) — no a roles que estructuralmente nunca actúan en este paso
   const ROLES_RELEVANTES_POR_PASO = {
-    aprobacion_jefe: ["Jefe de Área", "Jefe de Área y Director"],
     aprobacion_director: ["Director de Área", "Jefe de Área y Director"],
     aprobacion_financiera: ["Dirección Financiera"],
     aprobacion_gerencia: ["Gerencia"],
@@ -5361,7 +5359,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {solicitud.status !== "completada" && solicitud.status !== "rechazada" && autorizado && (
         <div className="space-y-2">
-          {solicitud.status === "aprobacion_jefe" && (
+          {solicitud.status === "aprobacion_director" && (
             <div>
               <label className="text-xs font-medium text-slate-500">Prioridad</label>
               <div className="flex gap-2 mt-1">
@@ -5489,7 +5487,6 @@ function evaluacionCompleta(solicitud) {
 function requiereMiAccion(currentUser, s, proveedores) {
   if (["completada", "rechazada"].includes(s.status)) return false;
   switch (s.status) {
-    case "aprobacion_jefe": return puedeAprobarJefe(currentUser, s);
     case "aprobacion_director": return puedeAprobarDirector(currentUser, s);
     case "cotizando": return puedeGestionarCotizaciones(currentUser) && (s.tipo !== "compra" || s.revisionCompras.estado === "aprobada");
     case "comparativo": return puedeGestionarCotizaciones(currentUser);
@@ -5587,7 +5584,7 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
         </div>
         <div>
           <label className="text-[11px] font-medium text-slate-500">Estado</label>
-          <select value={fEstado} onChange={(e) => setFEstado(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="todos">Todos</option>{PASOS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}<option value="rechazada">Rechazada</option></select>
+          <select value={fEstado} onChange={(e) => setFEstado(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="todos">Todos</option>{PASOS_ACTIVOS.map((p) => <option key={p.key} value={p.key}>{p.label}</option>)}<option value="rechazada">Rechazada</option></select>
         </div>
         <div>
           <label className="text-[11px] font-medium text-slate-500">Tipo</label>
@@ -5747,6 +5744,171 @@ function EmpresasLogos({ empresas, onGuardar }) {
 }
 
 /* ---------------------------------------------------------
+   IMPORTAR EMPLEADOS (solo Administrador)
+   A partir de un Excel o CSV crea, de una sola vez, el acceso de cada persona (con su DOCUMENTO como contraseña
+   inicial) y su perfil, ya vinculados. Antes de crear nada se muestra una vista previa con lo que está bien y lo
+   que no. Lo que toca Supabase Authentication lo hace la Edge Function "importar-empleados".
+--------------------------------------------------------- */
+function ImportarEmpleados({ areas, usuarios, onTerminar }) {
+  const { mostrar: mostrarToast } = useToast();
+  const [filas, setFilas] = useState(null);       // filas ya validadas, a la espera de confirmar
+  const [archivo, setArchivo] = useState("");
+  const [error, setError] = useState("");
+  const [leyendo, setLeyendo] = useState(false);
+  const [progreso, setProgreso] = useState(null); // { hechos, total } mientras se importa
+  const [resultados, setResultados] = useState(null);
+
+  const descargarPlantilla = () => {
+    const ejemploArea = areas[0]?.nombre || "Producción";
+    const hoja = XLSX.utils.aoa_to_sheet([
+      COLUMNAS_EMPLEADOS,
+      ["Ana María Pérez Gómez", "1017234567", "ana.perez@empresa.com", "Analista de compras", ejemploArea, "Solicitante", ""],
+      ["Carlos Ruiz Londoño", "71234567", "carlos.ruiz@empresa.com", "Director de operaciones", ejemploArea, "Director de Área", areas[1]?.nombre || ""],
+    ]);
+    hoja["!cols"] = [{ wch: 28 }, { wch: 14 }, { wch: 30 }, { wch: 26 }, { wch: 22 }, { wch: 22 }, { wch: 30 }];
+    const ayuda = XLSX.utils.aoa_to_sheet([
+      ["Cómo llenarla"],
+      ["• Una fila por persona. Nombre, Documento y Correo son obligatorios."],
+      ["• El Documento (sin puntos ni espacios) será la contraseña inicial: mínimo 6 caracteres."],
+      ["• Área y Rol: copia el nombre tal cual aparece abajo. Si el Rol va vacío, la persona queda como Solicitante."],
+      ["• Áreas adicionales (solo Directores que cubren más de un área): sepáralas con punto y coma."],
+      ["• Si el correo ya está en el sistema, se actualizan sus datos (no se cambia su contraseña ni su rol si dejas el Rol vacío)."],
+      [],
+      ["Áreas válidas"], ...areas.map((a) => [a.nombre]),
+      [],
+      ["Roles válidos"], ...ROLES.map((r) => [r]),
+    ]);
+    ayuda["!cols"] = [{ wch: 110 }];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Empleados");
+    XLSX.utils.book_append_sheet(libro, ayuda, "Cómo llenarla");
+    XLSX.writeFile(libro, "Plantilla_empleados.xlsx");
+  };
+
+  const leerArchivo = async (file) => {
+    setLeyendo(true); setError(""); setFilas(null); setResultados(null); setArchivo(file.name);
+    try {
+      const buffer = await file.arrayBuffer();
+      let crudas;
+      if (/\.csv$/i.test(file.name)) {
+        // un CSV exportado de Excel en español suele venir en Windows-1252 y con ";" — se detecta el formato solo
+        const bytes = new Uint8Array(buffer);
+        let texto;
+        try { texto = new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { texto = new TextDecoder("windows-1252").decode(bytes); }
+        crudas = Papa.parse(texto.replace(/^\uFEFF/, ""), { header: true, skipEmptyLines: true }).data;
+      } else {
+        const libro = XLSX.read(buffer, { type: "array" });
+        crudas = XLSX.utils.sheet_to_json(libro.Sheets[libro.SheetNames[0]], { defval: "", raw: false });
+      }
+      crudas = crudas.filter((f) => Object.values(f).some((v) => String(v ?? "").trim() !== ""));
+      if (!crudas.length) { setError("El archivo no trae filas con datos."); setLeyendo(false); return; }
+      const correosExistentes = new Set(usuarios.map((u) => (u.email || "").toLowerCase()).filter(Boolean));
+      setFilas(validarEmpleados(crudas, { areas, roles: ROLES, correosExistentes }));
+    } catch (e) {
+      console.error("Error leyendo el archivo de empleados:", e);
+      setError("No se pudo leer el archivo. Usa un Excel (.xlsx) o un CSV con los encabezados de la plantilla.");
+    }
+    setLeyendo(false);
+  };
+
+  const validas = (filas || []).filter((f) => f.estado !== "error");
+  const nuevas = validas.filter((f) => f.estado === "nuevo").length;
+  const conError = (filas || []).length - validas.length;
+
+  const importar = async () => {
+    if (!validas.length || progreso) return;
+    if (!confirm(`Se van a crear o actualizar ${validas.length} empleado(s).\n\nA las personas nuevas se les crea el acceso con su DOCUMENTO como contraseña inicial. ¿Continuar?`)) return;
+    setProgreso({ hechos: 0, total: validas.length });
+    const res = await importarEmpleadosEnLotes(validas, { onProgreso: (hechos, total) => setProgreso({ hechos, total }) });
+    setProgreso(null); setFilas(null); setResultados(res);
+    const ok = res.filter((r) => r.ok).length;
+    mostrarToast(ok === res.length ? `${ok} empleado(s) importado(s)` : `${ok} de ${res.length} importados — revisa los que fallaron`, ok === res.length ? "ok" : "alerta", { duracion: 7000 });
+    onTerminar?.();
+  };
+
+  const descargarResultado = () => {
+    const hoja = XLSX.utils.aoa_to_sheet([["Correo", "Resultado", "Detalle"], ...resultados.map((r) => [r.correo, r.ok ? "OK" : "Falló", r.mensaje])]);
+    hoja["!cols"] = [{ wch: 34 }, { wch: 10 }, { wch: 80 }];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, hoja, "Resultado");
+    XLSX.writeFile(libro, `Resultado_importacion_empleados_${hoy()}.xlsx`);
+  };
+
+  return (
+    <SeccionColapsable icono={UploadIcon} titulo="Importar empleados desde Excel o CSV" defaultAbierto={false}
+      descripcion="Crea de una vez el acceso y el perfil de cada persona. Su documento queda como contraseña inicial." >
+      <div className="text-xs text-slate-500 space-y-1">
+        <div><b>1.</b> Descarga la plantilla y pega ahí tu base de empleados (una fila por persona). Obligatorios: <b>Nombre, Documento y Correo</b>. Opcionales: Cargo, Área, Rol, Áreas adicionales.</div>
+        <div><b>2.</b> Súbela: verás una vista previa de lo que está bien y lo que no, <b>antes de crear nada</b>.</div>
+        <div><b>3.</b> Confirma. Cada persona entra con su <b>correo</b> y su <b>documento</b> (sin puntos ni espacios) como contraseña, y puede cambiarla en «Mi perfil».</div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <button onClick={descargarPlantilla} className="flex items-center gap-1.5 text-xs border border-slate-200 rounded-md px-2.5 py-1.5 text-slate-600 hover:border-indigo-400 hover:text-indigo-600"><FileText size={13} /> Descargar plantilla (Excel)</button>
+        <label className={`flex items-center gap-1.5 text-xs rounded-md px-2.5 py-1.5 font-medium cursor-pointer ${progreso ? "bg-slate-200 text-slate-400" : "bg-indigo-600 text-white"}`}>
+          <UploadIcon size={13} /> {leyendo ? "Leyendo..." : "Subir archivo (.xlsx / .csv)"}
+          <input type="file" accept=".xlsx,.xls,.csv" className="hidden" disabled={leyendo || !!progreso} onChange={(e) => { const f = e.target.files[0]; e.target.value = ""; if (f) leerArchivo(f); }} />
+        </label>
+        {archivo && <span className="text-[11px] text-slate-400">{archivo}</span>}
+      </div>
+      {error && <div className="text-xs text-rose-600">{error}</div>}
+
+      {filas && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge tone="green">{nuevas} nuevo(s)</Badge>
+            <Badge tone="blue">{validas.length - nuevas} ya existen (se actualizan)</Badge>
+            <Badge tone={conError ? "red" : "slate"}>{conError} con error</Badge>
+            {conError > 0 && <span className="text-slate-400">Las filas con error no se importan: corrígelas en el archivo y vuelve a subirlo.</span>}
+          </div>
+          <div className="overflow-auto max-h-80 border border-slate-200 rounded-lg">
+            <table className="w-full text-[11px]">
+              <thead className="bg-slate-50 text-slate-500 sticky top-0"><tr>
+                {["Fila", "Estado", "Nombre", "Correo", "Área", "Rol", "Contraseña inicial", "Observaciones"].map((h) => <th key={h} className="text-left px-2 py-1.5 font-medium whitespace-nowrap">{h}</th>)}
+              </tr></thead>
+              <tbody>{filas.slice(0, 300).map((f) => (
+                <tr key={f.fila} className={`border-t border-slate-100 ${f.estado === "error" ? "bg-rose-50/60" : ""}`}>
+                  <td className="px-2 py-1 text-slate-400">{f.fila}</td>
+                  <td className="px-2 py-1">{f.estado === "error" ? <Badge tone="red">Error</Badge> : f.estado === "actualiza" ? <Badge tone="blue">Actualiza</Badge> : <Badge tone="green">Nuevo</Badge>}</td>
+                  <td className="px-2 py-1 text-slate-700">{f.nombre || "—"}</td>
+                  <td className="px-2 py-1 text-slate-600">{f.correo || "—"}</td>
+                  <td className="px-2 py-1 text-slate-600">{f.areaTxt || "—"}</td>
+                  <td className="px-2 py-1 text-slate-600">{f.rol || f.rolTxt || (f.existe ? "(no cambia)" : "Solicitante")}</td>
+                  <td className="px-2 py-1 font-mono text-slate-500">{f.documento || "—"}</td>
+                  <td className="px-2 py-1 text-rose-600">{f.errores.join(" · ")}{f.estado === "actualiza" && <span className="text-slate-400">Ya está en el sistema: se actualizan sus datos (si no tenía acceso, se le crea).</span>}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          {filas.length > 300 && <div className="text-[11px] text-slate-400">Se muestran las primeras 300 filas; se importarán todas las válidas.</div>}
+          <div className="flex items-center gap-3">
+            <button onClick={importar} disabled={!validas.length || !!progreso} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">
+              {progreso ? `Importando ${progreso.hechos} de ${progreso.total}...` : `Importar ${validas.length} empleado(s)`}
+            </button>
+            {progreso && <div className="flex-1 max-w-xs h-1.5 bg-slate-100 rounded-full overflow-hidden"><div className="h-full bg-indigo-500 transition-all" style={{ width: `${Math.round((progreso.hechos / progreso.total) * 100)}%` }} /></div>}
+          </div>
+        </div>
+      )}
+
+      {resultados && (
+        <div className="space-y-2">
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <Badge tone="green">{resultados.filter((r) => r.ok).length} importado(s)</Badge>
+            <Badge tone={resultados.some((r) => !r.ok) ? "red" : "slate"}>{resultados.filter((r) => !r.ok).length} fallaron</Badge>
+            <button onClick={descargarResultado} className="text-indigo-600 underline">Descargar resultado (Excel)</button>
+          </div>
+          {resultados.some((r) => !r.ok) && (
+            <div className="border border-rose-200 bg-rose-50/50 rounded-lg p-2 space-y-0.5 max-h-48 overflow-auto">
+              {resultados.filter((r) => !r.ok).map((r) => <div key={r.correo} className="text-[11px] text-rose-700"><b>{r.correo}</b> — {r.mensaje}</div>)}
+            </div>
+          )}
+        </div>
+      )}
+    </SeccionColapsable>
+  );
+}
+
+
+/* ---------------------------------------------------------
    CATÁLOGOS
 --------------------------------------------------------- */
 function Catalogos({
@@ -5756,7 +5918,7 @@ function Catalogos({
   areas, guardarArea, eliminarArea,
   departamentos, guardarDepartamento, eliminarDepartamento,
   proveedores, guardarProveedor, eliminarProveedor,
-  usuarios, guardarUsuario, eliminarUsuario,
+  usuarios, guardarUsuario, eliminarUsuario, recargarUsuarios,
   itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo,
   conceptosGasto, guardarConceptoGasto, eliminarConceptoGasto,
   permisos, togglePermiso,
@@ -5818,9 +5980,10 @@ function Catalogos({
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-            El rol determina qué puede aprobar cada usuario: <b>Jefe de Área</b> aprueba solicitudes de su misma área, <b>Dirección Financiera</b> y <b>Gerencia</b> aprueban según el monto, <b>Compras</b> gestiona cotizaciones, histórico y pagos.
-            <br /><b>Importante:</b> editar o agregar una fila aquí solo cambia sus datos de perfil (nombre, cargo, área, rol). Para que una persona pueda <i>iniciar sesión</i>, primero debes crearla en Supabase → Authentication → Users con el mismo correo, y vincular su ID ahí.
+            El rol determina qué puede aprobar cada usuario: <b>Director de Área</b> aprueba las solicitudes de su área (el jefe de área ya no interviene en la aprobación), <b>Dirección Financiera</b> y <b>Gerencia</b> aprueban según el monto, <b>Compras</b> gestiona cotizaciones, histórico y pagos.
+            <br /><b>Importante:</b> editar o agregar una fila aquí solo cambia sus datos de perfil (nombre, cargo, área, rol). Para que una persona pueda <i>iniciar sesión</i> hay dos caminos: <b>importar la base de empleados</b> (más abajo, crea el acceso con el documento como contraseña) o crearla a mano en Supabase → Authentication → Users con el mismo correo.
           </div>
+          {currentUser?.rol === "Administrador" && <ImportarEmpleados areas={areas} usuarios={usuarios} onTerminar={recargarUsuarios} />}
           <CrudTable titulo="Usuarios y roles" icon={Users} currentUser={currentUser}
             columnas={[
               { key: "nombre", label: "Nombre" },
@@ -5957,7 +6120,7 @@ export default function App() {
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, tipo_proveedor: r.tipoProveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representante_legal: r.representanteLegal, actividad_economica: r.actividadEconomica, contacto: r.contacto, email: r.email, email2: r.email2 }),
     orderBy: 'nombre',
   });
-  const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios } = useSupabaseTable('usuarios', {
+  const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios, recargar: recargarUsuarios } = useSupabaseTable('usuarios', {
     desdeDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, areaId: r.area_id, areasAdicionales: r.areas_adicionales || [], rol: r.rol, firmaFotoUrl: r.firma_foto_url }),
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, area_id: r.areaId, areas_adicionales: r.areasAdicionales || [], rol: r.rol }),
     orderBy: 'nombre',
@@ -5988,7 +6151,8 @@ export default function App() {
   const cargandoCatalogos = cargandoAreas || cargandoDepartamentos || cargandoEmpresas || cargandoProveedores || cargandoUsuarios || cargandoItems || cargandoConceptos;
 
   const [historico, setHistorico] = useState(HISTORICO_INIT);
-  const { solicitudes, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB } = useSolicitudes();
+  const { solicitudes: solicitudesDB, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB } = useSolicitudes();
+  const solicitudes = useMemo(() => solicitudesDB.map(normalizarEstadoLegado), [solicitudesDB]);
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   const [creando, setCreando] = useState(false);
@@ -6007,7 +6171,7 @@ export default function App() {
   }, [exportando]);
 
   // --- Sesión real con Supabase Auth ---
-  const { perfil: perfilAuth, cargando: cargandoSesion, iniciarSesion, cerrarSesion, actualizarPerfil } = useAuth();
+  const { perfil: perfilAuth, cargando: cargandoSesion, iniciarSesion, cerrarSesion, actualizarPerfil, cambiarContrasena } = useAuth();
   const { notificaciones: notisUsuario, cargando: cargandoNotis, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(perfilAuth?.id);
 
   // ---- avisos globales ----
@@ -6064,7 +6228,7 @@ export default function App() {
     // si no se pudo guardar, el formulario se queda abierto para no perder lo escrito
     if (error) { mostrarToast(`No se pudo crear la solicitud: ${error.message || "error desconocido"}. Inténtalo de nuevo.`, "alerta"); return; }
     setCreando(false); setTab("solicitudes");
-    const destinos = { aprobacion_jefe: "aprobación del jefe de área", aprobacion_director: "aprobación del director de área", cotizando: "Compras para cotizar" };
+    const destinos = { aprobacion_director: "aprobación del director de área", cotizando: "Compras para cotizar" };
     mostrarToast(`Solicitud ${nueva.folio} creada y enviada a ${destinos[nueva.status] || PASOS.find((p) => p.key === nueva.status)?.label || "aprobación"}`);
   };
   const actualizarSolicitud = async (upd) => {
@@ -6187,7 +6351,7 @@ export default function App() {
         {creando ? (
           <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
-          <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} />
+          <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} onCambiarContrasena={cambiarContrasena} />
         ) : solicitudAbierta ? (
           <SolicitudDetalle solicitudes={solicitudes} guardarItemCatalogo={guardarItemCatalogo} solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
         ) : tab === "dashboard" ? (
@@ -6234,7 +6398,7 @@ export default function App() {
             areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea}
             departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
             proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
-            usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario}
+            usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios}
             itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
             permisos={permisos} togglePermiso={togglePermiso}
