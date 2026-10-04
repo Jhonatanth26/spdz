@@ -2,7 +2,11 @@
 // de una vez. Aquí solo está la lógica de armar las hojas y de validar el archivo que se vuelve a subir; la lectura y
 // escritura del archivo (Excel/CSV) la hace la pantalla.
 
-export const ROLES_DIRECTOR = ['Director de Área', 'Jefe de Área y Director']
+// Roles de quienes pueden ser el director responsable de un área. Además de los directores de área, la cabeza de una
+// dirección puede tener otro rol: el gerente general (Gerencia) dirige el área "Gerencia General", y quien lleva la
+// Dirección Financiera tiene el rol Dirección Financiera.
+export const ROLES_ASIGNABLES_DIRECTOR = ['Director de Área', 'Jefe de Área y Director', 'Dirección Financiera', 'Gerencia']
+export const ROLES_DIRECTOR = ROLES_ASIGNABLES_DIRECTOR
 export const COLUMNAS_AREAS = ['Área', 'Presupuesto mensual', 'Director responsable']
 // palabras que, escritas en la celda del director, significan "quitar el director de esta área"
 const PALABRAS_QUITAR = /^(quitar|sin director|ninguno|ninguna|n\/a|-)$/i
@@ -33,7 +37,7 @@ export function filasDirectoresValidos(areas, usuarios) {
 export const filasInstruccionesAreas = [
   ['Cómo actualizar las áreas'],
   ['• Cambia solo las columnas "Presupuesto mensual" y "Director responsable". El nombre del área NO se cambia aquí: sirve para saber a qué área corresponde cada fila.'],
-  ['• Director responsable: escribe el nombre tal cual aparece en la hoja "Directores válidos" (puedes copiarlo y pegarlo). Solo se pueden asignar personas con rol de director.'],
+  ['• Director responsable: escribe el nombre tal cual aparece en la hoja "Directores válidos" (puedes copiarlo y pegarlo). Solo se pueden asignar personas con rol de Director de Área, Jefe de Área y Director, Dirección Financiera o Gerencia.'],
   ['• Si hay dos directores con el mismo nombre, agrega una columna llamada "Correo del director" y pon ahí el correo.'],
   ['• Para QUITAR el director de un área, escribe QUITAR en esa celda.'],
   ['• Si dejas una celda vacía, ese dato NO se cambia.'],
@@ -94,7 +98,7 @@ export function validarAreas(filasCrudas, { areas = [], usuarios = [] } = {}) {
     else if (dirTxt || correoTxt) {
       const porCorreo = correoTxt ? usuarios.find((u) => String(u.email || '').toLowerCase() === correoTxt) : null
       if (correoTxt && !porCorreo) errores.push(`No hay ningún usuario con el correo «${correoTxt}»`)
-      else if (correoTxt && !ROLES_DIRECTOR.includes(porCorreo.rol)) errores.push(`${porCorreo.nombre} no tiene rol de director (su rol es ${porCorreo.rol})`)
+      else if (correoTxt && !ROLES_DIRECTOR.includes(porCorreo.rol)) errores.push(`${porCorreo.nombre} no puede ser director de un área (su rol es ${porCorreo.rol})`)
       else if (correoTxt && dirTxt && norm(porCorreo.nombre) !== norm(dirTxt)) errores.push(`El nombre «${dirTxt}» y el correo «${correoTxt}» no son de la misma persona (el correo es de ${porCorreo.nombre})`)
       else if (correoTxt) directorId = porCorreo.id
       else {
@@ -104,7 +108,7 @@ export function validarAreas(filasCrudas, { areas = [], usuarios = [] } = {}) {
         else {
           const noDirector = usuarios.find((u) => norm(u.nombre) === norm(dirTxt))
           errores.push(noDirector
-            ? `${noDirector.nombre} existe pero no tiene rol de director (su rol es ${noDirector.rol})`
+            ? `${noDirector.nombre} existe pero no puede ser director de un área (su rol es ${noDirector.rol})`
             : `No hay ningún director llamado «${dirTxt}» (revisa la hoja "Directores válidos")`)
         }
       }
