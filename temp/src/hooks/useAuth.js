@@ -11,7 +11,10 @@ export function useAuth() {
   const cargarPerfil = async (authUserId) => {
     const { data, error } = await supabase
       .from('usuarios')
-      .select('*, area:areas(nombre)')
+      // Solo "*": la app no usa el nombre del área del perfil (usa area_id). Pedirlo con un "join" (areas(nombre)) se
+      // rompe en cuanto existe más de una relación entre "usuarios" y "areas" — por ejemplo areas.director_id — y
+      // entonces nadie puede iniciar sesión, porque el perfil no se logra cargar.
+      .select('*')
       .eq('auth_user_id', authUserId)
       .single()
 
