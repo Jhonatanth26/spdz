@@ -67,5 +67,13 @@ export function useAuth() {
     return error
   }
 
-  return { session, perfil, cargando, iniciarSesion, cerrarSesion, actualizarPerfil, cambiarContrasena }
+  // Guarda la paleta de colores de quien tiene la sesión iniciada. Va en los datos de la propia cuenta (user_metadata), así que
+  // la acompaña a cualquier computador o celular y no hace falta ninguna columna ni ninguna política en la base de datos.
+  const guardarTema = async (tema) => {
+    const { error } = await supabase.auth.updateUser({ data: { tema } })
+    if (error) console.error('No se pudo guardar la paleta de colores:', error.message)
+    return error
+  }
+
+  return { session, perfil, cargando, iniciarSesion, cerrarSesion, actualizarPerfil, cambiarContrasena, guardarTema }
 }

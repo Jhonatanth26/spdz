@@ -11,6 +11,7 @@ import { firmarPDF } from "./lib/firmarPdf";
 import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
 import { unificarArchivosPDF, generarResumenSolicitudPDF } from "./lib/unificarArchivos";
 import { COLUMNAS_EMPLEADOS, validarEmpleados, importarEmpleadosEnLotes } from "./lib/importarEmpleados";
+import { PALETAS, TEMA_ORIGINAL, aplicarTema, sanitizarTema, soportaTema, leerOriginal, estiloDocumento, generarEscala, parametrosDe } from "./lib/tema";
 import { filasExportarAreas, filasDirectoresValidos, filasInstruccionesAreas, validarAreas, registrosParaGuardarAreas } from "./lib/areasExcel";
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
@@ -21,7 +22,7 @@ import {
   Calendar, Award, ArrowLeft, LayoutDashboard, ListChecks, BarChart3,
   DollarSign, PackageCheck, CalendarClock, Boxes, Users, Truck,
   Settings, Target, ClipboardList, Lock, LogOut, History, PenTool, ShieldCheck,
-  Paperclip, Mail, Camera, Timer, AlertTriangle, Info, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive,
+  Paperclip, Mail, Camera, Timer, AlertTriangle, Info, Palette, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive,
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip,
@@ -92,7 +93,8 @@ const UMBRAL_GERENCIA = 100000000;
 const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "caja", "paquete", "hora", "servicio"];
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
-const COLORS = ["#4f46e5", "#f59e0b", "#10b981", "#ef4444", "#0ea5e9", "#a855f7"];
+// el primero es el color de acento: sigue la paleta de cada usuario (el resto son colores de estado y no cambian)
+const COLORS = ["var(--color-indigo-600)", "#f59e0b", "#10b981", "#ef4444", "#0ea5e9", "#a855f7"];
 const ROLES = ["Solicitante", "Jefe de Área", "Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Contabilidad", "Gerencia", "Compras", "Administrador"];
 
 const PASOS = [
@@ -650,7 +652,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 // otro rol (el gerente general tiene rol Gerencia; quien lleva la Dirección Financiera, rol Dirección Financiera)
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
-const VERSION_APP = "directores v4";
+const VERSION_APP = "paleta v1";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -1100,9 +1102,88 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
 --------------------------------------------------------- */
 
 /* ---------------------------------------------------------
+   PALETA DE COLORES (por usuario)
+   Cambia el color de acento de TODA la interfaz para quien la elige. No toca los colores de estado (verde / ámbar / rojo) ni los
+   documentos que genera la app (PDF, orden impresa, correos): esos conservan siempre el estilo original.
+--------------------------------------------------------- */
+function SelectorPaleta({ tema, onElegir, compacto }) {
+  const actual = sanitizarTema(tema) || TEMA_ORIGINAL;
+  const [soportado, setSoportado] = useState(true);
+  useEffect(() => { setSoportado(soportaTema()); }, []);
+  const [colorLibre, setColorLibre] = useState(actual.paleta === "personalizado" ? actual.color : "#0f766e");
+  // color del botón (paso 600) de cada paleta, para dibujar su muestra
+  const muestra = (p) => (p.original ? (leerOriginal()[600] || "#4f46e5") : generarEscala({ h: p.h, s: p.s })[600].oklch);
+  const muestraLibre = () => generarEscala(parametrosDe({ paleta: "personalizado", color: colorLibre }))[600].oklch;
+  return (
+    <div className="space-y-3">
+      <div className={`grid gap-2 ${compacto ? "grid-cols-3" : "grid-cols-3 sm:grid-cols-5"}`}>
+        {PALETAS.map((p) => {
+          const sel = actual.paleta === p.id;
+          return (
+            <button key={p.id} type="button" onClick={() => onElegir({ paleta: p.id })} aria-pressed={sel} title={p.nombre}
+              className={`flex flex-col items-center gap-1 rounded-lg border p-2 text-[11px] ${sel ? "border-slate-700 bg-slate-50 font-semibold text-slate-800" : "border-slate-200 text-slate-600 hover:border-slate-400"}`}>
+              <span className="relative w-8 h-8 rounded-full border border-black/10 flex items-center justify-center" style={{ background: muestra(p) }}>{sel && <CheckCircle2 size={16} className="text-white" />}</span>
+              <span className="leading-tight text-center">{p.nombre}</span>
+            </button>
+          );
+        })}
+      </div>
+      <div className={`flex items-center gap-2 rounded-lg border p-2 ${actual.paleta === "personalizado" ? "border-slate-700 bg-slate-50" : "border-slate-200"}`}>
+        <label className="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer">
+          <input type="color" value={colorLibre} onChange={(e) => { setColorLibre(e.target.value); onElegir({ paleta: "personalizado", color: e.target.value }); }} className="w-8 h-8 rounded border border-slate-200 bg-white p-0.5 cursor-pointer" />
+          <span><b>Personalizado</b>{!compacto && <span className="text-slate-400"> — elige cualquier color; el sistema arma el resto de la paleta</span>}</span>
+        </label>
+        {actual.paleta === "personalizado" && <span className="ml-auto inline-block w-5 h-5 rounded-full border border-black/10 shrink-0" style={{ background: muestraLibre() }} title="Color del botón principal con este color" />}
+      </div>
+      {!soportado && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Esta instalación no permite cambiar la paleta (los estilos no usan variables de color). Avísale al administrador.</div>}
+      {!compacto && (
+        <>
+          <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+            <div className="text-[10px] uppercase tracking-wide text-slate-400">Así se verá</div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button type="button" className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium">Botón principal</button>
+              <button type="button" className="border border-indigo-200 text-indigo-700 bg-indigo-50 rounded-lg px-3 py-1.5 text-xs">Secundario</button>
+              <span className="text-xs text-indigo-600 underline">Enlace</span>
+              <span className="text-[10px] rounded-full px-2 py-0.5 bg-indigo-100 text-indigo-700">Etiqueta</span>
+            </div>
+            <div className="h-2 rounded-full bg-indigo-100"><div className="h-2 w-2/3 rounded-full bg-indigo-500" /></div>
+          </div>
+          <div className="text-[11px] text-slate-400 leading-relaxed">La paleta cambia solo <b>tu</b> pantalla y se guarda en tu cuenta. Los colores de estado (verde, ámbar, rojo) no cambian, y los <b>documentos</b> que genera la app (PDF de órdenes y expedientes, orden impresa, correos) conservan siempre el mismo estilo.</div>
+        </>
+      )}
+      {actual.paleta !== "indigo" && <button type="button" onClick={() => onElegir({ paleta: "indigo" })} className="text-[11px] text-slate-500 underline">Volver a la paleta original</button>}
+    </div>
+  );
+}
+
+// botón de acceso rápido, junto a la campana de notificaciones
+function BotonPaleta({ tema, onElegir }) {
+  const [abierto, setAbierto] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!abierto) return;
+    const fuera = (e) => { if (ref.current && !ref.current.contains(e.target)) setAbierto(false); };
+    document.addEventListener("mousedown", fuera);
+    return () => document.removeEventListener("mousedown", fuera);
+  }, [abierto]);
+  return (
+    <div ref={ref} className="relative z-40">
+      <button type="button" title="Paleta de colores" aria-label="Paleta de colores" onClick={() => setAbierto((v) => !v)} className="bg-white border border-slate-200 rounded-full p-2.5 shadow-sm hover:bg-slate-50"><Palette size={18} className="text-slate-600" /></button>
+      {abierto && (
+        <div className="absolute right-0 mt-2 w-72 bg-white border border-slate-200 rounded-xl shadow-lg p-3 space-y-2">
+          <div className="text-xs font-semibold text-slate-700 flex items-center gap-1.5"><Palette size={13} /> Paleta de colores</div>
+          <SelectorPaleta tema={tema} onElegir={onElegir} compacto />
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+/* ---------------------------------------------------------
    MI PERFIL (firma tipo foto)
 --------------------------------------------------------- */
-function PerfilUsuario({ currentUser, onGuardar, onCambiarContrasena }) {
+function PerfilUsuario({ currentUser, onGuardar, onCambiarContrasena, tema, onElegirTema }) {
   const [preview, setPreview] = useState(currentUser.firmaFotoUrl);
   const [subiendo, setSubiendo] = useState(false);
   const [clave, setClave] = useState("");
@@ -1126,7 +1207,7 @@ function PerfilUsuario({ currentUser, onGuardar, onCambiarContrasena }) {
     if (ruta) setPreview(ruta);
   };
   return (
-    <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-md">
+    <div className="bg-white rounded-xl border border-slate-200 p-6 max-w-lg">
       <div className="flex items-center gap-2 mb-4"><UserCircle size={18} className="text-indigo-600" /><h2 className="text-lg font-semibold text-slate-800">Mi perfil</h2></div>
       <div className="text-sm text-slate-600 mb-1"><b>{currentUser.nombre}</b></div>
       <div className="text-xs text-slate-400 mb-4">{currentUser.cargo} · {currentUser.rol}</div>
@@ -1138,6 +1219,12 @@ function PerfilUsuario({ currentUser, onGuardar, onCambiarContrasena }) {
         </label>
       </div>
       <button onClick={() => onGuardar({ ...currentUser, firmaFotoUrl: preview })} className="mt-4 bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-medium">Guardar perfil</button>
+      {onElegirTema && (
+        <div className="mt-6 pt-5 border-t border-slate-100 space-y-2">
+          <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700"><Palette size={14} /> Paleta de colores</div>
+          <SelectorPaleta tema={tema} onElegir={onElegirTema} />
+        </div>
+      )}
       {onCambiarContrasena && (
         <div className="mt-6 pt-5 border-t border-slate-100 space-y-2">
           <div className="flex items-center gap-1.5 text-sm font-medium text-slate-700"><Lock size={14} /> Cambiar contraseña</div>
@@ -1707,7 +1794,7 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
                 <XAxis type="number" domain={[0, 10]} />
                 <YAxis type="category" dataKey="nombre" width={260} tick={{ fontSize: 10 }} />
                 <Tooltip formatter={(v) => v.toFixed(1)} labelFormatter={(_, p) => p?.[0]?.payload?.textoCompleto || ""} />
-                <Bar dataKey="valor" fill="#4f46e5" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="valor" fill="var(--color-indigo-600)" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -4209,7 +4296,7 @@ function CalificacionSelect({ value, onChange, disabled }) {
         onChange={(e) => onChange(Number(e.target.value))}
         title={value ? `Calificación: ${value}` : "Desliza para calificar"}
         className="flex-1 h-1.5 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed accent-indigo-600"
-        style={{ background: `linear-gradient(to right, #4f46e5 ${value ? pct : 0}%, #e2e8f0 ${value ? pct : 0}%)` }}
+        style={{ background: `linear-gradient(to right, var(--color-indigo-600) ${value ? pct : 0}%, #e2e8f0 ${value ? pct : 0}%)` }}
       />
       <span className={`text-xs font-semibold w-4 text-center shrink-0 ${value ? "text-indigo-600" : "text-slate-300"}`}>{value || "—"}</span>
     </div>
@@ -4592,7 +4679,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
           #orden-imprimible .salto-pagina { page-break-before: always; }
         }
       `}</style>
-    <div id="orden-imprimible" className="bg-white border-2 border-slate-800 p-6 space-y-4 text-sm">
+    <div id="orden-imprimible" style={estiloDocumento()} className="bg-white border-2 border-slate-800 p-6 space-y-4 text-sm">
       {/* ENCABEZADO ESTILO CARTA MEMBRETADA */}
       <div className="flex justify-between items-start gap-4 pb-2">
         <div className="flex items-start gap-3">
@@ -6641,7 +6728,29 @@ export default function App() {
   }, [exportando]);
 
   // --- Sesión real con Supabase Auth ---
-  const { perfil: perfilAuth, cargando: cargandoSesion, iniciarSesion, cerrarSesion, actualizarPerfil, cambiarContrasena } = useAuth();
+  const { session, perfil: perfilAuth, cargando: cargandoSesion, iniciarSesion, cerrarSesion, actualizarPerfil, cambiarContrasena, guardarTema } = useAuth();
+  // ---- paleta de colores de ESTA persona: viene de su cuenta (y de una copia en este navegador); se aplica a toda la interfaz ----
+  const idUsuarioSesion = session?.user?.id || null;
+  const temaDeLaCuenta = sanitizarTema(session?.user?.user_metadata?.tema);
+  const leerTemaLocal = (id) => { try { return sanitizarTema(JSON.parse(localStorage.getItem(`tema:${id}`) || "null")); } catch { return null; } };
+  const [temaElegido, setTemaElegido] = useState(null); // lo que la persona eligió en esta sesión (se muestra al instante)
+  const temaActual = temaElegido || temaDeLaCuenta || (idUsuarioSesion ? leerTemaLocal(idUsuarioSesion) : null) || TEMA_ORIGINAL;
+  const claveTema = JSON.stringify(temaActual) + "|" + (idUsuarioSesion || "");
+  useEffect(() => { aplicarTema(idUsuarioSesion ? temaActual : null); }, [claveTema]); // eslint-disable-line react-hooks/exhaustive-deps
+  const temporizadorTema = useRef(null);
+  useEffect(() => { setTemaElegido(null); clearTimeout(temporizadorTema.current); }, [idUsuarioSesion]); // otra persona: se parte de SU paleta
+  const elegirTema = (t) => {
+    const nuevo = sanitizarTema(t);
+    if (!nuevo) return;
+    setTemaElegido(nuevo); // se ve al instante
+    if (idUsuarioSesion) { try { localStorage.setItem(`tema:${idUsuarioSesion}`, JSON.stringify(nuevo)); } catch { /* sin almacenamiento local */ } }
+    clearTimeout(temporizadorTema.current); // al escoger un color con el selector salen muchos cambios seguidos: se guarda el último
+    temporizadorTema.current = setTimeout(async () => {
+      const error = guardarTema ? await guardarTema(nuevo) : new Error("sin guardarTema");
+      if (error) mostrarToast("Tu paleta se aplicó, pero no se pudo guardar en tu cuenta: solo se recordará en este navegador.", "alerta", { duracion: 7000 });
+      else mostrarToast("Paleta guardada en tu cuenta", "ok");
+    }, 700);
+  };
   const { notificaciones: notisUsuario, cargando: cargandoNotis, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(perfilAuth?.id);
 
   // ---- avisos globales ----
@@ -6813,7 +6922,8 @@ export default function App() {
       </aside>
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        <div className="flex justify-end px-4 pt-3 shrink-0">
+        <div className="flex justify-end items-center gap-2 px-4 pt-3 shrink-0">
+          <BotonPaleta tema={temaActual} onElegir={elegirTema} />
           <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
         </div>
 
@@ -6821,7 +6931,7 @@ export default function App() {
         {creando ? (
           <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
-          <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} onCambiarContrasena={cambiarContrasena} />
+          <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} onCambiarContrasena={cambiarContrasena} tema={temaActual} onElegirTema={elegirTema} />
         ) : solicitudAbierta ? (
           <SolicitudDetalle solicitudes={solicitudes} guardarItemCatalogo={guardarItemCatalogo} solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
         ) : tab === "dashboard" ? (
