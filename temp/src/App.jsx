@@ -652,7 +652,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 // otro rol (el gerente general tiene rol Gerencia; quien lleva la Dirección Financiera, rol Dirección Financiera)
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
-const VERSION_APP = "paleta v1";
+const VERSION_APP = "paleta v2";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -3854,7 +3854,7 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
   );
 }
 
-function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmados, abierto, onToggle }) {
+function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmados, onIrAccion, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
   const ab = useAbiertosItems(solicitud.items);
   const sinIva = solicitud.tipo === "servicio";
@@ -3945,7 +3945,12 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmad
             <div>
               <div className="font-semibold text-xs">Todos los ítems tienen su plan de pagos confirmado</div>
               {sig.accion
-                ? <div>Siguiente paso: <b>«{sig.accion}»</b> — {sig.yo ? "pulsa ese botón en la parte de arriba de la solicitud." : `le corresponde a ${sig.responsable}.`}</div>
+                ? (
+                  <div>
+                    Siguiente paso: <b>«{sig.accion}»</b> — {sig.yo ? "ese botón está al final de esta pantalla." : `le corresponde a ${sig.responsable}.`}
+                    {sig.yo && onIrAccion && <button type="button" onClick={onIrAccion} className="ml-2 inline-flex items-center gap-1 bg-emerald-600 text-white px-2 py-0.5 rounded-md font-medium">Ir al botón ↓</button>}
+                  </div>
+                )
                 : <div>Las fechas y los montos confirmados ya aparecen en el Calendario de pagos.</div>}
             </div>
           </div>
@@ -5219,6 +5224,16 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     mostrarToast(`Solicitud reabierta a Revisión y cotizaciones por cambio en la orden de ${ordenCambiada.proveedorNombre}`, "alerta", { duracion: 7000 });
   };
 
+  // El botón de la acción principal ("Aprobar como...", "Enviar a...") está al FINAL de la solicitud, debajo de las firmas y del historial.
+  // Esto lleva hasta ahí con un desplazamiento suave y lo resalta unos segundos, para que "el siguiente paso" no haya que buscarlo.
+  const [resaltarAccion, setResaltarAccion] = useState(false);
+  const irAlBotonPrincipal = () => {
+    const destino = typeof document !== "undefined" ? (document.getElementById("boton-accion-principal") || document.getElementById("zona-accion-principal")) : null;
+    if (!destino) return;
+    destino.scrollIntoView?.({ behavior: "smooth", block: "center" });
+    setResaltarAccion(true);
+    setTimeout(() => setResaltarAccion(false), 4500);
+  };
   // ya están confirmados los planes de pago de TODOS los ítems: se guarda, se avisa en pantalla cuál es el siguiente paso y, si le toca a
   // otra persona, se le notifica a quien debe hacerlo
   const alConfirmarTodosLosPlanes = (items) => {
@@ -5228,7 +5243,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       ? `Todos los planes de pago de ${solicitud.folio} quedaron confirmados por ${currentUser.nombre}. Siguiente paso: «${sig.accion}» — le corresponde a ${sig.responsable}.`
       : `Todos los planes de pago de ${solicitud.folio} quedaron confirmados por ${currentUser.nombre}.`;
     patch({ items, notificaciones: notificar(texto) });
-    mostrarToast(sig.accion ? `✓ Todos los ítems confirmados · Siguiente paso: «${sig.accion}»${sig.yo ? " (en la parte de arriba)" : ` — le corresponde a ${sig.responsable}`}` : "✓ Todos los ítems confirmados", "ok", { duracion: 9000 });
+    mostrarToast(
+      sig.accion ? `✓ Todos los ítems confirmados · Siguiente paso: «${sig.accion}»${sig.yo ? " — pulsa aquí para ir al botón (está al final de la solicitud)" : ` — le corresponde a ${sig.responsable}`}` : "✓ Todos los ítems confirmados",
+      "ok",
+      { duracion: 12000, onClick: sig.accion && sig.yo ? irAlBotonPrincipal : undefined }
+    );
     if (sig.accion && !sig.yo && sig.rol) usuarios.filter((u) => u.rol === sig.rol).forEach((u) => crearNotificacion?.(u.id, `Los planes de pago de ${solicitud.folio} quedaron confirmados: ya puedes «${sig.accion}».`, solicitud.id));
   };
 
@@ -5643,7 +5662,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
-        <PagosPorItem abierto={fases.abierto("pagos")} onToggle={() => fases.alternar("pagos")} solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} onTodosConfirmados={alConfirmarTodosLosPlanes} />
+        <PagosPorItem abierto={fases.abierto("pagos")} onToggle={() => fases.alternar("pagos")} solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} onTodosConfirmados={alConfirmarTodosLosPlanes} onIrAccion={irAlBotonPrincipal} />
       )}
 
       <OcEnviadaPanel abierto={fases.abierto("orden")} onToggle={() => fases.alternar("orden")} solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} area={area} solicitante={solicitante} usuarios={usuarios} crearNotificacion={crearNotificacion} onGuardar={(oc) => patch({ ocEnviada: oc })} />
@@ -5703,7 +5722,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       {solicitud.status !== "completada" && solicitud.status !== "rechazada" && autorizado && (
-        <div className="space-y-2">
+        <div id="zona-accion-principal" className={`space-y-2 rounded-xl p-2 -m-2 transition-shadow ${resaltarAccion ? "ring-4 ring-indigo-300 bg-indigo-50/60" : ""}`}>
+          {solicitud.status === "aprobacion_financiera" && planesTodosConfirmados(solicitud) && <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center gap-1.5"><CheckCircle2 size={14} /> Los planes de pago de todos los ítems están confirmados: ya puedes continuar.</div>}
           {solicitud.status === "aprobacion_director" && (
             <div>
               <label className="text-xs font-medium text-slate-500">Prioridad</label>
@@ -5746,7 +5766,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           )}
           <div className="flex gap-2 justify-end">
             <button onClick={() => setRechazando((v) => !v)} className="px-4 py-2 rounded-lg text-sm text-rose-600 border border-rose-200 flex items-center gap-1"><XCircle size={15} /> Rechazar</button>
-            <button onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !planesTodosConfirmados(solicitud)) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
+            <button id="boton-accion-principal" onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !planesTodosConfirmados(solicitud)) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
           </div>
         </div>
       )}
