@@ -21,7 +21,7 @@ import {
   Calendar, Award, ArrowLeft, LayoutDashboard, ListChecks, BarChart3,
   DollarSign, PackageCheck, CalendarClock, Boxes, Users, Truck,
   Settings, Target, ClipboardList, Lock, LogOut, History, PenTool, ShieldCheck,
-  Paperclip, Mail, Camera, Timer, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive,
+  Paperclip, Mail, Camera, Timer, AlertTriangle, Info, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive,
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip,
@@ -113,9 +113,19 @@ const PASOS = [
 // pasos que realmente existen hoy (sin el paso del jefe de área, que ya no aprueba nadie)
 const PASOS_ACTIVOS = PASOS.filter((p) => !p.oculto);
 // una solicitud que quedó esperando al jefe de área (flujo anterior) pasa a esperar al director
-// una solicitud que quedó esperando al jefe de área (flujo anterior) pasa a esperar al director; una que quedó en el paso
-// retirado del gerente general ya tenía la aprobación del director, así que sigue a Compras
-const normalizarEstadoLegado = (s) => (s.status === "aprobacion_jefe" ? { ...s, status: "aprobacion_director" } : s.status === "aprobacion_gerente" ? { ...s, status: "cotizando" } : s);
+// Estados que ya no existen o quedaron mal, llevados al paso que realmente les corresponde:
+//  - esperando al jefe de área (flujo anterior): pasa a esperar al director, que es quien aprueba;
+//  - esperando al director, pero con la firma del director ya puesta: ya fue aprobada (p. ej. una solicitud que Compras devolvió y
+//    que cayó de nuevo en la primera aprobación) — sigue con Compras, no se le pide al director que la apruebe otra vez;
+//  - en el paso retirado del gerente general: ya tenía la aprobación del director, así que sigue a Compras.
+const normalizarEstadoLegado = (s) => {
+  if (s.status === "aprobacion_gerente") return { ...s, status: "cotizando" };
+  if (s.status === "aprobacion_jefe" || s.status === "aprobacion_director") {
+    if (s.firmas?.director?.aprobado === true) return { ...s, status: "cotizando" };
+    if (s.status === "aprobacion_jefe") return { ...s, status: "aprobacion_director" };
+  }
+  return s;
+};
 // etapas en las que la solicitud todavía NO compromete el presupuesto del área (falta la aprobación del director)
 const ESTADOS_SIN_COMPROMISO = ["solicitud", "aprobacion_jefe", "aprobacion_director", "rechazada"];
 
@@ -469,6 +479,40 @@ function planSugeridoItem(s, it) {
 }
 function planConfirmadoItem(s, it) { return it.pagosConfirmados ?? (s.items.length === 1 ? !!s.pagosConfirmados : false); }
 function planesTodosConfirmados(s) { return s.items.every((it) => planConfirmadoItem(s, it)); }
+
+// ¿el proveedor del ítem exige pago anticipado? (el elegido; si todavía no hay elegido, cualquiera de los cotizados)
+function exigeAnticipoPago(it) {
+  const sel = it.cotizacionSeleccionada != null ? it.cotizaciones?.[it.cotizacionSeleccionada] : null;
+  return sel ? !!sel.anticipoObligatorio : (it.cotizaciones || []).some((c) => c.anticipoObligatorio);
+}
+// con pago anticipado obligatorio NO aplica el "pago único": un plan que venía como pago único se reparte en anticipo y saldo
+function sinPagoUnico(pagos, total, anticipoExigido) {
+  if (pagos?.tipoPago !== "contado") return pagos;
+  const anticipo = anticipoExigido > 0 ? Math.min(anticipoExigido, total) : "";
+  return { ...planPagosVacio(), ...pagos, tipoPago: "plan", pagoUnico: { valor: "", fecha: "" }, anticipo: { valor: anticipo, fecha: pagos.pagoUnico?.fecha || "" }, final: { valor: anticipo === "" ? "" : Math.max(0, total - anticipo), fecha: "" } };
+}
+// ¿cuadra el plan de pagos con el total del ítem? Estado y números listos para mostrar
+//   sin_plan: nada programado · cuadra · falta: se programó menos del total · sobra: se programó más del total
+function estadoCuadre(pagos, total) {
+  const hayPlan = planTieneValores(pagos);
+  const programado = hayPlan ? totalPagado(pagos) : 0;
+  const diferencia = Math.round((total - programado) * 100) / 100;
+  const tramos = hayPlan ? tramosDePago(pagos) : [];
+  let estado = "sin_plan";
+  if (hayPlan) estado = Math.abs(diferencia) <= 0.5 ? "cuadra" : diferencia > 0 ? "falta" : "sobra";
+  return { estado, hayPlan, programado, diferencia, total, porcentaje: total > 0 ? Math.round((programado / total) * 100) : 0, tramos, sinFecha: tramos.filter((t) => !t.fecha).map((t) => t.tipo) };
+}
+// qué sigue cuando ya están confirmados los planes de pago de todos los ítems, según el paso en que está la solicitud
+function siguientePasoPlanes(solicitud, currentUser) {
+  const total = totalSolicitud(solicitud);
+  switch (solicitud.status) {
+    case "aprobacion_director": return { accion: accionLabel(solicitud, total), rol: null, responsable: "el director del área", yo: puedeAprobarDirector(currentUser, solicitud) };
+    case "cotizando": case "comparativo": case "orden": return { accion: accionLabel(solicitud, total), rol: "Compras", responsable: "Compras", yo: puedeGestionarCotizaciones(currentUser) };
+    case "aprobacion_financiera": return { accion: accionLabel(solicitud, total), rol: "Dirección Financiera", responsable: "Dirección Financiera", yo: puedeAprobarFinanciera(currentUser) };
+    case "aprobacion_gerencia": return { accion: accionLabel(solicitud, total), rol: "Gerencia", responsable: "Gerencia", yo: puedeAprobarGerencia(currentUser) };
+    default: return { accion: null, rol: null, responsable: null, yo: false }; // enviada, recepción, completada: no hay un paso que dependa de esto
+  }
+}
 // tramos de pago de los ítems con plan confirmado (marcando de qué ítem viene cada uno cuando hay varios)
 function tramosDePagoSolicitud(s) {
   return s.items.flatMap((it) => (planConfirmadoItem(s, it) ? tramosDePago(planOficialItem(s, it)).map((t) => ({ ...t, itemNombre: s.items.length > 1 ? it.nombre : undefined })) : []));
@@ -621,11 +665,23 @@ const puedeAprobarGerencia = (u) => tienePermiso(u.rol, "aprobar_gerencia");
 const puedeReabrir = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "reabrir_solicitudes");
 // determina en qué paso quedó marcada como rechazada, para poder reabrirla justo ahí
 function pasoDelRechazo(solicitud) {
+  // paso donde se rechazó: lo guarda el propio rechazo (pasoOrigen); en rechazos anteriores se deduce del historial (el estado
+  // inmediatamente anterior a la última "rechazada")
+  const hist = solicitud.historialEstados || [];
+  let origen = solicitud.ultimoRechazo?.pasoOrigen || null;
+  if (!origen) { const i = hist.map((h) => h.status).lastIndexOf("rechazada"); if (i > 0) origen = hist[i - 1].status; }
+  if (origen === "aprobacion_jefe") origen = "aprobacion_director"; // el paso del jefe de área ya no existe
+  // una firma marcada "no aprobado" dice quién rechazó: ese paso se reabre y esa firma se reinicia
   if (solicitud.firmas?.gerencia?.aprobado === false) return { status: "aprobacion_gerencia", campo: "gerencia" };
   if (solicitud.firmas?.financiera?.aprobado === false) return { status: "aprobacion_financiera", campo: "financiera" };
   if (solicitud.firmas?.director?.aprobado === false) return { status: "aprobacion_director", campo: "director" };
   if (solicitud.firmas?.jefe?.aprobado === false) return { status: "aprobacion_director", campo: "jefe" }; // rechazo hecho en el flujo anterior
-  if (solicitud.revisionCompras?.estado === "rechazada") return { status: "cotizando", campo: null, revision: true };
+  // rechazó Compras (en su revisión, o en cotización / comparativo): vuelve a Compras. Las aprobaciones que ya tenía NO se repiten.
+  if (solicitud.revisionCompras?.estado === "rechazada" || origen === "cotizando" || origen === "comparativo") return { status: "cotizando", campo: null, revision: true };
+  // rechazada en otro paso conocido (orden, enviada, recepción...): se reabre en ese mismo paso
+  if (origen && PASOS.some((p) => p.key === origen) && !["solicitud", "rechazada", "completada"].includes(origen)) return { status: origen, campo: null };
+  // sin datos de dónde se rechazó: si ya había pasado la aprobación del director, vuelve a Compras; si no, al director
+  if (solicitud.firmas?.director?.aprobado === true || solicitud.revisionCompras?.estado === "aprobada") return { status: "cotizando", campo: null, revision: true };
   return { status: "aprobacion_director", campo: null };
 }
 const puedeVerCatalogos = (u) => tienePermiso(u.rol, "ver_catalogos");
@@ -2642,7 +2698,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       const restanteIt = totalIt - totalPagado(ps);
       if (Math.abs(restanteIt) > 0.5) {
         abItems.abrir(items[k].id);
-        alert(`Ítem ${k + 1}: el plan de pagos sugerido ${restanteIt > 0 ? `no cubre el total (faltan ${fmt(restanteIt)})` : `supera el total en ${fmt(-restanteIt)}`}. Ajústalo o déjalo vacío si no quieres sugerir uno.`);
+        alert(`Ítem ${k + 1}: el plan de pagos sugerido ${restanteIt > 0 ? `no cubre el total (faltan ${fmt(restanteIt)})` : `supera el total en ${fmt(-restanteIt)}`} — el plan suma ${fmt(totalPagado(ps))} y el ítem vale ${fmt(totalPagado(ps) + restanteIt)}. ${restanteIt > 0 ? `Súmale ${fmt(restanteIt)} al pago final` : `Réstale ${fmt(-restanteIt)} a alguno de los pagos`} (o usa el botón del aviso del ítem), o déjalo vacío si no quieres sugerir uno.`);
         return;
       }
       const faltaFechaIt = ps.tipoPago === "contado" ? !ps.pagoUnico.fecha : (!ps.anticipo.fecha || !ps.final.fecha || (ps.intermedio.activo && !ps.intermedio.fecha));
@@ -2791,7 +2847,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" sinIva={tipo === "servicio"} />
             <div className="border-t border-slate-200/70 pt-1.5">
               {totalItemConAiu(it, tipo === "servicio") > 0
-                ? <PlanPagoCotizacion pagos={it.pagosSugeridos} total={totalItemConAiu(it, tipo === "servicio")} onChange={(pg) => updateItem(it.id, "pagosSugeridos", pg)} etiqueta="+ Sugerir plan de pagos para este ítem (opcional — pasa como valor inicial a Compras y Dirección Financiera)" titulo="Plan de pagos sugerido de este ítem" />
+                ? <PlanPagoCotizacion sinPagoUnico={exigeAnticipoPago(it)} pagos={it.pagosSugeridos} total={totalItemConAiu(it, tipo === "servicio")} onChange={(pg) => updateItem(it.id, "pagosSugeridos", pg)} etiqueta="+ Sugerir plan de pagos para este ítem (opcional — pasa como valor inicial a Compras y Dirección Financiera)" titulo="Plan de pagos sugerido de este ítem" />
                 : <div className="text-[11px] text-amber-600">Pon un precio estimado para poder sugerir un plan de pagos.</div>}
             </div>
           </div>
@@ -2874,12 +2930,80 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
 }
 
 /* ---------------------------------------------------------
+   PANEL DE CUADRE DEL PLAN DE PAGOS
+   Dice, sin tener que hacer cuentas, si lo programado cuadra con lo que vale el ítem: un titular de color (verde / ámbar / rojo),
+   una frase en lenguaje claro con la cifra exacta, una barra de avance, el desglose pago por pago y qué hacer para arreglarlo.
+--------------------------------------------------------- */
+const TONO_CUADRE = {
+  cuadra: { caja: "border-emerald-200 bg-emerald-50", titulo: "text-emerald-700", barra: "bg-emerald-500" },
+  falta: { caja: "border-amber-300 bg-amber-50", titulo: "text-amber-700", barra: "bg-amber-500" },
+  sobra: { caja: "border-rose-300 bg-rose-50", titulo: "text-rose-700", barra: "bg-rose-500" },
+  sin_plan: { caja: "border-slate-200 bg-slate-50", titulo: "text-slate-600", barra: "bg-slate-300" },
+};
+function PanelCuadre({ pagos, total, editable, confirmado, onAjustar, compacto }) {
+  const c = estadoCuadre(pagos, total);
+  const t = TONO_CUADRE[c.estado];
+  const dif = Math.abs(c.diferencia);
+  const Icono = c.estado === "cuadra" ? CheckCircle2 : c.estado === "sin_plan" ? Info : c.estado === "sobra" ? XCircle : AlertTriangle;
+  const titulo = c.estado === "cuadra" ? "✓ Cuadra con el total"
+    : c.estado === "falta" ? `${confirmado ? "El plan confirmado ya no cuadra" : "No cuadra"}: faltan ${fmt(dif)} por programar`
+    : c.estado === "sobra" ? `${confirmado ? "El plan confirmado ya no cuadra" : "No cuadra"}: te pasaste por ${fmt(dif)}`
+    : "Todavía no hay plan de pagos";
+  const explicacion = c.estado === "cuadra" ? `Lo programado suma exactamente ${fmt(total)}, que es lo que vale el ítem.`
+    : c.estado === "falta" ? `El plan suma ${fmt(c.programado)} y el ítem vale ${fmt(total)}. Agrega ${fmt(dif)} al pago final (o repártelos entre los pagos) para completarlo.`
+    : c.estado === "sobra" ? `El plan suma ${fmt(c.programado)} pero el ítem solo vale ${fmt(total)}. Réstale ${fmt(dif)} a alguno de los pagos.`
+    : "Define cuánto y cuándo se paga este ítem.";
+  // arreglo en un clic: la diferencia se suma (o resta) al pago final
+  const finalNuevo = (parseFloat(pagos?.final?.valor) || 0) + c.diferencia;
+  const puedeAjustar = editable && pagos?.tipoPago !== "contado" && (c.estado === "falta" || c.estado === "sobra") && finalNuevo >= 0;
+  return (
+    <div className={`rounded-lg border p-2.5 space-y-2 ${t.caja}`}>
+      <div className="flex items-start gap-2">
+        <Icono size={16} className={`shrink-0 mt-0.5 ${t.titulo}`} />
+        <div className="min-w-0">
+          <div className={`text-xs font-semibold ${t.titulo}`}>{titulo}</div>
+          <div className="text-[11px] text-slate-600">{explicacion}</div>
+          {confirmado && c.estado !== "cuadra" && c.estado !== "sin_plan" && <div className="text-[11px] text-rose-700 mt-0.5">El total del ítem cambió después de confirmar (por ejemplo, al ajustar el AIU o el precio). Pulsa «Editar de nuevo», corrige y vuelve a confirmar.</div>}
+        </div>
+      </div>
+      {c.hayPlan && (
+        <>
+          <div>
+            <div className="h-2 rounded-full bg-white/80 border border-slate-200 overflow-hidden"><div className={`h-full ${t.barra}`} style={{ width: `${Math.min(100, c.porcentaje)}%` }} /></div>
+            <div className="flex justify-between text-[10px] text-slate-500 mt-0.5"><span>Programado {fmt(c.programado)} ({c.porcentaje}%)</span><span>Valor del ítem {fmt(total)}</span></div>
+          </div>
+          {!compacto && (
+            <table className="w-full text-[11px]">
+              <tbody>
+                {c.tramos.filter((tr) => parseFloat(tr.valor) > 0 || !tr.fecha).map((tr, i) => (
+                  <tr key={i} className="border-t border-slate-200/70">
+                    <td className="py-0.5 text-slate-600">{tr.tipo}</td>
+                    <td className="py-0.5 text-right font-medium text-slate-700">{fmt(parseFloat(tr.valor) || 0)}</td>
+                    <td className={`py-0.5 pl-3 text-right ${tr.fecha ? "text-slate-500" : "text-rose-600 font-medium"}`}>{tr.fecha || "sin fecha"}</td>
+                  </tr>
+                ))}
+                <tr className="border-t border-slate-300"><td className="py-0.5 text-slate-600">Suma programada</td><td className="py-0.5 text-right font-semibold text-slate-700">{fmt(c.programado)}</td><td /></tr>
+                <tr><td className="py-0.5 text-slate-600">Valor del ítem</td><td className="py-0.5 text-right font-semibold text-slate-700">{fmt(total)}</td><td /></tr>
+                <tr><td className={`py-0.5 font-semibold ${t.titulo}`}>{c.estado === "cuadra" ? "Diferencia" : c.estado === "falta" ? "Falta" : "Sobra"}</td><td className={`py-0.5 text-right font-bold ${t.titulo}`}>{fmt(dif)}</td><td /></tr>
+              </tbody>
+            </table>
+          )}
+          {c.sinFecha.length > 0 && <div className="text-[11px] text-rose-700 flex items-center gap-1"><AlertTriangle size={12} /> Falta la fecha de: <b>{c.sinFecha.join(", ")}</b>.{editable ? " No se puede confirmar sin fechas." : ""}</div>}
+        </>
+      )}
+      {puedeAjustar && <button type="button" onClick={() => onAjustar({ ...pagos, final: { ...pagos.final, valor: finalNuevo } })} className="text-[11px] bg-white border border-slate-300 hover:border-indigo-400 text-slate-700 px-2 py-1 rounded-md font-medium">{c.estado === "falta" ? "Sumar lo que falta" : "Restar lo que sobra"} al pago final → quedaría en {fmt(finalNuevo)}</button>}
+      {editable && !puedeAjustar && c.estado === "sobra" && pagos?.tipoPago !== "contado" && finalNuevo < 0 && <div className="text-[11px] text-rose-700">El pago final no alcanza para absorber el exceso: reduce el anticipo o el pago intermedio.</div>}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------
    COTIZACIONES Y COMPARATIVO
 --------------------------------------------------------- */
 // plan de pagos opcional propio de una cotización/proveedor específico — cubre tanto "por cotización"
 // como "por ítem" (ya que cada cotización pertenece a un ítem). Si no se activa, no aplica nada
 // especial: se sigue usando el plan general de la solicitud como siempre.
-function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo }) {
+function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo, sinPagoUnico: sinUnico }) {
   const [abierto, setAbierto] = useState(!!pagos);
   const p = { ...planPagosVacio(), ...pagos };
   const restante = total - totalPagado(p);
@@ -2887,7 +3011,7 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo }) {
 
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) { const error = validarOrdenFechas(p, campo, val); if (error) { alert(error); return; } }
-    onChange({ ...p, [campo]: { ...p[campo], [sub]: val } });
+    onChange({ ...p, ...(sinUnico && p.tipoPago === "contado" ? { tipoPago: "plan" } : {}), [campo]: { ...p[campo], [sub]: val } });
   };
   const setTipoPago = (tipo) => onChange({ ...p, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...p.pagoUnico, valor: total } : p.pagoUnico });
 
@@ -2901,11 +3025,15 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo }) {
         <span className="text-[11px] font-medium text-slate-600">{titulo || "Plan de pagos de este proveedor"}</span>
         <button type="button" onClick={() => { onChange(null); setAbierto(false); }} className="text-[10px] text-slate-400 hover:text-rose-500">Quitar</button>
       </div>
-      <div className="flex gap-1.5">
-        <button type="button" onClick={() => setTipoPago("plan")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por etapas</button>
-        <button type="button" onClick={() => setTipoPago("contado")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único</button>
-      </div>
-      {p.tipoPago === "contado" ? (
+      {sinUnico
+        ? <div className="text-[10px] text-amber-700 flex items-center gap-1"><Timer size={11} /> Pago anticipado obligatorio: se programa por etapas (anticipo y saldo).</div>
+        : (
+          <div className="flex gap-1.5">
+            <button type="button" onClick={() => setTipoPago("plan")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por etapas</button>
+            <button type="button" onClick={() => setTipoPago("contado")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único</button>
+          </div>
+        )}
+      {p.tipoPago === "contado" && !sinUnico ? (
         <div className="flex gap-2 items-center">
           <span className="text-[10px] text-slate-500">Valor (= total): {fmt(total)}</span>
           <InputFecha value={p.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="border border-slate-200 rounded-md px-2 py-1 text-xs" />
@@ -2917,11 +3045,7 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo }) {
           <div><InputMiles placeholder="Final" value={p.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px] mb-1" /><InputFecha value={p.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-1.5 py-1 text-[11px]" /></div>
         </div>
       )}
-      {totalPagado(p) > 0 && (
-        <div className={`text-[10px] ${Math.abs(restante) > 0.5 ? "text-amber-600" : "text-emerald-600"}`}>
-          {Math.abs(restante) > 0.5 ? `Falta cuadrar: ${fmt(Math.abs(restante))}` : "✓ Cuadra con el total"}
-        </div>
-      )}
+      {totalPagado(p) > 0 && <PanelCuadre pagos={p} total={total} editable compacto onAjustar={onChange} />}
     </div>
   );
 }
@@ -3137,7 +3261,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
               const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
               const totalCotizacion = d.subtotal + admC + utilC + imprevC + utilC * 0.19;
-              return <PlanPagoCotizacion pagos={c.pagos} total={totalCotizacion} onChange={(pagos) => update(i, "pagos", pagos)} />;
+              return <PlanPagoCotizacion sinPagoUnico={!!c.anticipoObligatorio} pagos={c.pagos} total={totalCotizacion} onChange={(pagos) => update(i, "pagos", pagos)} />;
             })()}
 
             <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -3276,7 +3400,7 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
         <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-slate-600 bg-indigo-50/30">
           <span className="font-medium">Plan de pagos propio de {nombreProv(elegida)}: </span>
           {elegida.pagos.tipoPago === "contado"
-            ? `Pago único ${fmt(elegida.pagos.pagoUnico?.valor)} — ${elegida.pagos.pagoUnico?.fecha || "sin fecha"}`
+            ? `${elegida.anticipoObligatorio ? "Pago anticipado (antes de despachar)" : "Pago único"} ${fmt(elegida.pagos.pagoUnico?.valor)} — ${elegida.pagos.pagoUnico?.fecha || "sin fecha"}`
             : `Anticipo ${fmt(elegida.pagos.anticipo?.valor)} (${elegida.pagos.anticipo?.fecha || "sin fecha"})${elegida.pagos.intermedio?.activo ? `, Intermedio ${fmt(elegida.pagos.intermedio.valor)} (${elegida.pagos.intermedio.fecha || "sin fecha"})` : ""}, Final ${fmt(elegida.pagos.final?.valor)} (${elegida.pagos.final?.fecha || "sin fecha"})`}
         </div>
       )}
@@ -3521,9 +3645,11 @@ function anticipoObligatorioDe(it) {
 }
 function planInicialItem(s, it, totalItem) {
   const hayOficial = planTieneValores(it.pagos) || (s.items.length === 1 && planTieneValores(s.pagos));
-  if (hayOficial) return planOficialItem(s, it);
+  // si el proveedor exige pago anticipado no aplica el "pago único" (en un plan ya confirmado no se toca nada)
+  const sinUnico = (plan) => (exigeAnticipoPago(it) && !planConfirmadoItem(s, it) ? sinPagoUnico(plan, totalItem, anticipoObligatorioDe(it)) : plan);
+  if (hayOficial) return sinUnico(planOficialItem(s, it));
   const sug = planSugeridoItem(s, it);
-  if (planTieneValores(sug)) return reescalarPlanPago(sug, totalItem);
+  if (planTieneValores(sug)) return sinUnico(reescalarPlanPago(sug, totalItem));
   // sin ningún plan todavía: si el proveedor exige un anticipo con valor, se arma el plan solo —
   // anticipo = lo que el proveedor exige, final = el resto del total (las fechas las sigue poniendo quien edite)
   const anticipoExigido = anticipoObligatorioDe(it);
@@ -3553,10 +3679,11 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
   const anticipoExigido = anticipoObligatorioDe(item);
   // si lo que queda guardado como anticipo es menor a lo que el proveedor exige, se avisa (no bloquea, pero debe verse)
   const anticipoInsuficiente = cotAnticipo && anticipoExigido > 0 && (parseFloat(pagos.anticipo?.valor) || 0) < anticipoExigido - 0.5;
+  const cuadre = estadoCuadre(pagos, totalItem);
 
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) { const error = validarOrdenFechas(pagos, campo, val); if (error) { alert(error); return; } }
-    guardar({ ...pagos, [campo]: { ...pagos[campo], [sub]: val } });
+    guardar({ ...pagos, ...(cotAnticipo && pagos.tipoPago === "contado" ? { tipoPago: "plan" } : {}), [campo]: { ...pagos[campo], [sub]: val } });
   };
   const setTipoPago = (tipo) => guardar({ ...pagos, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...pagos.pagoUnico, valor: totalItem } : pagos.pagoUnico });
 
@@ -3571,8 +3698,8 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
 
   const confirmar = () => {
     if (!hayPlan) { alert("Este ítem todavía no tiene plan de pagos."); return; }
-    if (Math.abs(restante) > 0.5) { alert(restante > 0 ? `Faltan ${fmt(restante)} por programar en este ítem.` : `El plan supera el total del ítem en ${fmt(-restante)}.`); return; }
-    if (faltaFecha) { alert("Falta poner la fecha de uno o más pagos de este ítem."); return; }
+    if (Math.abs(restante) > 0.5) { alert(restante > 0 ? `No se puede confirmar «${item.nombre}»: faltan ${fmt(restante)} por programar (el plan suma ${fmt(pagado)} y el ítem vale ${fmt(totalItem)}). Súmalos al pago final con el botón «Sumar lo que falta» o repártelos entre los pagos.` : `No se puede confirmar «${item.nombre}»: el plan se pasa por ${fmt(-restante)} (suma ${fmt(pagado)} y el ítem solo vale ${fmt(totalItem)}). Réstalos de alguno de los pagos.`); return; }
+    if (faltaFecha) { alert(`No se puede confirmar «${item.nombre}»: falta la fecha de ${cuadre.sinFecha.join(", ") || "uno o más pagos"}.`); return; }
     onConfirmar(pagos);
   };
 
@@ -3591,9 +3718,10 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
             </span>
           )}
           {anticipoInsuficiente && <Badge tone="red">Anticipo insuficiente — faltan {fmt(anticipoExigido - (parseFloat(pagos.anticipo?.valor) || 0))}</Badge>}
+          {cuadre.hayPlan && (cuadre.estado === "falta" || cuadre.estado === "sobra") && <Badge tone={cuadre.estado === "sobra" ? "red" : "amber"}>No cuadra · {cuadre.estado === "sobra" ? "sobran" : "faltan"} {fmt(Math.abs(cuadre.diferencia))}</Badge>}
           <span className="text-xs text-slate-500">{fmt(totalItem)}</span>
           {confirmado
-            ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado{item.pagosConfirmadosPor ? ` por ${item.pagosConfirmadosPor.nombre}` : ""}</Badge>
+            ? <Badge tone={descuadrado ? "red" : "green"}>Confirmado{descuadrado ? " — ya no cuadra" : ""}{item.pagosConfirmadosPor ? ` por ${item.pagosConfirmadosPor.nombre}` : ""}</Badge>
             : <Badge tone={opcional ? "slate" : "amber"}>{opcional ? "Sin confirmar (opcional)" : "Pendiente"}</Badge>}
         </div>
       </div>
@@ -3604,10 +3732,17 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
         <div className="text-[11px] text-slate-400">Sin plan de pagos definido para este ítem.</div>
       ) : (
         <>
+          {/* tipo de pago: si el proveedor exige PAGO ANTICIPADO es lo único que se muestra (no aplica "pago único");
+              quien edita elige entre las dos formas, y quien solo mira ve un único rótulo, no dos botones */}
+          {!cotAnticipo && (editable
+            ? (
           <div className="flex gap-1.5 mb-2">
-            <button type="button" disabled={!editable} onClick={() => setTipoPago("plan")} className={`px-2 py-1 rounded text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por etapas</button>
-            <button type="button" disabled={!editable} onClick={() => setTipoPago("contado")} className={`px-2 py-1 rounded text-[11px] font-medium border disabled:opacity-40 ${pagos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único</button>
+            <button type="button" onClick={() => setTipoPago("plan")} className={`px-2 py-1 rounded text-[11px] font-medium border ${pagos.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por etapas</button>
+            <button type="button" onClick={() => setTipoPago("contado")} className={`px-2 py-1 rounded text-[11px] font-medium border ${pagos.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único</button>
           </div>
+
+            )
+            : <div className="mb-2"><Badge tone="slate">{pagos.tipoPago === "contado" ? "Pago único" : "Pago por etapas"}</Badge></div>)}
           {pagos.tipoPago === "contado" ? (
             <div className="max-w-xs">
               <div className="text-[11px] text-slate-400 mb-1">Valor (= total del ítem)</div>
@@ -3621,9 +3756,9 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
               <div><label className="text-[10px] text-slate-400 block mb-0.5">Pago final</label><InputMiles disabled={!editable} placeholder="Valor" value={pagos.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable} value={pagos.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
             </div>
           )}
-          <div className="flex items-center justify-between mt-2 gap-2 flex-wrap">
-            <div className="text-[11px] text-slate-500">Total ítem: <b>{fmt(totalItem)}</b> · Programado: <b>{fmt(pagado)}</b> · Restante: <b className={restante > 0.5 ? "text-amber-600" : restante < -0.5 ? "text-rose-600" : "text-emerald-600"}>{fmt(restante)}</b></div>
-            {editable && !confirmado && <button onClick={confirmar} className="text-[11px] bg-emerald-600 text-white px-2 py-1 rounded-md font-medium">Confirmar este ítem</button>}
+          <div className="mt-2 space-y-2">
+            <PanelCuadre pagos={pagos} total={totalItem} editable={editable} confirmado={confirmado} onAjustar={(np) => guardar(np)} />
+            {editable && !confirmado && <div className="flex justify-end"><button onClick={confirmar} className="text-[11px] bg-emerald-600 text-white px-2 py-1 rounded-md font-medium">Confirmar este ítem</button></div>}
           </div>
         </>
       )}
@@ -3632,7 +3767,7 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
   );
 }
 
-function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggle }) {
+function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmados, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
   const ab = useAbiertosItems(solicitud.items);
   const sinIva = solicitud.tipo === "servicio";
@@ -3657,7 +3792,19 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggl
   const hayAlgoPorConfirmar = filas.some((f) => !f.conf && (!opcional || planTieneValores(f.inicial)));
 
   const guardarItem = (itemId, pagos) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos } : it)));
-  const confirmarItem = (itemId, pagos) => { onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } } : it))); mostrarToast("Plan de pagos del ítem confirmado"); };
+  // ¿con estos ítems quedarían confirmados todos los planes? (misma regla que el aviso "Todos los ítems confirmados")
+  const todosConfirmadosCon = (items) => {
+    const sol = { ...solicitud, items };
+    const fs = items.map((it) => ({ conf: planConfirmadoItem(sol, it), tiene: planTieneValores(planInicialItem(sol, it, totalItemConAiu(it, sinIva))) }));
+    const conP = fs.filter((f) => f.conf || f.tiene);
+    return opcional ? (conP.length > 0 && conP.every((f) => f.conf)) : fs.every((f) => f.conf);
+  };
+  // guarda; si con eso ya están confirmados todos los planes, avisa el siguiente paso (la solicitud lo hace en un solo guardado)
+  const guardarYAvisar = (items, mensajeSiNoSonTodos) => {
+    if (!todosConfirmados && onTodosConfirmados && todosConfirmadosCon(items)) { onTodosConfirmados(items); return; }
+    onGuardarItems(items); mostrarToast(mensajeSiNoSonTodos);
+  };
+  const confirmarItem = (itemId, pagos) => guardarYAvisar(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } } : it)), "Plan de pagos del ítem confirmado");
   const editarDeNuevoItem = (itemId) => { onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagosConfirmados: false } : it))); mostrarToast("Plan de pagos reabierto para editarlo"); };
 
   const confirmarTodos = () => {
@@ -3665,11 +3812,10 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggl
     const problema = porConfirmar.find((f) => !planTieneValores(f.inicial) || Math.abs(f.totalItem - totalPagado(f.inicial)) > 0.5 || planFaltaFecha(f.inicial));
     if (problema) { alert(`El ítem "${problema.it.nombre}" todavía no está listo para confirmar (revisa el valor y las fechas).`); return; }
     if (!porConfirmar.length) return;
-    onGuardarItems(solicitud.items.map((it) => {
+    guardarYAvisar(solicitud.items.map((it) => {
       const f = porConfirmar.find((x) => x.it.id === it.id);
       return f ? { ...it, pagos: f.inicial, pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } } : it;
-    }));
-    mostrarToast(porConfirmar.length === 1 ? "Plan de pagos confirmado" : `Planes de pago confirmados (${porConfirmar.length} ítems)`);
+    }), porConfirmar.length === 1 ? "Plan de pagos confirmado" : `Planes de pago confirmados (${porConfirmar.length} ítems)`);
   };
 
   return (
@@ -3679,6 +3825,45 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, abierto, onToggl
         : <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">🔒 La orden ya fue generada — las condiciones de pago quedaron fijas. Dirección Financiera o Contabilidad pueden ajustarlas si es necesario.</div>)}
       {sinPrecio && !ocYaEnviada && <div className="text-[11px] text-amber-600 bg-amber-50 border border-amber-200 rounded-md px-3 py-2">⚠ Todavía no hay precios cargados — se habilita en cuanto Compras cotice.</div>}
       {!tienePermiso && !ocYaEnviada && !sinPrecio && <div className="text-[11px] text-slate-400">Tu rol no tiene el permiso para editar y confirmar el plan de pagos. El administrador puede activarlo en Catálogo → Permisos.</div>}
+      {/* qué ítems necesitan atención antes de confirmar: cada uno con su problema en una frase y un botón para ir a él */}
+      {(() => {
+        const problemas = filas.map((f, idx) => {
+          const c = estadoCuadre(f.inicial, f.totalItem);
+          const lista = [];
+          if (c.hayPlan && c.estado === "falta") lista.push(`${f.conf ? "el plan confirmado ya no cuadra: " : ""}faltan ${fmt(c.diferencia)} por programar`);
+          if (c.hayPlan && c.estado === "sobra") lista.push(`${f.conf ? "el plan confirmado ya no cuadra: " : ""}se pasa por ${fmt(-c.diferencia)}`);
+          if (c.hayPlan && c.sinFecha.length && !f.conf) lista.push(`falta la fecha de ${c.sinFecha.join(", ")}`);
+          if (!opcional && !c.hayPlan && !f.conf) lista.push("todavía no tiene plan de pagos");
+          return { f, idx, lista };
+        }).filter((x) => x.lista.length);
+        if (!problemas.length || !puedeEditarRol) return null; // quien solo mira (p. ej. el director) no necesita este aviso
+        return (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-1.5">
+            <div className="text-xs font-semibold text-amber-800 flex items-center gap-1.5"><AlertTriangle size={14} /> {problemas.length === 1 ? "1 ítem necesita atención" : `${problemas.length} ítems necesitan atención`} antes de confirmar</div>
+            {problemas.map(({ f, idx, lista }) => (
+              <div key={f.it.id} className="flex items-center justify-between gap-2 text-[11px] text-slate-700">
+                <span><b>Ítem {idx + 1} · {f.it.nombre || "sin nombre"}:</b> {lista.join(" · ")}</span>
+                <button type="button" onClick={() => ab.abrir(f.it.id)} className="shrink-0 text-indigo-600 underline">Ver ítem</button>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+      {/* todos confirmados: se dice qué sigue y a quién le toca */}
+      {todosConfirmados && (() => {
+        const sig = siguientePasoPlanes(solicitud, currentUser);
+        return (
+          <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-3 text-[11px] text-emerald-800 flex items-start gap-2">
+            <CheckCircle2 size={15} className="shrink-0 mt-0.5" />
+            <div>
+              <div className="font-semibold text-xs">Todos los ítems tienen su plan de pagos confirmado</div>
+              {sig.accion
+                ? <div>Siguiente paso: <b>«{sig.accion}»</b> — {sig.yo ? "pulsa ese botón en la parte de arriba de la solicitud." : `le corresponde a ${sig.responsable}.`}</div>
+                : <div>Las fechas y los montos confirmados ya aparecen en el Calendario de pagos.</div>}
+            </div>
+          </div>
+        );
+      })()}
       <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />
       <div className="space-y-3">
         {filas.map((f, idx) => (
@@ -4640,7 +4825,9 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
       {(() => {
         const filas = solicitud.items.map((it, idx) => {
           const conf = planConfirmadoItem(solicitud, it);
-          const plan = conf ? planOficialItem(solicitud, it) : planSugeridoItem(solicitud, it);
+          // el plan vigente de cada ítem — igual que en "Plan de pagos por ítem": si el proveedor exige pago anticipado, nunca se lista
+          // como "Pago único" (se reparte en anticipo y saldo)
+          const plan = conf ? planOficialItem(solicitud, it) : planInicialItem(solicitud, it, totalItemConAiu(it, solicitud.tipo === "servicio"));
           return { it, idx, conf, tramos: tramosDePago(plan).filter((t) => parseFloat(t.valor) > 0) };
         }).filter((f) => f.tramos.length);
         if (!filas.length) return null;
@@ -4945,6 +5132,19 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     mostrarToast(`Solicitud reabierta a Revisión y cotizaciones por cambio en la orden de ${ordenCambiada.proveedorNombre}`, "alerta", { duracion: 7000 });
   };
 
+  // ya están confirmados los planes de pago de TODOS los ítems: se guarda, se avisa en pantalla cuál es el siguiente paso y, si le toca a
+  // otra persona, se le notifica a quien debe hacerlo
+  const alConfirmarTodosLosPlanes = (items) => {
+    const sol2 = { ...solicitud, items };
+    const sig = siguientePasoPlanes(sol2, currentUser);
+    const texto = sig.accion
+      ? `Todos los planes de pago de ${solicitud.folio} quedaron confirmados por ${currentUser.nombre}. Siguiente paso: «${sig.accion}» — le corresponde a ${sig.responsable}.`
+      : `Todos los planes de pago de ${solicitud.folio} quedaron confirmados por ${currentUser.nombre}.`;
+    patch({ items, notificaciones: notificar(texto) });
+    mostrarToast(sig.accion ? `✓ Todos los ítems confirmados · Siguiente paso: «${sig.accion}»${sig.yo ? " (en la parte de arriba)" : ` — le corresponde a ${sig.responsable}`}` : "✓ Todos los ítems confirmados", "ok", { duracion: 9000 });
+    if (sig.accion && !sig.yo && sig.rol) usuarios.filter((u) => u.rol === sig.rol).forEach((u) => crearNotificacion?.(u.id, `Los planes de pago de ${solicitud.folio} quedaron confirmados: ya puedes «${sig.accion}».`, solicitud.id));
+  };
+
   // el solicitante confirma que ya corrigió y avisa por correo a quien le toca aprobar ahora
   const reenviarParaAprobacion = () => {
     const responsable = directorDelArea(solicitud.areaId, usuarios);
@@ -4987,7 +5187,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const seleccionarCotizacion = (itemId, idx, obs) => patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizacionSeleccionada: idx, observacionSeleccion: obs } : i)) });
   const guardarItemsRevision = (items) => patch({ items });
   const decidirRevisionCompras = (estado, obs) => {
-    if (estado === "rechazada") { crearNotificacion?.(solicitante?.id, `Tu solicitud ${solicitud.folio} fue rechazada por Compras.${obs ? ` Motivo: "${obs}"` : ""}`, solicitud.id); mostrarToast("Revisión rechazada — se devolvió al solicitante", "alerta"); patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: obs, fecha: hoy() }, revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() }, notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada por Compras.`) }); return; }
+    if (estado === "rechazada") { crearNotificacion?.(solicitante?.id, `Tu solicitud ${solicitud.folio} fue rechazada por Compras.${obs ? ` Motivo: "${obs}"` : ""}`, solicitud.id); mostrarToast("Revisión rechazada — se devolvió al solicitante", "alerta"); patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: obs, fecha: hoy(), pasoOrigen: solicitud.status }, revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() }, notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada por Compras.`) }); return; }
     patch({ revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() } });
     mostrarToast("Revisión de Compras aprobada — ya se puede cotizar");
   };
@@ -5093,7 +5293,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const rechazar = () => {
     if (!motivoRechazo.trim()) { alert("Escribe el motivo del rechazo — es lo que verá el solicitante para poder corregir la solicitud."); return; }
     const campo = solicitud.status === "aprobacion_jefe" ? "jefe" : solicitud.status === "aprobacion_director" ? "director" : solicitud.status === "aprobacion_financiera" ? "financiera" : solicitud.status === "aprobacion_gerencia" ? "gerencia" : null;
-    patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: motivoRechazo, fecha: hoy() }, firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion: motivoRechazo, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue rechazada.`) });
+    patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: motivoRechazo, fecha: hoy(), pasoOrigen: solicitud.status }, firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion: motivoRechazo, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue rechazada.`) });
     if (solicitante?.email) {
       enviarCorreo(
         solicitante.email,
@@ -5303,7 +5503,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
               <ItemColapsable key={it.id} abierto={abSug.abierto(it.id)} onToggle={() => abSug.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)} resumen={<span>Total {fmt(totalIt)}{planTieneValores(sug) ? " · con plan" : ""}</span>}>
               <div className="space-y-1.5 p-1">
                 {totalIt > 0
-                  ? <PlanPagoCotizacion key={it.id} pagos={planTieneValores(sug) ? sug : null} total={totalIt} onChange={(pg) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, pagosSugeridos: pg } : x)) })} etiqueta="+ Sugerir plan de pagos para este ítem" titulo="Plan de pagos sugerido de este ítem" />
+                  ? <PlanPagoCotizacion key={it.id} sinPagoUnico={exigeAnticipoPago(it)} pagos={planTieneValores(sug) ? sug : null} total={totalIt} onChange={(pg) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, pagosSugeridos: pg } : x)) })} etiqueta="+ Sugerir plan de pagos para este ítem" titulo="Plan de pagos sugerido de este ítem" />
                   : <div className="text-[11px] text-amber-600">Pon un precio estimado para poder sugerir un plan de pagos.</div>}
               </div>
               </ItemColapsable>
@@ -5356,7 +5556,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       )}
 
       {["aprobacion_jefe", "aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && (
-        <PagosPorItem abierto={fases.abierto("pagos")} onToggle={() => fases.alternar("pagos")} solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} />
+        <PagosPorItem abierto={fases.abierto("pagos")} onToggle={() => fases.alternar("pagos")} solicitud={solicitud} currentUser={currentUser} onGuardarItems={(items) => patch({ items })} onTodosConfirmados={alConfirmarTodosLosPlanes} />
       )}
 
       <OcEnviadaPanel abierto={fases.abierto("orden")} onToggle={() => fases.alternar("orden")} solicitud={solicitud} proveedores={proveedores} empresa={empresa} currentUser={currentUser} area={area} solicitante={solicitante} usuarios={usuarios} crearNotificacion={crearNotificacion} onGuardar={(oc) => patch({ ocEnviada: oc })} />
