@@ -4,11 +4,21 @@
 // enlaces, fondos suaves...), y en Tailwind 4 esos colores son variables CSS (--color-indigo-50 ... --color-indigo-950).
 // Cambiar la paleta es reemplazar esas 11 variables en <html>: toda la interfaz cambia de una vez, sin tocar cada pantalla.
 //
-// Qué NO cambia: los colores de estado (verde = bien, ámbar = atención, rojo = error) y los grises, ni los DOCUMENTOS que genera
-// la app (PDF de órdenes y expedientes, orden impresa, correos): ver estiloDocumento().
+// Los grises de FONDO y BORDE (la familia "slate" 50 a 300) también toman un tinte suave del color de la paleta: el fondo de la página
+// queda en un azul claro y los bordes con el color de la paleta (cada persona puede preferir los grises neutros).
+//
+// Qué NO cambia: los colores de estado (verde = bien, ámbar = atención, rojo = error), los tonos de texto, ni los DOCUMENTOS que
+// genera la app (PDF de órdenes y expedientes, orden impresa, correos): ver estiloDocumento().
 
 export const PASOS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950]
 const nombreVar = (paso) => `--color-indigo-${paso}`
+export const NEUTROS = [50, 100, 200, 300]
+const nombreVarNeutro = (paso) => `--color-slate-${paso}`
+// todas las variables que esta paleta puede tocar
+// el gris de texto de apoyo (slate-500) se oscurece un poco cuando el fondo lleva tinte, para que ese texto se lea igual de bien
+const VAR_TEXTO_APOYO = '--color-slate-500'
+const TEXTO_APOYO_CON_TINTE = 'oklch(0.534 0.041 257.4)' // original: oklch(0.554 0.041 257.4)
+const TODAS_LAS_VARIABLES = [...PASOS.map(nombreVar), ...NEUTROS.map(nombreVarNeutro), VAR_TEXTO_APOYO]
 
 // ---------------------------------------------------------------- matemática de color (OKLab / sRGB) ----------
 const aLineal = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4)
@@ -76,6 +86,22 @@ export function generarEscala({ h, s }) {
   return escala
 }
 
+// ---------------------------------------------------------------- grises de fondo y borde, con tinte ----------
+// Misma luminosidad que los grises originales (para no perder contraste) pero con un poco de color del tono de la paleta.
+const L_NEUTRO = { 50: 0.966, 100: 0.944, 200: 0.903, 300: 0.852 }
+const C_NEUTRO = { 50: 0.021, 100: 0.029, 200: 0.037, 300: 0.046 }
+export function generarNeutros({ h, s }) {
+  const tono = ((Number(h) % 360) + 360) % 360
+  const k = Math.min(1, Math.max(0.05, Number(s)))
+  const salida = {}
+  NEUTROS.forEach((p) => {
+    const L = L_NEUTRO[p]
+    const C = Math.min(C_NEUTRO[p] * k, croma_maximo(L, tono) * 0.9)
+    salida[p] = { oklch: `oklch(${L.toFixed(3)} ${C.toFixed(3)} ${tono.toFixed(1)})`, rgb: oklchARgbLineal(L, C, tono), L, C }
+  })
+  return salida
+}
+
 // ---------------------------------------------------------------- paletas disponibles ----------
 // "indigo" es el diseño original: no se cambia nada. Las demás se generan a partir de su tono.
 export const PALETAS = [
@@ -95,12 +121,13 @@ const HEX = /^#[0-9a-f]{6}$/i
 // Valida lo que llega de la cuenta del usuario (puede venir vacío, viejo o alterado): devuelve un tema válido o null.
 export function sanitizarTema(crudo) {
   if (!crudo || typeof crudo !== 'object') return null
-  if (crudo.paleta === 'personalizado') return HEX.test(String(crudo.color || '')) ? { paleta: 'personalizado', color: String(crudo.color).toLowerCase() } : null
-  return PALETAS.some((p) => p.id === crudo.paleta) ? { paleta: crudo.paleta } : null
+  const fondo = crudo.fondo === 'neutro' ? { fondo: 'neutro' } : {} // por defecto el fondo y los bordes llevan el tinte de la paleta
+  if (crudo.paleta === 'personalizado') return HEX.test(String(crudo.color || '')) ? { paleta: 'personalizado', color: String(crudo.color).toLowerCase(), ...fondo } : null
+  return PALETAS.some((p) => p.id === crudo.paleta) ? { paleta: crudo.paleta, ...fondo } : null
 }
 export function parametrosDe(tema) {
   const t = sanitizarTema(tema)
-  if (!t || t.paleta === 'indigo') return null
+  if (!t || t.paleta === 'indigo') return null // el índigo es el original: el color de acento no se toca
   if (t.paleta === 'personalizado') {
     const c = hexAOklch(t.color)
     // un gris (sin tono propio) se trata como "grafito"
@@ -111,27 +138,36 @@ export function parametrosDe(tema) {
   const p = PALETAS.find((x) => x.id === t.paleta)
   return { h: p.h, s: p.s }
 }
-// { '--color-indigo-50': 'oklch(...)', ... } o null si es la paleta original
+// tono e intensidad con que se tiñen los grises de fondo y borde (null = grises neutros de siempre)
+export function parametrosFondo(tema) {
+  const t = sanitizarTema(tema)
+  if (!t || t.fondo === 'neutro') return null
+  if (t.paleta === 'indigo') return { h: 255, s: 1 } // el original: un azul suave
+  return parametrosDe(t)
+}
+// { '--color-indigo-50': 'oklch(...)', '--color-slate-50': ..., ... } o null si no hay nada que cambiar
 export function variablesDe(tema) {
+  const salida = {}
   const par = parametrosDe(tema)
-  if (!par) return null
-  const e = generarEscala(par)
-  return Object.fromEntries(PASOS.map((p) => [nombreVar(p), e[p].oklch]))
+  if (par) { const e = generarEscala(par); PASOS.forEach((p) => { salida[nombreVar(p)] = e[p].oklch }) }
+  const fon = parametrosFondo(tema)
+  if (fon) { const n = generarNeutros(fon); NEUTROS.forEach((p) => { salida[nombreVarNeutro(p)] = n[p].oklch }); salida[VAR_TEXTO_APOYO] = TEXTO_APOYO_CON_TINTE }
+  return Object.keys(salida).length ? salida : null
 }
 
 // ---------------------------------------------------------------- aplicar en pantalla ----------
-let ORIGINAL = null // valores de fábrica de las 11 variables, leídos de la hoja de estilos real antes de aplicar nada
+let ORIGINAL = null // valores de fábrica de las variables, leídos de la hoja de estilos real antes de aplicar nada: { '--color-indigo-600': '...', ... }
 export function leerOriginal(raiz = typeof document !== 'undefined' ? document.documentElement : null) {
   if (ORIGINAL) return ORIGINAL
   if (!raiz || typeof getComputedStyle === 'undefined') return {}
   // se leen SIN las variables que haya puesto un tema (si ya hubiera alguna), para tomar el valor real de fábrica
   const guardadas = {}
-  PASOS.forEach((p) => { const v = raiz.style.getPropertyValue(nombreVar(p)); if (v) { guardadas[p] = v; raiz.style.removeProperty(nombreVar(p)) } })
+  TODAS_LAS_VARIABLES.forEach((v) => { const x = raiz.style.getPropertyValue(v); if (x) { guardadas[v] = x; raiz.style.removeProperty(v) } })
   const cs = getComputedStyle(raiz)
   const leidas = {}
-  PASOS.forEach((p) => { const v = cs.getPropertyValue(nombreVar(p)).trim(); if (v) leidas[p] = v })
-  Object.entries(guardadas).forEach(([p, v]) => raiz.style.setProperty(nombreVar(p), v))
-  if (Object.keys(leidas).length === PASOS.length) ORIGINAL = leidas
+  TODAS_LAS_VARIABLES.forEach((v) => { const x = cs.getPropertyValue(v).trim(); if (x) leidas[v] = x })
+  Object.entries(guardadas).forEach(([v, x]) => raiz.style.setProperty(v, x))
+  if (Object.keys(leidas).length === TODAS_LAS_VARIABLES.length) ORIGINAL = leidas
   return leidas
 }
 
@@ -154,14 +190,16 @@ export function aplicarTema(tema, raiz = typeof document !== 'undefined' ? docum
   if (!raiz) return
   leerOriginal(raiz) // se guarda lo de fábrica antes de cambiar nada
   const vars = variablesDe(tema)
-  PASOS.forEach((p) => raiz.style.removeProperty(nombreVar(p)))
+  TODAS_LAS_VARIABLES.forEach((v) => raiz.style.removeProperty(v))
   if (vars) Object.entries(vars).forEach(([k, v]) => raiz.style.setProperty(k, v))
-  raiz.dataset.paleta = sanitizarTema(tema)?.paleta || 'indigo'
+  const t = sanitizarTema(tema)
+  raiz.dataset.paleta = t?.paleta || 'indigo'
+  raiz.dataset.fondo = t && t.fondo === 'neutro' ? 'neutro' : (vars && Object.keys(vars).some((k) => k.includes('slate')) ? 'tinte' : 'neutro')
 }
 
 // Estilo para fijar un bloque a los colores ORIGINALES, aunque el usuario tenga otra paleta. Se pone en el contenedor de lo que
 // representa un DOCUMENTO de la app (la orden impresa, por ejemplo): las variables que se declaran ahí mandan sobre las de <html>.
 export function estiloDocumento() {
   const o = leerOriginal()
-  return Object.fromEntries(PASOS.filter((p) => o[p]).map((p) => [nombreVar(p), o[p]]))
+  return Object.fromEntries(TODAS_LAS_VARIABLES.filter((v) => o[v]).map((v) => [v, o[v]]))
 }

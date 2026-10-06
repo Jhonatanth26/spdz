@@ -79,14 +79,24 @@ export function useSolicitudes() {
   }
 
   const actualizar = async (sol) => {
-    const { error } = await supabase.from('solicitudes').update(haciaFila(sol)).eq('id', sol.id)
+    // ".select('id')" devuelve las filas que REALMENTE se modificaron. Cuando las reglas de seguridad de la base rechazan una
+    // actualización no hay ningún error: la fila simplemente no se toca. Sin esta comprobación la app mostraba "aprobado" y al
+    // recargar volvía el estado anterior, sin que nadie supiera por qué.
+    const { data, error } = await supabase.from('solicitudes').update(haciaFila(sol)).eq('id', sol.id).select('id')
     if (error) { console.error('Error actualizando solicitud:', error.message); return error }
+    if (!data || data.length === 0) {
+      const sinPermiso = new Error('la base de datos no guardó el cambio: tu usuario no tiene permiso para modificar esta solicitud (regla de seguridad). Avísale al administrador.')
+      console.error('Actualización rechazada (0 filas modificadas) en la solicitud', sol.id)
+      await recargar() // la pantalla vuelve a lo que de verdad hay guardado
+      return sinPermiso
+    }
     await recargar()
   }
 
   const eliminar = async (id) => {
-    const { error } = await supabase.from('solicitudes').delete().eq('id', id)
+    const { data, error } = await supabase.from('solicitudes').delete().eq('id', id).select('id')
     if (error) { console.error('Error eliminando solicitud:', error.message); return error }
+    if (!data || data.length === 0) { await recargar(); return new Error('la base de datos no eliminó la solicitud: tu usuario no tiene permiso (regla de seguridad).') }
     await recargar()
   }
 

@@ -400,11 +400,8 @@ function idxCotizacionActiva(item, sinIva) {
 }
 function desgloseItem(item, sinIva) {
   if (!item.cotizaciones.length) {
-    const inicial = parseFloat(item.precioEstimado) || 0;
-    const descuento = parseFloat(item.descuentoValor);
-    const precioConDescuento = descuento > 0
-      ? Math.max(0, item.descuentoTipo === "porcentaje" ? inicial * (1 - descuento / 100) : inicial - descuento)
-      : inicial;
+    // el descuento se negocia en la COTIZACIÓN: el precio que estima el solicitante no lleva descuento
+    const precioConDescuento = parseFloat(item.precioEstimado) || 0;
     const tasa = item.moneda && item.moneda !== "COP" ? (parseFloat(item.tasaCambio) || 1) : 1;
     const precioEnCop = precioConDescuento * tasa;
     const subtotal = precioEnCop * (parseFloat(item.cantidad) || 0);
@@ -455,7 +452,7 @@ function totalPagado(pagos) {
 }
 // arma la lista de tramos de pago (uno solo si es "de contado", o hasta 3 si es plan por etapas)
 function tramosDePago(pagos) {
-  if (pagos?.tipoPago === "contado") return [{ tipo: "Pago único", ...pagos.pagoUnico }];
+  if (pagos?.tipoPago === "contado") return [{ tipo: pagos.anticipado ? "Pago anticipado" : "Pago único", ...pagos.pagoUnico }];
   return [
     { tipo: "Anticipo", ...pagos.anticipo },
     ...(pagos.intermedio?.activo ? [{ tipo: "Intermedio", ...pagos.intermedio }] : []),
@@ -487,11 +484,12 @@ function exigeAnticipoPago(it) {
   const sel = it.cotizacionSeleccionada != null ? it.cotizaciones?.[it.cotizacionSeleccionada] : null;
   return sel ? !!sel.anticipoObligatorio : (it.cotizaciones || []).some((c) => c.anticipoObligatorio);
 }
-// con pago anticipado obligatorio NO aplica el "pago único": un plan que venía como pago único se reparte en anticipo y saldo
-function sinPagoUnico(pagos, total, anticipoExigido) {
-  if (pagos?.tipoPago !== "contado") return pagos;
-  const anticipo = anticipoExigido > 0 ? Math.min(anticipoExigido, total) : "";
-  return { ...planPagosVacio(), ...pagos, tipoPago: "plan", pagoUnico: { valor: "", fecha: "" }, anticipo: { valor: anticipo, fecha: pagos.pagoUnico?.fecha || "" }, final: { valor: anticipo === "" ? "" : Math.max(0, total - anticipo), fecha: "" } };
+// PAGO ANTICIPADO OBLIGATORIO: el proveedor no despacha hasta recibir el pago. El sistema arma solo el plan de pagos: un único pago
+// por el VALOR FINAL NEGOCIADO completo (el total del ítem), antes de despachar. No hay valores que digitar; solo falta la fecha, que
+// se toma de un plan que ya existiera (el que sugirió el solicitante, por ejemplo).
+function planPagoAnticipado(base, total) {
+  const fecha = base?.pagoUnico?.fecha || base?.anticipo?.fecha || "";
+  return { ...planPagosVacio(), tipoPago: "contado", anticipado: true, pagoUnico: { valor: total, fecha } };
 }
 // ¿cuadra el plan de pagos con el total del ítem? Estado y números listos para mostrar
 //   sin_plan: nada programado · cuadra · falta: se programó menos del total · sobra: se programó más del total
@@ -652,7 +650,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 // otro rol (el gerente general tiene rol Gerencia; quien lleva la Dirección Financiera, rol Dirección Financiera)
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
-const VERSION_APP = "paleta v2";
+const VERSION_APP = "novedades v1";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -1108,11 +1106,14 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
 --------------------------------------------------------- */
 function SelectorPaleta({ tema, onElegir, compacto }) {
   const actual = sanitizarTema(tema) || TEMA_ORIGINAL;
+  const conFondoTinte = actual.fondo !== "neutro";
+  // al cambiar de paleta se conserva la preferencia de fondo y bordes (con tinte / neutros)
+  const elegir = (t) => onElegir(conFondoTinte ? t : { ...t, fondo: "neutro" });
   const [soportado, setSoportado] = useState(true);
   useEffect(() => { setSoportado(soportaTema()); }, []);
   const [colorLibre, setColorLibre] = useState(actual.paleta === "personalizado" ? actual.color : "#0f766e");
   // color del botón (paso 600) de cada paleta, para dibujar su muestra
-  const muestra = (p) => (p.original ? (leerOriginal()[600] || "#4f46e5") : generarEscala({ h: p.h, s: p.s })[600].oklch);
+  const muestra = (p) => (p.original ? (leerOriginal()["--color-indigo-600"] || "#4f46e5") : generarEscala({ h: p.h, s: p.s })[600].oklch);
   const muestraLibre = () => generarEscala(parametrosDe({ paleta: "personalizado", color: colorLibre }))[600].oklch;
   return (
     <div className="space-y-3">
@@ -1120,7 +1121,7 @@ function SelectorPaleta({ tema, onElegir, compacto }) {
         {PALETAS.map((p) => {
           const sel = actual.paleta === p.id;
           return (
-            <button key={p.id} type="button" onClick={() => onElegir({ paleta: p.id })} aria-pressed={sel} title={p.nombre}
+            <button key={p.id} type="button" onClick={() => elegir({ paleta: p.id })} aria-pressed={sel} title={p.nombre}
               className={`flex flex-col items-center gap-1 rounded-lg border p-2 text-[11px] ${sel ? "border-slate-700 bg-slate-50 font-semibold text-slate-800" : "border-slate-200 text-slate-600 hover:border-slate-400"}`}>
               <span className="relative w-8 h-8 rounded-full border border-black/10 flex items-center justify-center" style={{ background: muestra(p) }}>{sel && <CheckCircle2 size={16} className="text-white" />}</span>
               <span className="leading-tight text-center">{p.nombre}</span>
@@ -1130,15 +1131,19 @@ function SelectorPaleta({ tema, onElegir, compacto }) {
       </div>
       <div className={`flex items-center gap-2 rounded-lg border p-2 ${actual.paleta === "personalizado" ? "border-slate-700 bg-slate-50" : "border-slate-200"}`}>
         <label className="flex items-center gap-2 text-[11px] text-slate-600 cursor-pointer">
-          <input type="color" value={colorLibre} onChange={(e) => { setColorLibre(e.target.value); onElegir({ paleta: "personalizado", color: e.target.value }); }} className="w-8 h-8 rounded border border-slate-200 bg-white p-0.5 cursor-pointer" />
+          <input type="color" value={colorLibre} onChange={(e) => { setColorLibre(e.target.value); elegir({ paleta: "personalizado", color: e.target.value }); }} className="w-8 h-8 rounded border border-slate-200 bg-white p-0.5 cursor-pointer" />
           <span><b>Personalizado</b>{!compacto && <span className="text-slate-400"> — elige cualquier color; el sistema arma el resto de la paleta</span>}</span>
         </label>
         {actual.paleta === "personalizado" && <span className="ml-auto inline-block w-5 h-5 rounded-full border border-black/10 shrink-0" style={{ background: muestraLibre() }} title="Color del botón principal con este color" />}
       </div>
+      <label className="flex items-start gap-2 text-[11px] text-slate-600 cursor-pointer">
+        <input type="checkbox" checked={conFondoTinte} onChange={(e) => onElegir(e.target.checked ? { ...actual, fondo: undefined } : { ...actual, fondo: "neutro" })} className="mt-0.5" />
+        <span><b>Fondo y bordes con el color de la paleta</b>{!compacto && <span className="text-slate-400"> — el fondo de la página y los bordes toman un tinte suave de tu paleta (si lo quitas, quedan grises)</span>}</span>
+      </label>
       {!soportado && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5">Esta instalación no permite cambiar la paleta (los estilos no usan variables de color). Avísale al administrador.</div>}
       {!compacto && (
         <>
-          <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-2">
             <div className="text-[10px] uppercase tracking-wide text-slate-400">Así se verá</div>
             <div className="flex flex-wrap items-center gap-2">
               <button type="button" className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-medium">Botón principal</button>
@@ -1147,11 +1152,12 @@ function SelectorPaleta({ tema, onElegir, compacto }) {
               <span className="text-[10px] rounded-full px-2 py-0.5 bg-indigo-100 text-indigo-700">Etiqueta</span>
             </div>
             <div className="h-2 rounded-full bg-indigo-100"><div className="h-2 w-2/3 rounded-full bg-indigo-500" /></div>
+            <div className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-slate-500">Una tarjeta con su borde, sobre el fondo de la página</div>
           </div>
           <div className="text-[11px] text-slate-400 leading-relaxed">La paleta cambia solo <b>tu</b> pantalla y se guarda en tu cuenta. Los colores de estado (verde, ámbar, rojo) no cambian, y los <b>documentos</b> que genera la app (PDF de órdenes y expedientes, orden impresa, correos) conservan siempre el mismo estilo.</div>
         </>
       )}
-      {actual.paleta !== "indigo" && <button type="button" onClick={() => onElegir({ paleta: "indigo" })} className="text-[11px] text-slate-500 underline">Volver a la paleta original</button>}
+      {actual.paleta !== "indigo" && <button type="button" onClick={() => elegir({ paleta: "indigo" })} className="text-[11px] text-slate-500 underline">Volver a la paleta original</button>}
     </div>
   );
 }
@@ -1335,7 +1341,6 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
       const prov = buscarProveedorDeOrden(o, proveedores);
       const cotsAnticipo = s.items.flatMap((it) => (it.cotizaciones || []).filter((c) => c.anticipoObligatorio && mismoProveedor({ proveedorId: c.proveedorId, proveedorNombre: c.proveedorNombre }, o)));
       const itemsDelProveedor = cotsAnticipo;
-      const valorAnticipoExigido = cotsAnticipo.reduce((acc, c) => acc + (parseFloat(c.anticipoValorObligatorio) || 0), 0);
       filas.push({
         id: `${s.id}-${o.proveedorId || o.proveedorNombre}`,
         solicitudId: s.id,
@@ -1352,7 +1357,6 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
         etiquetaFactura: prov?.personaNatural === "si" ? "Cuenta de cobro" : "Factura",
         tieneComprobanteRecepcion,
         anticipoObligatorio: itemsDelProveedor.length > 0,
-        anticipoValorObligatorio: valorAnticipoExigido,
       });
     });
   });
@@ -1402,7 +1406,7 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
                 <td className="px-4 py-2 font-medium text-slate-700 cursor-pointer hover:text-indigo-600" onClick={() => onAbrir?.(f.solicitudId)}>{f.folio}</td>
                 <td className="px-4 py-2 text-slate-600">{f.tipo}</td>
                 <td className="px-4 py-2 text-slate-600">{f.empresa}</td>
-                <td className="px-4 py-2 text-slate-600">{f.proveedor} {f.anticipoObligatorio && <span title={f.anticipoValorObligatorio > 0 ? `Anticipo obligatorio: ${fmt(f.anticipoValorObligatorio)}` : "Pago anticipado obligatorio para este proveedor"} className="text-amber-600 inline-block align-middle"><Timer size={12} /></span>}</td>
+                <td className="px-4 py-2 text-slate-600">{f.proveedor} {f.anticipoObligatorio && <span title="Pago anticipado obligatorio: se paga el valor final negociado antes de despachar" className="text-amber-600 inline-block align-middle"><Timer size={12} /></span>}</td>
                 <td className="px-4 py-2 text-right font-medium">{fmt(f.total)}</td>
                 <td className="px-4 py-2">{f.estadoOrden === "enviada" ? <Badge tone="green">Enviada</Badge> : <span title={f.notaEstadoOrden}><Badge tone={f.estadoOrden === "cancelada" ? "red" : "amber"}>{ESTADO_ETIQUETA[f.estadoOrden]}</Badge></span>}</td>
                 <td className="px-4 py-2 text-center">{f.tieneFactura ? <Badge tone="green">{f.etiquetaFactura}</Badge> : <Badge tone="red">Falta {f.etiquetaFactura.toLowerCase()}</Badge>}</td>
@@ -2573,7 +2577,8 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   const todosSeleccionados = seleccionados.length === items.length;
   const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : items.map((i) => i.id));
 
-  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0);
+  // una cotización con datos lleva SIEMPRE su documento (PDF o foto)
+  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre;
 
   const aplicar = async () => {
     if (!listo) return;
@@ -2673,6 +2678,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
             !seleccionados.length && "seleccionar al menos un ítem",
             !(proveedorId || proveedorNombre.trim()) && "el proveedor",
             seleccionados.some((id) => !(parseFloat(precios[id]) > 0)) && "el precio de uno o más ítems seleccionados",
+            !archivoNombre && "el archivo de la cotización (PDF o foto) — es obligatorio",
           ].filter(Boolean).join(", ")}.
         </div>
       )}
@@ -2772,6 +2778,15 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     if (sinNombre >= 0) { abItems.abrir(items[sinNombre].id); alert(`Falta el nombre del ítem ${sinNombre + 1}.`); return; }
     if (!items.length || !objetivo.trim() || !justificacion.trim()) return;
     if (!conceptoGastoId) { alert("Falta elegir el concepto de gasto."); return; }
+    // las cotizaciones se guardan solas apenas tienen proveedor y precio; aquí se revisa que todas lleven su archivo
+    const idxSinArchivo = items.findIndex((i) => (i.cotizaciones || []).some((c) => !c.archivoNombre));
+    if (idxSinArchivo >= 0) {
+      const cSin = items[idxSinArchivo].cotizaciones.find((c) => !c.archivoNombre);
+      const nombreProv = cSin.proveedorId ? (proveedores.find((p) => p.id === cSin.proveedorId)?.nombre || "el proveedor") : (cSin.proveedorNombre || "el proveedor");
+      abItems.abrir(items[idxSinArchivo].id);
+      alert(`Ítem ${idxSinArchivo + 1}: falta adjuntar el archivo de la cotización de «${nombreProv}». Para enviar la solicitud con una cotización hay que subir su documento (PDF o foto). Si no tienes cotización, quita esa fila: se pueden crear solicitudes sin cotizaciones.`);
+      return;
+    }
     const idxUnica = items.findIndex((i) => cotizacionUnicaSinJustificar(i));
     if (idxUnica >= 0) { abItems.abrir(items[idxUnica].id); alert(`Ítem ${idxUnica + 1}: adjuntaste una sola cotización, escribe el comentario de por qué solo se cotizó con un proveedor.`); return; }
     const idxPrecio = items.findIndex((i) => itemConPrecioInvalido(i));
@@ -2780,7 +2795,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     // de ESE ítem — si lo dejó vacío no pasa nada, es opcional
     for (let k = 0; k < items.length; k++) {
       const ps = items[k].pagosSugeridos;
-      if (!planTieneValores(ps)) continue;
+      if (exigeAnticipoPago(items[k]) || !planTieneValores(ps)) continue; // con pago anticipado el plan lo arma el sistema
       const totalIt = totalItemConAiu(items[k], tipo === "servicio");
       const restanteIt = totalIt - totalPagado(ps);
       if (Math.abs(restanteIt) > 0.5) {
@@ -2904,28 +2919,13 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
                   <button type="button" onClick={() => actualizarTasaItem(it.id, it.moneda)} disabled={cargandoTasaItem === it.id} title="Actualizar tasa del día" className="text-slate-400 hover:text-indigo-600 disabled:opacity-50 shrink-0">{cargandoTasaItem === it.id ? "..." : "↻"}</button>
                 </div>
               )}
-              <select value={it.descuentoTipo} onChange={(e) => updateItem(it.id, "descuentoTipo", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">
-                <option value="porcentaje">Desc. %</option>
-                <option value="valor">Desc. $</option>
-              </select>
-              {it.descuentoTipo === "valor" ? (
-                <InputMiles placeholder="Descuento en $" value={it.descuentoValor} onChange={(v) => updateItem(it.id, "descuentoValor", v)} className="w-36 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
-              ) : (
-                <input type="number" min="0" placeholder="Descuento en %" value={it.descuentoValor} onChange={(e) => updateItem(it.id, "descuentoValor", e.target.value)} className="w-36 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
-              )}
               {tipo !== "servicio" && <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
             {parseFloat(it.precioEstimado) > 0 && (() => {
               const d = desgloseItem(it, tipo === "servicio");
-              const inicial = parseFloat(it.precioEstimado) || 0;
-              const descuento = parseFloat(it.descuentoValor) || 0;
-              const conDescuento = descuento > 0 ? Math.max(0, it.descuentoTipo === "porcentaje" ? inicial * (1 - descuento / 100) : inicial - descuento) : inicial;
-              const ahorro = inicial - conDescuento;
-              const simbolo = it.moneda && it.moneda !== "COP" ? `${it.moneda} ` : "$";
               return (
                 <div className="text-[11px] text-slate-500 pl-1 space-y-0.5">
-                  {ahorro > 0 && <div>Precio inicial: {simbolo}{inicial.toLocaleString("es-CO")} · Descuento: -{simbolo}{ahorro.toLocaleString("es-CO", { maximumFractionDigits: 2 })} · Precio con descuento: <b>{simbolo}{conDescuento.toLocaleString("es-CO", { maximumFractionDigits: 2 })}</b></div>}
                   {tipo === "servicio" ? <div>Subtotal (Costo Directo de este ítem): <b>{fmt(d.subtotal)}</b></div> : <div>Subtotal: {fmt(d.subtotal)} · IVA: {fmt(d.iva)} · <b>Total: {fmt(d.total)}</b></div>}
                 </div>
               );
@@ -2933,8 +2933,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             {/* el solicitante puede adjuntar hasta 3 cotizaciones desde ya, opcional */}
             <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" sinIva={tipo === "servicio"} />
             <div className="border-t border-slate-200/70 pt-1.5">
-              {totalItemConAiu(it, tipo === "servicio") > 0
-                ? <PlanPagoCotizacion sinPagoUnico={exigeAnticipoPago(it)} pagos={it.pagosSugeridos} total={totalItemConAiu(it, tipo === "servicio")} onChange={(pg) => updateItem(it.id, "pagosSugeridos", pg)} etiqueta="+ Sugerir plan de pagos para este ítem (opcional — pasa como valor inicial a Compras y Dirección Financiera)" titulo="Plan de pagos sugerido de este ítem" />
+              {exigeAnticipoPago(it)
+                ? <PlanPagoCotizacion sinPagoUnico pagos={null} total={0} onChange={() => {}} />
+                : totalItemConAiu(it, tipo === "servicio") > 0
+                ? <PlanPagoCotizacion sinPagoUnico={false} pagos={it.pagosSugeridos} total={totalItemConAiu(it, tipo === "servicio")} onChange={(pg) => updateItem(it.id, "pagosSugeridos", pg)} etiqueta="+ Sugerir plan de pagos para este ítem (opcional — pasa como valor inicial a Compras y Dirección Financiera)" titulo="Plan de pagos sugerido de este ítem" />
                 : <div className="text-[11px] text-amber-600">Pon un precio estimado para poder sugerir un plan de pagos.</div>}
             </div>
           </div>
@@ -3098,10 +3100,19 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo, sinPagoU
 
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) { const error = validarOrdenFechas(p, campo, val); if (error) { alert(error); return; } }
-    onChange({ ...p, ...(sinUnico && p.tipoPago === "contado" ? { tipoPago: "plan" } : {}), [campo]: { ...p[campo], [sub]: val } });
+    onChange({ ...p, [campo]: { ...p[campo], [sub]: val } });
   };
   const setTipoPago = (tipo) => onChange({ ...p, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...p.pagoUnico, valor: total } : p.pagoUnico });
 
+  // pago anticipado obligatorio: no hay plan que armar ni valores que digitar — el sistema toma el valor final negociado
+  if (sinUnico) {
+    return (
+      <div className="border border-amber-200 bg-amber-50/60 rounded-lg p-2 text-[11px] text-amber-800 flex items-start gap-1.5">
+        <Timer size={13} className="shrink-0 mt-0.5" />
+        <div><b>Pago anticipado obligatorio.</b> El proveedor no despacha hasta recibir el pago: se paga el <b>valor final negociado</b> completo, antes de despachar. El sistema arma ese plan solo; no hay valores que escribir.</div>
+      </div>
+    );
+  }
   if (!abierto) {
     return <button type="button" onClick={() => setAbierto(true)} className="text-[11px] text-indigo-600 underline">{etiqueta || "+ Definir plan de pagos propio de este proveedor (opcional)"}</button>;
   }
@@ -3112,15 +3123,13 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo, sinPagoU
         <span className="text-[11px] font-medium text-slate-600">{titulo || "Plan de pagos de este proveedor"}</span>
         <button type="button" onClick={() => { onChange(null); setAbierto(false); }} className="text-[10px] text-slate-400 hover:text-rose-500">Quitar</button>
       </div>
-      {sinUnico
-        ? <div className="text-[10px] text-amber-700 flex items-center gap-1"><Timer size={11} /> Pago anticipado obligatorio: se programa por etapas (anticipo y saldo).</div>
-        : (
+      {(
           <div className="flex gap-1.5">
             <button type="button" onClick={() => setTipoPago("plan")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago !== "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por etapas</button>
             <button type="button" onClick={() => setTipoPago("contado")} className={`px-2 py-0.5 rounded text-[10px] font-medium border ${p.tipoPago === "contado" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Pago único</button>
           </div>
         )}
-      {p.tipoPago === "contado" && !sinUnico ? (
+      {p.tipoPago === "contado" ? (
         <div className="flex gap-2 items-center">
           <span className="text-[10px] text-slate-500">Valor (= total): {fmt(total)}</span>
           <InputFecha value={p.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="border border-slate-200 rounded-md px-2 py-1 text-xs" />
@@ -3174,6 +3183,13 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
     if (cots.some((c) => c.precioUnitario && !(c.proveedorId || (c.proveedorNombre || "").trim()))) { alert("Toda cotización debe tener el nombre del proveedor. Escríbelo o elimina esa fila."); return; }
     const conPrecioInvalido = cots.find((c) => c.precioUnitario && erroresPrecioCotizacion(item, c).length > 0);
     if (conPrecioInvalido) { alert(erroresPrecioCotizacion(item, conPrecioInvalido)[0].texto + " Corrígelo antes de guardar."); return; }
+    // una cotización con datos (proveedor y precio) debe llevar su documento; sin datos no hace falta (se puede crear una solicitud sin cotizaciones)
+    const sinArchivo = cots.find((c) => (c.proveedorId || (c.proveedorNombre || "").trim()) && c.precioUnitario && !c.archivoNombre);
+    if (sinArchivo) {
+      const nombreProv = sinArchivo.proveedorId ? (proveedores.find((p) => p.id === sinArchivo.proveedorId)?.nombre || "el proveedor") : sinArchivo.proveedorNombre.trim();
+      alert(`Falta adjuntar el archivo de la cotización de «${nombreProv}». Para guardar una cotización hay que subir su documento (PDF o foto). Si todavía no la tienes, deja esa fila vacía o elimínala.`);
+      return;
+    }
     const validasPrevias = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
     if (validasPrevias.length === 1 && !(validasPrevias[0].justificacionUnico || "").trim()) { alert("Solo hay una cotización para este ítem: escribe el comentario de por qué solo se cotizó con un proveedor."); return; }
     let listaCots = [...cots];
@@ -3211,7 +3227,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
         <div className="text-sm font-medium text-slate-700">
           {item.nombre} <span className="text-slate-400 font-normal">({item.cantidad} {item.unidad})</span>
           {parseFloat(item.precioEstimado) > 0 && (
-            <span className="text-[11px] text-slate-400 font-normal ml-2">— precio solicitado: {item.moneda && item.moneda !== "COP" ? `${item.moneda} ${Number(item.precioEstimado).toLocaleString("es-CO")}` : fmt(item.precioEstimado)}{item.descuentoValor > 0 && ` (con ${item.descuentoTipo === "porcentaje" ? `${item.descuentoValor}% dcto.` : `dcto. de ${fmt(item.descuentoValor)}`})`}</span>
+            <span className="text-[11px] text-slate-400 font-normal ml-2">— precio solicitado: {item.moneda && item.moneda !== "COP" ? `${item.moneda} ${Number(item.precioEstimado).toLocaleString("es-CO")}` : fmt(item.precioEstimado)}</span>
           )}
         </div>
         {cots.length < 3 && <button onClick={addCot} className="text-xs text-indigo-600 flex items-center gap-1"><Plus size={12} /> Cotización</button>}
@@ -3270,12 +3286,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                 <input type="checkbox" checked={!!c.anticipoObligatorio} onChange={(e) => update(i, "anticipoObligatorio", e.target.checked)} />
                 ⚠ Este proveedor exige el pago antes de despachar (pago anticipado obligatorio)
               </label>
-              {c.anticipoObligatorio && (
-                <div className="flex items-center gap-1">
-                  <label className="text-[10px] text-slate-400">Valor del anticipo</label>
-                  <input type="number" value={c.anticipoValorObligatorio ?? ""} onChange={(e) => update(i, "anticipoValorObligatorio", e.target.value)} placeholder="$" className="w-28 border border-slate-200 rounded-md px-2 py-1 text-xs" />
-                </div>
-              )}
+              {c.anticipoObligatorio && <span className="text-[10px] text-amber-700">Se paga el <b>valor final negociado</b> completo antes de despachar — el sistema lo toma como plan de pagos.</span>}
             </div>
 
             {erroresPrecioCotizacion(item, c).map((e, k) => (
@@ -3352,7 +3363,10 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
             })()}
 
             <div className="flex items-start justify-between gap-3 flex-wrap">
-              <AdjuntarArchivo small nombre={c.archivoNombre} label="Adjuntar cotización (PDF/foto)" onSeleccionar={(n) => update(i, "archivoNombre", n)} />
+              <div className="space-y-0.5">
+                <AdjuntarArchivo small nombre={c.archivoNombre} label="Adjuntar cotización (PDF/foto)" onSeleccionar={(n) => update(i, "archivoNombre", n)} />
+                {(c.proveedorId || (c.proveedorNombre || "").trim()) && c.precioUnitario && !c.archivoNombre && <div className="text-[10px] text-rose-600 font-medium">Falta el archivo de la cotización — es obligatorio para guardarla</div>}
+              </div>
               {(c.proveedorId || c.proveedorNombre) && c.precioUnitario && (() => {
                 const factor = parseFloat(c.factorConversion) || 1;
                 const precioPorUnidad = precioEquivalente(c);
@@ -3446,7 +3460,7 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
         <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Precio inicial</th><th className="text-right px-3 py-2">Descuento</th><th className="text-right px-3 py-2">Precio final</th><th className="text-right px-3 py-2">Cant.</th><th className="text-right px-3 py-2">{sinIva ? "Costo Directo" : "Total (COP)"}</th>{sinIva && !ocultarAiu && <th className="text-right px-3 py-2">Total c/AIU</th>}<th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
         <tbody>{scored.map((c, i) => (
           <tr key={i} className={`border-t border-slate-100 ${i === bestIdx ? "bg-emerald-50/60" : ""}`}>
-            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.anticipoObligatorio && <span title={parseFloat(c.anticipoValorObligatorio) > 0 ? `Exige un anticipo de ${fmt(parseFloat(c.anticipoValorObligatorio))} antes de despachar` : "Este proveedor exige el pago antes de despachar"} className="text-amber-600"><Timer size={13} /></span>} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
+            <td className="px-3 py-2 font-medium text-slate-700 flex items-center gap-1">{i === bestIdx && <Award size={13} className="text-emerald-600" />} {nombreProv(c)} {c.anticipoObligatorio && <span title="Este proveedor exige el pago antes de despachar: se paga el valor final negociado completo" className="text-amber-600"><Timer size={13} /></span>} {c.archivoNombre && <EnlacePrivado path={c.archivoNombre} className="text-slate-400 hover:text-indigo-600" title="Ver cotización adjunta"><Paperclip size={11} /></EnlacePrivado>}</td>
             <td className="px-3 py-2 text-right">{c.precioUnitario ? `${c.moneda && c.moneda !== "COP" ? c.moneda + " " : ""}${Number(c.precioUnitario).toLocaleString("es-CO")}` : "—"}</td>
             <td className="px-3 py-2 text-right">{c.descuentoValor ? (c.descuentoTipo === "valor" ? `-${Number(c.descuentoValor).toLocaleString("es-CO")}` : `-${c.descuentoValor}%`) : "—"}</td>
             <td className="px-3 py-2 text-right">{c.moneda && c.moneda !== "COP" ? `${c.moneda} ${precioFinalEfectivo(c).toLocaleString("es-CO")}` : fmt(precioFinalEfectivo(c))}</td>
@@ -3483,11 +3497,17 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
           {sinIva && ocultarAiu ? <span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span> : sinIva ? <><span>Costo Directo: <b>{fmt(elegida.subtotal)}</b></span><span>Total con AIU: <b>{fmt(totalConAiu(elegida))}</b> {origenAiu(elegida) && <span className="text-[10px] text-slate-400">({detalleAiu(elegida)} — de {origenAiu(elegida) === "cotizacion" ? "esta cotización" : "el ítem"})</span>}</span></> : (<><span>Subtotal: <b>{fmt(elegida.subtotal)}</b></span><span>IVA: <b>{fmt(elegida.iva)}</b></span><span>Total: <b>{fmt(elegida.total)}</b></span></>)}
         </div>
       )}
-      {elegida?.pagos && (
+      {elegida?.anticipoObligatorio && (
+        <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-amber-800 bg-amber-50/50">
+          <span className="font-medium">Pago anticipado obligatorio de {nombreProv(elegida)}: </span>
+          se paga el valor final negociado completo, {fmt(totalItemConAiu(item, sinIva))}, antes de despachar.
+        </div>
+      )}
+      {elegida?.pagos && !elegida.anticipoObligatorio && (
         <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-slate-600 bg-indigo-50/30">
           <span className="font-medium">Plan de pagos propio de {nombreProv(elegida)}: </span>
           {elegida.pagos.tipoPago === "contado"
-            ? `${elegida.anticipoObligatorio ? "Pago anticipado (antes de despachar)" : "Pago único"} ${fmt(elegida.pagos.pagoUnico?.valor)} — ${elegida.pagos.pagoUnico?.fecha || "sin fecha"}`
+            ? `Pago único ${fmt(elegida.pagos.pagoUnico?.valor)} — ${elegida.pagos.pagoUnico?.fecha || "sin fecha"}`
             : `Anticipo ${fmt(elegida.pagos.anticipo?.valor)} (${elegida.pagos.anticipo?.fecha || "sin fecha"})${elegida.pagos.intermedio?.activo ? `, Intermedio ${fmt(elegida.pagos.intermedio.valor)} (${elegida.pagos.intermedio.fecha || "sin fecha"})` : ""}, Final ${fmt(elegida.pagos.final?.valor)} (${elegida.pagos.final?.fecha || "sin fecha"})`}
         </div>
       )}
@@ -3722,28 +3742,13 @@ function planFaltaFecha(p) {
 }
 // plan con el que arranca un ítem: el oficial si ya existe; si no, lo que sugirió el solicitante (reescalado al
 // total actual del ítem, por si cambió con el AIU); si tampoco hay sugerencia, vacío
-// el anticipo que un proveedor exige para despachar (si tiene un valor puesto): se mira el proveedor ya elegido;
-// si todavía no se ha elegido ninguno, el primero de los cotizados que lo exija
-function anticipoObligatorioDe(it) {
-  const cotSeleccionada = it.cotizacionSeleccionada != null ? it.cotizaciones?.[it.cotizacionSeleccionada] : null;
-  const cot = cotSeleccionada || (it.cotizaciones || []).find((c) => c.anticipoObligatorio);
-  if (!cot?.anticipoObligatorio) return 0;
-  return parseFloat(cot.anticipoValorObligatorio) || 0;
-}
 function planInicialItem(s, it, totalItem) {
   const hayOficial = planTieneValores(it.pagos) || (s.items.length === 1 && planTieneValores(s.pagos));
-  // si el proveedor exige pago anticipado no aplica el "pago único" (en un plan ya confirmado no se toca nada)
-  const sinUnico = (plan) => (exigeAnticipoPago(it) && !planConfirmadoItem(s, it) ? sinPagoUnico(plan, totalItem, anticipoObligatorioDe(it)) : plan);
-  if (hayOficial) return sinUnico(planOficialItem(s, it));
+  // proveedor con pago anticipado obligatorio: el plan lo arma el sistema (en un plan ya confirmado no se toca nada)
+  if (exigeAnticipoPago(it) && !planConfirmadoItem(s, it)) return planPagoAnticipado(hayOficial ? planOficialItem(s, it) : planSugeridoItem(s, it), totalItem);
+  if (hayOficial) return planOficialItem(s, it);
   const sug = planSugeridoItem(s, it);
-  if (planTieneValores(sug)) return sinUnico(reescalarPlanPago(sug, totalItem));
-  // sin ningún plan todavía: si el proveedor exige un anticipo con valor, se arma el plan solo —
-  // anticipo = lo que el proveedor exige, final = el resto del total (las fechas las sigue poniendo quien edite)
-  const anticipoExigido = anticipoObligatorioDe(it);
-  if (anticipoExigido > 0) {
-    const anticipo = Math.min(anticipoExigido, totalItem);
-    return { ...planPagosVacio(), anticipo: { valor: anticipo, fecha: "" }, final: { valor: Math.max(0, totalItem - anticipo), fecha: "" } };
-  }
+  if (planTieneValores(sug)) return reescalarPlanPago(sug, totalItem);
   return planPagosVacio();
 }
 
@@ -3760,17 +3765,13 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
   const hayPlan = planTieneValores(pagos);
   const descuadrado = confirmado && Math.abs(restante) > 0.5;
   const faltaFecha = planFaltaFecha(pagos);
-  // si ya hay un proveedor elegido, se mira ese; si no, se avisa si CUALQUIERA de los cotizados lo exige
-  const cotSeleccionada = item.cotizacionSeleccionada != null ? item.cotizaciones?.[item.cotizacionSeleccionada] : null;
-  const cotAnticipo = cotSeleccionada ? !!cotSeleccionada.anticipoObligatorio : (item.cotizaciones || []).some((c) => c.anticipoObligatorio);
-  const anticipoExigido = anticipoObligatorioDe(item);
-  // si lo que queda guardado como anticipo es menor a lo que el proveedor exige, se avisa (no bloquea, pero debe verse)
-  const anticipoInsuficiente = cotAnticipo && anticipoExigido > 0 && (parseFloat(pagos.anticipo?.valor) || 0) < anticipoExigido - 0.5;
+  // ¿el proveedor exige el pago antes de despachar? (el elegido; si todavía no hay elegido, cualquiera de los cotizados)
+  const cotAnticipo = exigeAnticipoPago(item);
   const cuadre = estadoCuadre(pagos, totalItem);
 
   const set = (campo, sub, val) => {
     if (sub === "fecha" && val) { const error = validarOrdenFechas(pagos, campo, val); if (error) { alert(error); return; } }
-    guardar({ ...pagos, ...(cotAnticipo && pagos.tipoPago === "contado" ? { tipoPago: "plan" } : {}), [campo]: { ...pagos[campo], [sub]: val } });
+    guardar({ ...pagos, [campo]: { ...pagos[campo], [sub]: val } });
   };
   const setTipoPago = (tipo) => guardar({ ...pagos, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...pagos.pagoUnico, valor: totalItem } : pagos.pagoUnico });
 
@@ -3800,11 +3801,10 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
         </button>
         <div className="flex items-center gap-2 shrink-0">
           {cotAnticipo && (
-            <span title={anticipoExigido > 0 ? `Este proveedor exige un anticipo de ${fmt(anticipoExigido)} antes de despachar` : "Este proveedor exige el pago antes de despachar"} className="text-amber-600 flex items-center gap-0.5">
-              <Timer size={13} /><span className="text-[10px] font-medium hidden sm:inline">Pago anticipado{anticipoExigido > 0 ? ` (${fmt(anticipoExigido)})` : ""}</span>
+            <span title="Este proveedor exige el pago antes de despachar: se paga el valor final negociado completo" className="text-amber-600 flex items-center gap-0.5">
+              <Timer size={13} /><span className="text-[10px] font-medium hidden sm:inline">Pago anticipado</span>
             </span>
           )}
-          {anticipoInsuficiente && <Badge tone="red">Anticipo insuficiente — faltan {fmt(anticipoExigido - (parseFloat(pagos.anticipo?.valor) || 0))}</Badge>}
           {cuadre.hayPlan && (cuadre.estado === "falta" || cuadre.estado === "sobra") && <Badge tone={cuadre.estado === "sobra" ? "red" : "amber"}>No cuadra · {cuadre.estado === "sobra" ? "sobran" : "faltan"} {fmt(Math.abs(cuadre.diferencia))}</Badge>}
           <span className="text-xs text-slate-500">{fmt(totalItem)}</span>
           {confirmado
@@ -3814,7 +3814,7 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
       </div>
       <div className={abierto ? "mt-2" : "hidden"}>
       {confirmado && puedeReabrirPlan && <button onClick={onEditarDeNuevo} className="text-[11px] text-indigo-600 underline mb-2 block">Editar de nuevo</button>}
-      {esSugerido && !confirmado && hayPlan && <div className="text-[11px] text-indigo-600 mb-2">Valores iniciales tomados del plan que sugirió el solicitante.</div>}
+      {esSugerido && !confirmado && hayPlan && !cotAnticipo && <div className="text-[11px] text-indigo-600 mb-2">Valores iniciales tomados del plan que sugirió el solicitante.</div>}
       {!hayPlan && !editable ? (
         <div className="text-[11px] text-slate-400">Sin plan de pagos definido para este ítem.</div>
       ) : (
@@ -3829,22 +3829,27 @@ function ItemPlanPago({ item, numero, totalItem, planInicial, esSugerido, confir
           </div>
 
             )
-            : <div className="mb-2"><Badge tone="slate">{pagos.tipoPago === "contado" ? "Pago único" : "Pago por etapas"}</Badge></div>)}
+            : <div className="mb-2"><Badge tone="slate">{pagos.tipoPago === "contado" ? (pagos.anticipado ? "Pago anticipado" : "Pago único") : "Pago por etapas"}</Badge></div>)}
           {pagos.tipoPago === "contado" ? (
             <div className="max-w-xs">
-              <div className="text-[11px] text-slate-400 mb-1">Valor (= total del ítem)</div>
+              {(cotAnticipo || pagos.anticipado) && <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-2 py-1.5 mb-2">Pago anticipado obligatorio: el proveedor no despacha hasta recibir el pago. El sistema toma el <b>valor final negociado</b> como único pago; solo falta la fecha.</div>}
+              <div className="text-[11px] text-slate-400 mb-1">{cotAnticipo || pagos.anticipado ? "Valor a pagar antes de despachar (= valor final negociado)" : "Valor (= total del ítem)"}</div>
               <div className="w-full border border-slate-200 bg-slate-50 rounded-md px-2 py-1.5 text-sm mb-1 text-slate-600">{fmt(totalItem)}</div>
               <InputFecha disabled={!editable} value={pagos.pagoUnico.fecha} onChange={(v) => set("pagoUnico", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-sm disabled:bg-slate-50" />
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-              <div><label className="text-[10px] text-slate-400 block mb-0.5">Anticipo</label><InputMiles disabled={!editable} placeholder="Valor" value={pagos.anticipo.valor} onChange={(v) => set("anticipo", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable} value={pagos.anticipo.fecha} onChange={(v) => set("anticipo", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+              <div><label className="text-[10px] text-slate-400 block mb-0.5">Anticipo</label><InputMiles disabled={!editable || cotAnticipo} placeholder="Valor" value={pagos.anticipo.valor} onChange={(v) => set("anticipo", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable} value={pagos.anticipo.fecha} onChange={(v) => set("anticipo", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
               <div><label className="text-[10px] text-slate-400 flex items-center gap-1 mb-0.5"><input disabled={!editable} type="checkbox" checked={pagos.intermedio.activo} onChange={(e) => set("intermedio", "activo", e.target.checked)} /> Intermedio</label><InputMiles disabled={!editable || !pagos.intermedio.activo} placeholder="Valor" value={pagos.intermedio.valor} onChange={(v) => set("intermedio", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable || !pagos.intermedio.activo} value={pagos.intermedio.fecha} onChange={(v) => set("intermedio", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
-              <div><label className="text-[10px] text-slate-400 block mb-0.5">Pago final</label><InputMiles disabled={!editable} placeholder="Valor" value={pagos.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable} value={pagos.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
+              <div><label className="text-[10px] text-slate-400 block mb-0.5">Pago final</label><InputMiles disabled={!editable || cotAnticipo} placeholder="Valor" value={pagos.final.valor} onChange={(v) => set("final", "valor", v)} className="w-full mb-1 border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /><InputFecha disabled={!editable} value={pagos.final.fecha} onChange={(v) => set("final", "fecha", v)} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs disabled:bg-slate-50" /></div>
             </div>
           )}
           <div className="mt-2 space-y-2">
-            <PanelCuadre pagos={pagos} total={totalItem} editable={editable} confirmado={confirmado} onAjustar={(np) => guardar(np)} />
+            {cotAnticipo && pagos.tipoPago === "contado" && cuadre.estado === "cuadra"
+              ? (faltaFecha
+                ? <div className="text-[11px] text-rose-700 flex items-center gap-1"><AlertTriangle size={12} /> Falta la fecha del pago anticipado.{editable ? " No se puede confirmar sin ella." : ""}</div>
+                : <div className="text-[11px] text-emerald-700 flex items-center gap-1"><CheckCircle2 size={12} /> Pago anticipado programado: {fmt(totalItem)} el {pagos.pagoUnico.fecha}.</div>)
+              : <PanelCuadre pagos={pagos} total={totalItem} editable={editable} confirmado={confirmado} onAjustar={(np) => guardar(np)} />}
             {editable && !confirmado && <div className="flex justify-end"><button onClick={confirmar} className="text-[11px] bg-emerald-600 text-white px-2 py-1 rounded-md font-medium">Confirmar este ítem</button></div>}
           </div>
         </>
@@ -5070,7 +5075,18 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const abSug = useAbiertosItems(solicitud.items);   // plan de pagos sugerido al corregir
   const [rechazando, setRechazando] = useState(false);
   const [motivoRechazo, setMotivoRechazo] = useState("");
-  const { mostrar: mostrarToast } = useToast();
+  const { mostrar: mostrarToastBase } = useToast();
+  // Los avisos de una acción ("Solicitud aprobada...", "Solicitud rechazada...") se muestran DESPUÉS de saber que el cambio quedó
+  // guardado: si la base lo rechaza no sale ese aviso (sale el rojo de App: "El cambio NO se guardó"), y mientras se guarda el botón
+  // principal queda bloqueado para no aprobar dos veces.
+  const guardadoPendiente = useRef(null);
+  const [guardandoSol, setGuardandoSol] = useState(false);
+  const esError = (r) => r instanceof Error || (!!r && typeof r === "object" && "message" in r);
+  const mostrarToast = (mensaje, tipo = "ok", opciones) => {
+    const pendiente = guardadoPendiente.current;
+    if (!pendiente) return mostrarToastBase(mensaje, tipo, opciones); // sin guardado en curso: se muestra ya (p. ej. un error al generar un PDF)
+    pendiente.then((resultado) => { if (!esError(resultado)) mostrarToastBase(mensaje, tipo, opciones); });
+  };
   const [unificando, setUnificando] = useState(false);
   // recopila TODO lo adjuntado a la solicitud (cotizaciones, órdenes, soportes de recepción, factura, actas) y arma
   // un único PDF descargable, con índice — pensado para tener el expediente completo listo en una auditoría.
@@ -5181,7 +5197,13 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const comprometidoAreaDet = (solicitudes || []).filter((x) => x.areaId === solicitud.areaId && x.id !== solicitud.id && !ESTADOS_SIN_COMPROMISO.includes(x.status)).reduce((acc, x) => acc + totalSolicitud(x), 0);
   const todasCotizadas = solicitud.items.every((i) => i.cotizaciones.length > 0 && i.cotizaciones.every((c) => c.proveedorId || (c.proveedorNombre || "").trim()) && !cotizacionUnicaSinJustificar(i) && !itemConPrecioInvalido(i));
   const comparativoBloqueado = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
-  const patch = (fields) => onUpdate({ ...solicitud, ...fields });
+  const patch = (fields) => {
+    const guardado = Promise.resolve(onUpdate({ ...solicitud, ...fields }));
+    guardadoPendiente.current = guardado;
+    setGuardandoSol(true);
+    guardado.finally(() => { if (guardadoPendiente.current === guardado) { guardadoPendiente.current = null; setGuardandoSol(false); } });
+    return guardado;
+  };
 
   const reabrirSolicitud = () => {
     const { status: destino, campo, revision } = pasoDelRechazo(solicitud);
@@ -5608,8 +5630,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             return (
               <ItemColapsable key={it.id} abierto={abSug.abierto(it.id)} onToggle={() => abSug.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)} resumen={<span>Total {fmt(totalIt)}{planTieneValores(sug) ? " · con plan" : ""}</span>}>
               <div className="space-y-1.5 p-1">
-                {totalIt > 0
-                  ? <PlanPagoCotizacion key={it.id} sinPagoUnico={exigeAnticipoPago(it)} pagos={planTieneValores(sug) ? sug : null} total={totalIt} onChange={(pg) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, pagosSugeridos: pg } : x)) })} etiqueta="+ Sugerir plan de pagos para este ítem" titulo="Plan de pagos sugerido de este ítem" />
+                {exigeAnticipoPago(it)
+                  ? <PlanPagoCotizacion key={it.id} sinPagoUnico pagos={null} total={0} onChange={() => {}} />
+                  : totalIt > 0
+                  ? <PlanPagoCotizacion key={it.id} sinPagoUnico={false} pagos={planTieneValores(sug) ? sug : null} total={totalIt} onChange={(pg) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, pagosSugeridos: pg } : x)) })} etiqueta="+ Sugerir plan de pagos para este ítem" titulo="Plan de pagos sugerido de este ítem" />
                   : <div className="text-[11px] text-amber-600">Pon un precio estimado para poder sugerir un plan de pagos.</div>}
               </div>
               </ItemColapsable>
@@ -5766,7 +5790,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           )}
           <div className="flex gap-2 justify-end">
             <button onClick={() => setRechazando((v) => !v)} className="px-4 py-2 rounded-lg text-sm text-rose-600 border border-rose-200 flex items-center gap-1"><XCircle size={15} /> Rechazar</button>
-            <button id="boton-accion-principal" onClick={avanzar} disabled={(solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !planesTodosConfirmados(solicitud)) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
+            <button id="boton-accion-principal" onClick={avanzar} disabled={guardandoSol || (solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !planesTodosConfirmados(solicitud)) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
           </div>
         </div>
       )}
@@ -6756,7 +6780,7 @@ export default function App() {
   const [temaElegido, setTemaElegido] = useState(null); // lo que la persona eligió en esta sesión (se muestra al instante)
   const temaActual = temaElegido || temaDeLaCuenta || (idUsuarioSesion ? leerTemaLocal(idUsuarioSesion) : null) || TEMA_ORIGINAL;
   const claveTema = JSON.stringify(temaActual) + "|" + (idUsuarioSesion || "");
-  useEffect(() => { aplicarTema(idUsuarioSesion ? temaActual : null); }, [claveTema]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { aplicarTema(idUsuarioSesion ? temaActual : TEMA_ORIGINAL); }, [claveTema]); // eslint-disable-line react-hooks/exhaustive-deps
   const temporizadorTema = useRef(null);
   useEffect(() => { setTemaElegido(null); clearTimeout(temporizadorTema.current); }, [idUsuarioSesion]); // otra persona: se parte de SU paleta
   const elegirTema = (t) => {
@@ -6830,9 +6854,11 @@ export default function App() {
     const destinos = { aprobacion_director: "aprobación del director de área", cotizando: "Compras para cotizar" };
     mostrarToast(`Solicitud ${nueva.folio} creada y enviada a ${destinos[nueva.status] || PASOS.find((p) => p.key === nueva.status)?.label || "aprobación"}`);
   };
+  // devuelve el error (si lo hubo) para que quien llama sepa si el cambio quedó guardado de verdad
   const actualizarSolicitud = async (upd) => {
     const error = await actualizarSolicitudDB(upd);
-    if (error) mostrarToast(`No se pudo guardar el cambio: ${error.message || "error desconocido"}`, "alerta");
+    if (error) mostrarToast(`⚠ El cambio NO se guardó: ${error.message || "error desconocido"}`, "alerta", { duracion: 12000 });
+    return error;
   };
 
   const eliminarSolicitud = async (id, folio) => {
