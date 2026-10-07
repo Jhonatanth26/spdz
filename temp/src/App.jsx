@@ -88,8 +88,9 @@ const HISTORICO_INIT = [
   { id: "h2", itemNombre: "Sal industrial", fecha: "2026-01-08", proveedor: "Distribuidora del Norte", precioUnitario: 4100, cantidad: 20, unidad: "kilo" },
 ];
 
-const UMBRAL_DIRECCION = 500000;
-const UMBRAL_GERENCIA = 100000000;
+// los umbrales se editan en Catálogo → Parámetros (tabla "parametros"); estos son los valores por defecto si la tabla aún no existe
+let UMBRAL_DIRECCION = 500000;
+let UMBRAL_GERENCIA = 100000000;
 const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "caja", "paquete", "hora", "servicio"];
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
@@ -6614,6 +6615,52 @@ function ImportarEmpleados({ areas, usuarios, onTerminar }) {
 /* ---------------------------------------------------------
    CATÁLOGOS
 --------------------------------------------------------- */
+// Parámetros del proceso que antes estaban fijos en el código: a partir de qué valor se exige cada aprobación.
+function ParametrosPanel({ parametros, guardarParametro }) {
+  const { mostrar: mostrarToast } = useToast();
+  const DEFS = [
+    { clave: "umbral_direccion", label: "Umbral de Dirección Financiera", ayuda: "Desde este valor total la solicitud necesita la aprobación de Dirección Financiera.", defecto: 500000 },
+    { clave: "umbral_gerencia", label: "Umbral de Gerencia", ayuda: "Desde este valor total la solicitud también necesita la aprobación de Gerencia.", defecto: 100000000 },
+  ];
+  const vigente = (clave, defecto) => parametros.find((x) => x.clave === clave)?.valor ?? defecto;
+  const [vals, setVals] = useState(() => Object.fromEntries(DEFS.map((d) => [d.clave, vigente(d.clave, d.defecto)])));
+  const [guardando, setGuardando] = useState(false);
+  const cambiado = DEFS.some((d) => Number(vals[d.clave]) !== vigente(d.clave, d.defecto));
+  const invalido = DEFS.some((d) => !(Number(vals[d.clave]) >= 0) || vals[d.clave] === "") || Number(vals.umbral_gerencia) < Number(vals.umbral_direccion);
+  const guardar = async () => {
+    setGuardando(true);
+    let error = null;
+    for (const d of DEFS) {
+      const actual = parametros.find((x) => x.clave === d.clave);
+      if (actual && actual.valor === Number(vals[d.clave])) continue;
+      const r = await guardarParametro({ ...(actual || { clave: d.clave }), valor: Number(vals[d.clave]) });
+      if (r instanceof Error || (r && r.message && !r.clave)) { error = r; break; }
+    }
+    setGuardando(false);
+    if (error) mostrarToast(`⚠ No se pudo guardar: ${error.message || "error desconocido"}. ¿Ya ejecutaste el SQL de parámetros?`, "alerta", { duracion: 9000 });
+    else mostrarToast("Parámetros guardados — ya aplican en toda la app");
+  };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200">
+      <div className="px-5 py-3 border-b border-slate-100">
+        <div className="flex items-center gap-2 font-medium text-slate-700"><Settings size={16} /> Parámetros del proceso de aprobación</div>
+        <div className="text-xs text-slate-400 mt-1">Cambia los valores y guarda: aplica de inmediato a todos, sin tocar código. Solo afecta a las solicitudes que aún no han pasado por esa aprobación.</div>
+      </div>
+      <div className="p-5 grid sm:grid-cols-2 gap-4 max-w-3xl">
+        {DEFS.map((d) => (
+          <div key={d.clave}>
+            <label className="text-xs font-medium text-slate-500 mb-1 block" htmlFor={`param-${d.clave}`}>{d.label} (COP)</label>
+            <InputMiles value={vals[d.clave]} onChange={(v) => setVals({ ...vals, [d.clave]: v })} className="w-full border border-slate-200 rounded-md px-3 py-2 text-sm" />
+            <div className="text-[11px] text-slate-400 mt-1">{d.ayuda}</div>
+          </div>
+        ))}
+      </div>
+      {invalido && <div className="px-5 pb-2 text-[11px] text-rose-600">El umbral de Gerencia no puede ser menor que el de Dirección Financiera, y ambos deben tener un valor.</div>}
+      <div className="px-5 pb-5"><button onClick={guardar} disabled={!cambiado || invalido || guardando} className="text-sm bg-indigo-600 text-white px-4 py-2 rounded-md font-medium disabled:opacity-40">{guardando ? "Guardando..." : "Guardar parámetros"}</button></div>
+    </div>
+  );
+}
+
 function Catalogos({
   currentUser,
   solicitudes,
@@ -6624,14 +6671,14 @@ function Catalogos({
   usuarios, guardarUsuario, eliminarUsuario, recargarUsuarios,
   itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo,
   conceptosGasto, guardarConceptoGasto, eliminarConceptoGasto,
-  permisos, togglePermiso,
+  permisos, togglePermiso, parametros = [], guardarParametro,
 }) {
   const [sub, setSub] = useState("empresas");
   const tabs = [
     { key: "empresas", label: "Empresas", icon: Building2 }, { key: "areas", label: "Áreas", icon: Layers }, { key: "departamentos", label: "Departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
     { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
-    ...(currentUser?.rol === "Administrador" ? [{ key: "permisos", label: "Permisos", icon: Lock }] : []),
+    ...(currentUser?.rol === "Administrador" ? [{ key: "permisos", label: "Permisos", icon: Lock }, { key: "parametros", label: "Parámetros", icon: Settings }] : []),
   ];
 
   // no se puede borrar un proveedor o un ítem que ya está referenciado en alguna solicitud existente
@@ -6718,6 +6765,7 @@ function Catalogos({
       )}
       {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
       {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }, { key: "centroCosto", label: "Centro de costo" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ empresaId: "", grupo: "", codigo: "", nombre: "", centroCosto: "" }} />}
+      {sub === "parametros" && currentUser?.rol === "Administrador" && <ParametrosPanel parametros={parametros} guardarParametro={guardarParametro} />}
       {sub === "permisos" && currentUser?.rol === "Administrador" && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <div className="px-5 py-3 border-b border-slate-100">
@@ -6847,6 +6895,13 @@ export default function App() {
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, area_id: r.areaId, areas_adicionales: r.areasAdicionales || [], rol: r.rol }),
     orderBy: 'nombre',
   });
+  const { datos: parametros, guardar: guardarParametro } = useSupabaseTable('parametros', {
+    desdeDb: (r) => ({ id: r.id, clave: r.clave, valor: Number(r.valor) }),
+    haciaDb: (r) => ({ id: r.id, clave: r.clave, valor: r.valor }),
+  });
+  // los umbrales vigentes: se toman de la tabla en cada pintado, así el cambio aplica a toda la app de inmediato
+  { const d = parametros.find((x) => x.clave === "umbral_direccion"), g = parametros.find((x) => x.clave === "umbral_gerencia");
+    if (d && d.valor >= 0) UMBRAL_DIRECCION = d.valor; if (g && g.valor >= 0) UMBRAL_GERENCIA = g.valor; }
   const { datos: permisos, cargando: cargandoPermisos, guardar: guardarPermiso } = useSupabaseTable('permisos', {
     desdeDb: (r) => ({ id: r.id, rol: r.rol, permiso: r.permiso, activo: r.activo }),
     haciaDb: (r) => ({ id: r.id, rol: r.rol, permiso: r.permiso, activo: r.activo }),
@@ -7156,7 +7211,7 @@ export default function App() {
             usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios}
             itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
-            permisos={permisos} togglePermiso={togglePermiso}
+            permisos={permisos} togglePermiso={togglePermiso} parametros={parametros} guardarParametro={guardarParametro}
           />
         ) : (
           <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
