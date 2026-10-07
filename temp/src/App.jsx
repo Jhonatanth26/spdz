@@ -6764,7 +6764,7 @@ function Catalogos({
         </>
       )}
       {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
-      {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }, { key: "centroCosto", label: "Centro de costo" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ empresaId: "", grupo: "", codigo: "", nombre: "", centroCosto: "" }} />}
+      {sub === "conceptos" && <CrudTable titulo="Conceptos de gastos (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }, { key: "centroCosto", label: "Centro de costo" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ empresaId: "", grupo: "", codigo: "", nombre: "", centroCosto: "" }} />}
       {sub === "parametros" && currentUser?.rol === "Administrador" && <ParametrosPanel parametros={parametros} guardarParametro={guardarParametro} />}
       {sub === "permisos" && currentUser?.rol === "Administrador" && (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
@@ -6867,7 +6867,7 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
 }
 
 export default function App() {
-  // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
+  // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gastos, usuarios) ---
   const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea, guardarLote: guardarAreasLote } = useSupabaseTable('areas', {
     desdeDb: areaDesdeDb,
     haciaDb: areaHaciaDb,
