@@ -6677,7 +6677,7 @@ function Catalogos({
   const tabs = [
     { key: "empresas", label: "Empresas", icon: Building2 }, { key: "areas", label: "Áreas", icon: Layers }, { key: "departamentos", label: "Departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
-    { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
+    { key: "conceptos", label: "Conceptos de gastos", icon: ClipboardList },
     ...(currentUser?.rol === "Administrador" ? [{ key: "permisos", label: "Permisos", icon: Lock }, { key: "parametros", label: "Parámetros", icon: Settings }] : []),
   ];
 
