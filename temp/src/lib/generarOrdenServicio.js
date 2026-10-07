@@ -14,7 +14,7 @@ const FONDO = rgb(0.95, 0.95, 0.96)
 
 export async function generarOrdenServicioPDF({
   solicitud, empresa, proveedor, proveedorNombre, area, solicitanteNombre, items = [],
-  costoDirecto = 0, administracion = 0, utilidad = 0, imprevistos = 0, ivaUtilidad = 0, total = 0, planesPago = [],
+  costoDirecto = 0, administracion = 0, utilidad = 0, imprevistos = 0, ivaUtilidad = 0, total = 0, planesPago = [], logoBytes = null,
 }) {
   const pdfDoc = await PDFDocument.create()
   const fR = await pdfDoc.embedFont(StandardFonts.Helvetica)
@@ -22,7 +22,7 @@ export async function generarOrdenServicioPDF({
 
   const W = 612, H = 792, M = 45
   const ANCHO = W - M * 2
-  const PIE = 50 // espacio reservado abajo para el pie de página
+  const PIE = 62 // espacio reservado abajo para el pie de página
   let pagina
   let y
 
@@ -62,8 +62,24 @@ export async function generarOrdenServicioPDF({
   const dato = (v) => (v === undefined || v === null || String(v).trim() === '' ? '—' : String(v))
 
   // ---------- ENCABEZADO ----------
-  txt(empresa?.nombre || 'Empresa', M, y - 13, 15, { bold: true })
-  txt(`Nit: ${dato(empresa?.nit)}`, M, y - 29, 9, { color: GRIS })
+  // logo de la empresa (Catálogo → Empresas): si no hay o no se puede leer, el encabezado queda solo con el nombre y el NIT
+  let xTexto = M
+  if (logoBytes && logoBytes.length > 8) {
+    try {
+      const b = logoBytes
+      const esPng = b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47
+      const esJpg = b[0] === 0xff && b[1] === 0xd8
+      if (esPng || esJpg) {
+        const img = esPng ? await pdfDoc.embedPng(b) : await pdfDoc.embedJpg(b)
+        const escala = Math.min(120 / img.width, 44 / img.height)
+        const lw = img.width * escala, lh = img.height * escala
+        pagina.drawImage(img, { x: M, y: y - lh - (46 - lh) / 2, width: lw, height: lh })
+        xTexto = M + lw + 12
+      }
+    } catch (e) { console.warn('No se pudo incluir el logo en el PDF:', e) }
+  }
+  txt(empresa?.nombre || 'Empresa', xTexto, y - 13, 15, { bold: true })
+  txt(`Nit: ${dato(empresa?.nit)}`, xTexto, y - 29, 9, { color: GRIS })
   const bw = 180, bx = W - M - bw
   caja(bx, y, bw, 46)
   linea(bx, y - 21, bx + bw, y - 21)
@@ -199,8 +215,8 @@ export async function generarOrdenServicioPDF({
   const lPago = lineasPago.length ? lineasPago.flatMap((l) => envolver(l, wPago - 16, 8.5, false)) : ['Sin plan de pagos definido.']
   const lPlazo = [solicitud.folio, ...(solicitud.fechaEstimada ? [`Entrega estimada: ${solicitud.fechaEstimada}`] : [])].flatMap((l) => envolver(l, wPlazo - 16, 8.5, false))
   const altoPago = Math.max(46, 8 + 12 + Math.max(lPago.length, lPlazo.length) * 10.5 + 8)
-  const altoFirmas = 118 // deja espacio bajo "AUTORIZA" para las 3 líneas de la firma digital
-  const altoObs = 46
+  const altoFirmas = 126 // deja espacio bajo "AUTORIZA" para las 3 líneas de la firma digital
+  const altoObs = 52
   hay(altoPago + 10 + altoFirmas + 10 + altoObs)
 
   caja(M, y, wPago, altoPago)
@@ -213,7 +229,7 @@ export async function generarOrdenServicioPDF({
 
   // firmas: en AUTORIZA se estampa la firma digital de Dirección Financiera (queda anotada su posición en el PDF)
   const wFirma = (ANCHO - 10) / 2
-  const yLineaFirma = y - 62
+  const yLineaFirma = y - 66
   ;[['AUTORIZA', M], ['ACEPTADO', M + wFirma + 10]].forEach(([et, x]) => {
     caja(x, y, wFirma, altoFirmas)
     linea(x + 22, yLineaFirma, x + wFirma - 22, yLineaFirma, 0.8)

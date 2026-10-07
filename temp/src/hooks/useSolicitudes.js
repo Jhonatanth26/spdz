@@ -73,9 +73,11 @@ export function useSolicitudes() {
   useEffect(() => { recargar() }, [recargar])
 
   const crear = async (nueva) => {
-    const { error } = await supabase.from('solicitudes').insert(haciaFila(nueva))
-    if (error) { console.error('Error creando solicitud:', error.message); return error }
+    // se pide de vuelta el id real (lo genera la base de datos): lo necesitan las notificaciones, que apuntan a la solicitud
+    const { data, error } = await supabase.from('solicitudes').insert(haciaFila(nueva)).select('id').single()
+    if (error) { console.error('Error creando solicitud:', error.message); return { error } }
     await recargar()
+    return { id: data?.id }
   }
 
   const actualizar = async (sol) => {

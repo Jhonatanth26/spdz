@@ -38,6 +38,8 @@ export function useNotificaciones(usuarioId) {
       usuario_id: destinatarioId, mensaje, solicitud_id: solicitudId, leida: false,
     })
     if (error) console.error('Error creando notificación:', error.message)
+    // si la notificación es para quien la genera (confirmación propia), se refresca la campana de una vez
+    else if (destinatarioId === usuarioId) cargar()
   }
 
   const marcarLeida = async (id) => {
