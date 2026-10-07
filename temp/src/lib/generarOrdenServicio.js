@@ -62,8 +62,8 @@ export async function generarOrdenServicioPDF({
   const dato = (v) => (v === undefined || v === null || String(v).trim() === '' ? '—' : String(v))
 
   // ---------- ENCABEZADO ----------
-  // logo de la empresa (Catálogo → Empresas): si no hay o no se puede leer, el encabezado queda solo con el nombre y el NIT
-  let xTexto = M
+  // logo de la empresa (Catálogo → Empresas) y el NIT debajo; sin logo (o si no se puede leer) se pone el nombre y el NIT, como antes
+  let logoPuesto = false
   if (logoBytes && logoBytes.length > 8) {
     try {
       const b = logoBytes
@@ -71,21 +71,24 @@ export async function generarOrdenServicioPDF({
       const esJpg = b[0] === 0xff && b[1] === 0xd8
       if (esPng || esJpg) {
         const img = esPng ? await pdfDoc.embedPng(b) : await pdfDoc.embedJpg(b)
-        const escala = Math.min(120 / img.width, 44 / img.height)
+        const escala = Math.min(130 / img.width, 46 / img.height)
         const lw = img.width * escala, lh = img.height * escala
-        pagina.drawImage(img, { x: M, y: y - lh - (46 - lh) / 2, width: lw, height: lh })
-        xTexto = M + lw + 12
+        pagina.drawImage(img, { x: M, y: y - lh, width: lw, height: lh })
+        txt(`Nit: ${dato(empresa?.nit)}`, M, y - lh - 11, 9, { color: GRIS })
+        logoPuesto = true
       }
     } catch (e) { console.warn('No se pudo incluir el logo en el PDF:', e) }
   }
-  txt(empresa?.nombre || 'Empresa', xTexto, y - 13, 15, { bold: true })
-  txt(`Nit: ${dato(empresa?.nit)}`, xTexto, y - 29, 9, { color: GRIS })
+  if (!logoPuesto) {
+    txt(empresa?.nombre || 'Empresa', M, y - 13, 15, { bold: true })
+    txt(`Nit: ${dato(empresa?.nit)}`, M, y - 29, 9, { color: GRIS })
+  }
   const bw = 180, bx = W - M - bw
   caja(bx, y, bw, 46)
   linea(bx, y - 21, bx + bw, y - 21)
   txtCentro('ORDEN DE SERVICIO / TRABAJO', bx + bw / 2, y - 14, 9, { bold: true })
   txtCentro(`No ${solicitud.folio}`, bx + bw / 2, y - 38, 13, { bold: true })
-  y -= 62
+  y -= logoPuesto ? 76 : 62
 
   const fecha = new Date().toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' })
   txt('FECHA:', M, y - 9, 9, { bold: true })
