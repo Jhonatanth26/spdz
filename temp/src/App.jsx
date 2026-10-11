@@ -2667,6 +2667,11 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         return;
       }
     }
+    for (let k = 0; k < items.length; k++) {
+      const ps = items[k].pagosSugeridos;
+      if (exigeAnticipoPago(items[k]) || !planTieneValores(ps)) continue;
+      if (planFaltaFechaPlan(ps)) { abItems.abrir(items[k].id); alert(`Ítem ${k + 1}: falta poner la fecha del plan de pagos sugerido.`); return; }
+    }
     // los ítems escritos a mano (sin elegir del catálogo) también quedan guardados ahí, para no perder esa información
     items.forEach((it) => {
       if (!it.itemCatalogoId && it.nombre.trim()) {
@@ -2799,7 +2804,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               {exigeAnticipoPago(it)
                 ? <PlanPagoCotizacion sinPagoUnico servicio={tipo === "servicio"} pagos={null} total={0} onChange={() => {}} />
                 : totalItemConAiu(it, tipo === "servicio") > 0
-                ? <PlanPagoCotizacion sinFechas servicio={tipo === "servicio"} sinPagoUnico={false} pagos={it.pagosSugeridos} total={totalItemConAiu(it, tipo === "servicio")} onChange={(pg) => updateItem(it.id, "pagosSugeridos", pg)} etiqueta="+ Sugerir plan de pagos para este ítem (opcional — pasa como valor inicial a Compras y Dirección Financiera)" titulo="Plan de pagos sugerido de este ítem" />
+                ? <PlanPagoCotizacion servicio={tipo === "servicio"} sinPagoUnico={false} pagos={it.pagosSugeridos} total={totalItemConAiu(it, tipo === "servicio")} onChange={(pg) => updateItem(it.id, "pagosSugeridos", pg)} etiqueta="+ Sugerir plan de pagos para este ítem (opcional — pasa como valor inicial a Compras y Dirección Financiera)" titulo="Plan de pagos sugerido de este ítem" />
                 : <div className="text-[11px] text-amber-600">Pon un precio estimado para poder sugerir un plan de pagos.</div>}
             </div>
           </div>
@@ -5612,7 +5617,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
                 {exigeAnticipoPago(it)
                   ? <PlanPagoCotizacion key={it.id} sinPagoUnico servicio={solicitud.tipo === "servicio"} pagos={null} total={0} onChange={() => {}} />
                   : totalIt > 0
-                  ? <PlanPagoCotizacion key={it.id} sinFechas servicio={solicitud.tipo === "servicio"} sinPagoUnico={false} pagos={planTieneValores(sug) ? sug : null} total={totalIt} onChange={(pg) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, pagosSugeridos: pg } : x)) })} etiqueta="+ Sugerir plan de pagos para este ítem" titulo="Plan de pagos sugerido de este ítem" />
+                  ? <PlanPagoCotizacion key={it.id} servicio={solicitud.tipo === "servicio"} sinPagoUnico={false} pagos={planTieneValores(sug) ? sug : null} total={totalIt} onChange={(pg) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, pagosSugeridos: pg } : x)) })} etiqueta="+ Sugerir plan de pagos para este ítem" titulo="Plan de pagos sugerido de este ítem" />
                   : <div className="text-[11px] text-amber-600">Pon un precio estimado para poder sugerir un plan de pagos.</div>}
               </div>
               </ItemColapsable>
