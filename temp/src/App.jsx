@@ -7128,6 +7128,11 @@ export default function App() {
         </div>
 
       <main className="flex-1 p-6 pt-2 overflow-auto">
+        {empresas.some((e) => e.logoUrl) && (
+          <div className="no-print flex items-center justify-end gap-6 pb-2 mb-3 border-b border-slate-200">
+            {empresas.filter((e) => e.logoUrl).map((e) => <img key={e.id} src={e.logoUrl} alt={e.nombre} title={e.nombre} className="h-10 max-w-[140px] object-contain" />)}
+          </div>
+        )}
         {creando ? (
           <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
         ) : perfil ? (
