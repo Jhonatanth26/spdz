@@ -2822,7 +2822,9 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             {/* el solicitante puede adjuntar hasta 3 cotizaciones desde ya, opcional */}
             <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => setCotizacionesItem(it.id, cots)} compacto opcionalTitulo="Adjuntar cotizaciones (opcional, máx. 3)" sinIva={tipo === "servicio"} />
             <div className="border-t border-slate-200/70 pt-1.5">
-              {exigeAnticipoPago(it)
+              {(it.cotizaciones || []).some((c) => c.precioUnitario)
+                ? <div className="text-[11px] text-slate-400">El plan de pagos se define dentro de cada cotización (por ítem y por proveedor).</div>
+                : exigeAnticipoPago(it)
                 ? <PlanPagoCotizacion sinPagoUnico servicio={tipo === "servicio"} pagos={null} total={0} onChange={() => {}} />
                 : totalItemConAiu(it, tipo === "servicio") > 0
                 ? <PlanPagoCotizacion servicio={tipo === "servicio"} sinPagoUnico={false} pagos={it.pagosSugeridos} total={totalItemConAiu(it, tipo === "servicio")} onChange={(pg) => updateItem(it.id, "pagosSugeridos", pg)} etiqueta="+ Sugerir plan de pagos para este ítem (opcional — pasa como valor inicial a Compras y Dirección Financiera)" titulo="Plan de pagos sugerido de este ítem" />
@@ -3257,13 +3259,13 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
             )}
 
-            {sinIva && c.precioUnitario && (() => {
+            {(c.proveedorId || (c.proveedorNombre || "").trim()) && c.precioUnitario && (() => {
               const aiuC = compacto ? (c.aiu || {}) : aiuDe(c);
               const admC = d.subtotal * (parseFloat(aiuC.administracionPct) || 0) / 100;
               const utilC = d.subtotal * (parseFloat(aiuC.utilidadPct) || 0) / 100;
               const imprevC = d.subtotal * (parseFloat(aiuC.imprevistosPct) || 0) / 100;
-              const totalCotizacion = d.subtotal + admC + utilC + imprevC + utilC * 0.19;
-              return <PlanPagoCotizacion sinPagoUnico={!!c.anticipoObligatorio} pagos={c.pagos} total={totalCotizacion} onChange={(pagos) => update(i, "pagos", pagos)} />;
+              const totalCotizacion = sinIva ? d.subtotal + admC + utilC + imprevC + utilC * 0.19 : d.total;
+              return <PlanPagoCotizacion servicio={sinIva} etiqueta="+ Definir plan de pagos de este ítem con este proveedor" titulo="Plan de pagos — este ítem con este proveedor" sinPagoUnico={!!c.anticipoObligatorio} pagos={c.pagos} total={totalCotizacion} onChange={(pagos) => update(i, "pagos", pagos)} />;
             })()}
 
             <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -3649,6 +3651,9 @@ function planInicialItem(s, it, totalItem) {
     // el plan quedó armado como anticipo obligatorio pero el proveedor que aplica ya no lo exige (se agregó o eligió otra cotización): el plan vuelve a ser editable
     return of.anticipado && !planConfirmadoItem(s, it) ? { ...of, anticipado: false } : of;
   }
+  // plan propio del proveedor que aplica a este ítem (se define en su cotización)
+  const cotAct = (it.cotizaciones || [])[idxCotizacionActiva(it, s.tipo === "servicio")];
+  if (cotAct && planTieneValores(cotAct.pagos)) return reescalarPlanPago({ ...planPagosVacio(), ...cotAct.pagos }, totalItem);
   const sug = planSugeridoItem(s, it);
   if (planTieneValores(sug)) return reescalarPlanPago(sug, totalItem);
   return planPagosVacio();
