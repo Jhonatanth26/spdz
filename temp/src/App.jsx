@@ -3147,11 +3147,15 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                 <select value={c.unidadCotizada} onChange={(e) => update(i, "unidadCotizada", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
               </div>
               <div className="flex flex-col gap-0.5">
-                <label className="text-[10px] text-slate-400">1 {c.unidadCotizada} equivale a</label>
+                <label className="text-[10px] text-slate-400">Unidad equivalente: 1 {c.unidadCotizada} equivale a</label>
                 <div className="flex items-center gap-1">
                   <input type="number" value={c.factorConversion} onChange={(e) => update(i, "factorConversion", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
                   <span className="text-[10px] text-slate-400 whitespace-nowrap">{item.unidad}</span>
                 </div>
+                <details className="text-[10px] text-slate-500">
+                  <summary className="cursor-pointer text-indigo-600">¿Qué es la unidad equivalente?</summary>
+                  <div className="mt-0.5 bg-indigo-50 border border-indigo-100 rounded-md px-2 py-1.5 leading-snug">Sirve cuando el proveedor cotiza en una unidad distinta a la que se pidió. Escribe cuántas <b>{item.unidad}</b> trae <b>1 {c.unidadCotizada}</b>, para comparar precios en la misma unidad. Ejemplo: se pidió en libras y el proveedor cotiza en kilos → 1 kilo equivale a 2,2 libras. Si cotiza en la misma unidad, deja 1.</div>
+                </details>
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Moneda</label>
@@ -3178,7 +3182,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                 <input type="checkbox" checked={!!c.anticipoObligatorio} onChange={(e) => update(i, "anticipoObligatorio", e.target.checked)} />
                 ⚠ {sinIva ? "El proveedor exige el pago antes de iniciar (pago anticipado obligatorio)" : "Este proveedor exige el pago antes de despachar (pago anticipado obligatorio)"}
               </label>
-              {c.anticipoObligatorio && <span className="text-[10px] text-amber-700">Se paga el <b>valor final negociado</b> completo antes de {sinIva ? "iniciar" : "despachar"} — el sistema lo toma como plan de pagos.</span>}
+              {c.anticipoObligatorio && <span className="text-[10px] text-amber-700">Se paga el <b>valor final negociado</b> completo antes de {sinIva ? "iniciar" : "despachar"} — el sistema lo toma como plan de pagos. La fecha de pago es la que sugirió el solicitante en su plan de pagos; si no puso ninguna, Compras o Dirección Financiera deben digitarla (no se inventa una).</span>}
             </div>
 
             {erroresPrecioCotizacion(item, c).map((e, k) => (
@@ -3989,7 +3993,7 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
       });
       const suma = (k) => itemsParaPdf.reduce((acc, x) => acc + x[k], 0);
       const totales = { costoDirecto: suma("total"), administracion: suma("admin"), utilidad: suma("util"), imprevistos: suma("imprev"), ivaUtilidad: suma("ivaUtil"), total: suma("totalItem") };
-      const planesPago = baseItems.filter((it) => planConfirmadoItem(solicitud, it)).map((it) => ({ numero: solicitud.items.findIndex((x) => x.id === it.id) + 1, nombre: it.nombre, pagos: planOficialItem(solicitud, it) })).filter((pl) => planTieneValores(pl.pagos));
+      const planesPago = baseItems.map((it) => ({ numero: solicitud.items.findIndex((x) => x.id === it.id) + 1, nombre: it.nombre, pagos: planEfectivoItem(solicitud, it, it.cotizaciones?.[idxCotizacionActiva(it, true)]) })).filter((pl) => planTieneValores(pl.pagos));
       // logo de la empresa (público en Storage): si no se puede descargar, la orden se genera igual, sin logo
       let logoBytes = null;
       if (empresa?.logoUrl) { try { const rl = await fetch(empresa.logoUrl); if (rl.ok) logoBytes = new Uint8Array(await rl.arrayBuffer()); } catch { /* sin logo */ } }
@@ -5870,7 +5874,14 @@ function proveedoresAdjudicadosDetalle(s, proveedores) {
 }
 
 // compara si dos referencias de proveedor (id o nombre libre) son la misma
-// ítems adjudicados a un proveedor y su plan de pagos (cronograma), para anexarlo a la orden de ese proveedor
+// ítems adjudicados a un proveedor y su plan de pagos (cronograma), para anexarlo a la orden de ese proveedor.
+// Toma el plan confirmado; si no, el plan que corresponde hoy (pago anticipado, el propio del proveedor o el sugerido).
+function planEfectivoItem(solicitud, it, cot) {
+  const sinIva = solicitud.tipo === "servicio";
+  let plan = planInicialItem(solicitud, it, totalItemConAiu(it, sinIva));
+  if (!planTieneValores(plan) && cot && planTieneValores(cot.pagos)) plan = { ...planPagosVacio(), ...cot.pagos };
+  return plan;
+}
 function planesDePagoDeProveedor(solicitud, orden) {
   const sinIva = solicitud.tipo === "servicio";
   const filas = [];
@@ -5878,23 +5889,25 @@ function planesDePagoDeProveedor(solicitud, orden) {
     if (!(it.cotizaciones || []).length) return;
     const cot = it.cotizaciones[idxCotizacionActiva(it, sinIva)];
     if (!cot || !mismoProveedor({ proveedorId: cot.proveedorId, proveedorNombre: cot.proveedorNombre }, orden)) return;
-    const plan = planConfirmadoItem(solicitud, it) ? planOficialItem(solicitud, it) : planSugeridoItem(solicitud, it);
+    const plan = planEfectivoItem(solicitud, it, cot);
     const tramos = tramosDePago(plan).filter((t) => parseFloat(t.valor) > 0);
-    if (tramos.length) filas.push({ numero: i + 1, nombre: it.nombre, tramos });
+    filas.push({ numero: i + 1, nombre: it.nombre, tramos, plan });
   });
   return filas;
 }
 function planesDePagoHtml(filas) {
+  filas = filas.filter((f) => f.tramos.length);
   if (!filas.length) return "";
   return `<p><b>Plan de pagos:</b></p><ul>${filas.map((f) => `<li>${f.numero}. ${f.nombre}: ${f.tramos.map((t) => `${t.tipo} ${fmt(parseFloat(t.valor) || 0)}${t.fecha ? ` (${t.fecha})` : ""}`).join(" · ")}</li>`).join("")}</ul>`;
 }
 function PlanPagoAnexoProveedor({ solicitud, orden }) {
   const filas = planesDePagoDeProveedor(solicitud, orden);
   if (!filas.length) return null;
+  const sinPlan = filas.filter((f) => !f.tramos.length);
   return (
-    <div className="text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">
-      <div className="font-medium text-slate-700 mb-0.5">Plan de pagos anexo a este proveedor</div>
-      {filas.map((f) => <div key={f.numero}>{f.numero}. {f.nombre}: {f.tramos.map((t) => `${t.tipo} ${fmt(parseFloat(t.valor) || 0)}${t.fecha ? ` (${t.fecha})` : ""}`).join(" · ")}</div>)}
+    <div className={`text-[11px] rounded-md px-3 py-2 border ${sinPlan.length ? "text-amber-700 bg-amber-50 border-amber-200" : "text-slate-600 bg-slate-50 border-slate-200"}`}>
+      <div className="font-medium mb-0.5">Plan de pagos anexo a este proveedor</div>
+      {filas.map((f) => <div key={f.numero}>{f.numero}. {f.nombre}: {f.tramos.length ? f.tramos.map((t) => `${t.tipo} ${fmt(parseFloat(t.valor) || 0)}${t.fecha ? ` (${t.fecha})` : " (sin fecha)"}`).join(" · ") : "⚠ todavía sin plan de pagos — defínelo en «Plan de pagos por ítem»"}</div>)}
     </div>
   );
 }
@@ -6963,13 +6976,15 @@ export default function App() {
     if (vistas.uid !== perfilAuth.id) { // primera carga (o cambió el usuario): no se avisa cada una, solo cuántas hay sin leer
       notisVistas.current = { uid: perfilAuth.id, ids: new Set(notisUsuario.map((n) => n.id)) };
       const sinLeer = notisUsuario.filter((n) => !n.leida).length;
-      if (sinLeer > 0) mostrarToast(`Tienes ${sinLeer} ${sinLeer > 1 ? "notificaciones" : "notificación"} sin leer`, "info");
+      // al ingresar no sale ningún aviso emergente: el contador de la campana ya dice cuántas hay sin leer
       return;
     }
     const nuevas = notisUsuario.filter((n) => !vistas.ids.has(n.id) && !String(n.mensaje).startsWith("✓ "));
     notisUsuario.forEach((n) => vistas.ids.add(n.id));
-    nuevas.filter((n) => !n.leida).slice(0, 3).forEach((n) => mostrarToast(n.mensaje, "info", { duracion: 8000, onClick: () => { marcarNotiLeida(n.id); if (n.solicitudId) { setAbierta(n.solicitudId); setCreando(false); setPerfil(false); } } }));
-    if (nuevas.filter((n) => !n.leida).length > 3) mostrarToast(`y ${nuevas.filter((n) => !n.leida).length - 3} notificaciones más`, "info");
+    const sinLeerNuevas = nuevas.filter((n) => !n.leida);
+    // con varias nuevas a la vez sale un solo aviso resumido (nunca una pila de avisos)
+    if (sinLeerNuevas.length === 1) { const n = sinLeerNuevas[0]; mostrarToast(n.mensaje, "info", { duracion: 6000, onClick: () => { marcarNotiLeida(n.id); if (n.solicitudId) { setAbierta(n.solicitudId); setCreando(false); setPerfil(false); } } }); }
+    else if (sinLeerNuevas.length > 1) mostrarToast(`Tienes ${sinLeerNuevas.length} notificaciones nuevas (campana)`, "info", { duracion: 5000 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notisUsuario, cargandoNotis, perfilAuth?.id]);
 
