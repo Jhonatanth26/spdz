@@ -16,6 +16,8 @@ import { filasExportarAreas, filasDirectoresValidos, filasInstruccionesAreas, va
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import { LOGO_FULL } from "./lib/logo";
+import { MODO_DEMO } from "./lib/demo";
+import { supabase } from "./lib/supabaseClient";
 import {
   ShoppingCart, Wrench, Building2, CheckCircle2, XCircle, Clock,
   FileText, TrendingUp, ChevronRight, Plus, Trash2, Pencil,
@@ -1607,7 +1609,12 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
 --------------------------------------------------------- */
 function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir }) {
   const ESTADO_ETIQUETA = { cancelada: "Cancelada", cambiada: "Cambiada" };
-  const filas = [];
+  const [fEmpresa, setFEmpresa] = useState("");
+  const [fTipo, setFTipo] = useState("");
+  const [fDesde, setFDesde] = useState("");
+  const [fHasta, setFHasta] = useState("");
+  const [fTexto, setFTexto] = useState("");
+  const filasTodas = [];
   solicitudes.forEach((s) => {
     if (!["oc_enviada", "recepcion", "completada"].includes(s.status)) return;
     // facturas / cuentas de cobro y comprobante de recepción (remisión, acta o correo) viven en la recepción de
@@ -1619,11 +1626,13 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
       const prov = buscarProveedorDeOrden(o, proveedores);
       const cotsAnticipo = s.items.flatMap((it) => (it.cotizaciones || []).filter((c) => c.anticipoObligatorio && mismoProveedor({ proveedorId: c.proveedorId, proveedorNombre: c.proveedorNombre }, o)));
       const itemsDelProveedor = cotsAnticipo;
-      filas.push({
+      filasTodas.push({
         id: `${s.id}-${o.proveedorId || o.proveedorNombre}`,
         solicitudId: s.id,
         folio: s.folio,
-        tipo: s.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo",
+        tipo: s.tipo === "compra" ? "Orden de compra (OC)" : "Orden de servicio/trabajo (OS/OT)",
+        tipoClave: s.tipo,
+        empresaId: s.empresaId,
         empresa: empresas.find((e) => e.id === s.empresaId)?.nombre || "",
         proveedor: o.proveedorNombre,
         fecha: o.fecha,
@@ -1641,10 +1650,14 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
       });
     });
   });
-  filas.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")); // más reciente primero
+  filasTodas.sort((a, b) => (b.fecha || "").localeCompare(a.fecha || "")); // más reciente primero
+  const sinTild = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const filas = filasTodas.filter((f) => (!fEmpresa || f.empresaId === fEmpresa) && (!fTipo || f.tipoClave === fTipo) && (!fDesde || (f.fecha || "") >= fDesde) && (!fHasta || (f.fecha || "") <= fHasta)
+    && (!fTexto.trim() || sinTild(`${f.folio} ${f.proveedor}`).includes(sinTild(fTexto.trim()))));
+  const hayFiltro = fEmpresa || fTipo || fDesde || fHasta || fTexto.trim();
 
   const descargar = () => {
-    const encabezado = ["Fecha envío", "Consecutivo", "Tipo", "Empresa", "Proveedor", "Total solicitud", "Estado de la orden", "Factura / cuenta de cobro", "Comprobante de recepción", "Pago anticipado obligatorio", "Comentarios"];
+    const encabezado = ["Fecha envío", "Consecutivo", "Tipo", "Empresa", "Proveedor", "Total solicitud", "Estado de la orden", "Factura / cuenta de cobro", "Acta de Recibo", "Pago anticipado obligatorio", "Comentarios"];
     const siNo = (b) => (b ? "Sí" : "Falta");
     const cuerpo = filas.map((f) => [f.fecha, f.folio, f.tipo, f.empresa, f.proveedor, f.total, ESTADO_ETIQUETA[f.estadoOrden] || "Enviada", siNo(f.tieneFactura), siNo(f.tieneComprobanteRecepcion), f.anticipoObligatorio ? "Sí" : "", f.comentarios]);
     const hoja = XLSX.utils.aoa_to_sheet([encabezado, ...cuerpo]);
@@ -1658,14 +1671,26 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-lg font-semibold text-slate-800">Órdenes enviadas a proveedores</h2>
+          <h2 className="text-lg font-semibold text-slate-800">Gestión integral de OC/OS/OT</h2>
           <p className="text-xs text-slate-400 mt-1">Consolidado de todas las órdenes ya firmadas y enviadas — para registrar en el sistema contable.</p>
         </div>
         <button onClick={descargar} disabled={!filas.length} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40 flex items-center gap-1"><FileText size={13} /> Descargar Excel</button>
       </div>
 
+      <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap gap-3 items-end no-print">
+        <div><label className="text-[11px] font-medium text-slate-500">Empresa</label>
+          <select value={fEmpresa} onChange={(e) => setFEmpresa(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"><option value="">Todas</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
+        <div><label className="text-[11px] font-medium text-slate-500">Tipo</label>
+          <select value={fTipo} onChange={(e) => setFTipo(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white"><option value="">Todos</option><option value="compra">OC (orden de compra)</option><option value="servicio">OS/OT (servicio / trabajo)</option></select></div>
+        <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={fDesde} onChange={(e) => setFDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white" /></div>
+        <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={fHasta} onChange={(e) => setFHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white" /></div>
+        <div><label className="text-[11px] font-medium text-slate-500">Consecutivo o proveedor</label><input value={fTexto} onChange={(e) => setFTexto(e.target.value)} placeholder="Buscar..." className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white w-44" /></div>
+        {hayFiltro && <button onClick={() => { setFEmpresa(""); setFTipo(""); setFDesde(""); setFHasta(""); setFTexto(""); }} className="text-xs text-slate-500 underline pb-2">Quitar filtros</button>}
+        <div className="text-[11px] text-slate-400 pb-2 ml-auto">{filas.length} de {filasTodas.length} órdenes</div>
+      </div>
+
       {filas.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">Todavía no hay órdenes enviadas al proveedor.</div>
+        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">{filasTodas.length ? "Ninguna orden coincide con los filtros." : "Todavía no hay órdenes enviadas al proveedor."}</div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm">
@@ -1679,8 +1704,8 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
               <th className="text-left px-4 py-2 font-medium">Estado de la orden</th>
               <th className="text-center px-4 py-2 font-medium">Factura</th>
               <th className="text-left px-4 py-2 font-medium">Comentarios</th>
-              <th className="text-center px-4 py-2 font-medium">Comprobante recepción</th>
-              <th className="text-center px-4 py-2 font-medium">PDF</th>
+              <th className="text-center px-4 py-2 font-medium">Acta de Recibo</th>
+              <th className="text-center px-4 py-2 font-medium">OC/OS/OT</th>
             </tr></thead>
             <tbody>{filas.map((f) => (
               <tr key={f.id} className="border-t border-slate-100">
@@ -1965,8 +1990,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     <div className="space-y-4">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
-          <h2 className="text-lg font-semibold text-slate-800">Cronograma de pagos</h2>
-          <p className="text-xs text-slate-400 mt-1">Cronograma editable por orden, con distribución en el tiempo — exportable a Excel y PDF.</p>
+          <p className="text-xs text-slate-400">Cronograma editable por orden, con distribución en el tiempo — exportable a Excel y PDF.</p>
         </div>
         <div className="flex items-center gap-2 no-print">
           {planes.length > 0 && (
@@ -4545,6 +4569,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
   const agregarFactura = (url) => set({ facturas: [...r.facturas, { id: nextId(), numero: "", url }] });
   const quitarFactura = (id) => set({ facturas: r.facturas.filter((f) => f.id !== id) });
   const editarNumeroFactura = (id, numero) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, numero } : f)) });
+  const editarComentarioFactura = (id, comentario) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, comentario } : f)) });
   // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
   // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
   const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
@@ -4610,6 +4635,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
               <div key={f.id} className="flex items-center gap-1.5">
                 <input value={f.numero} onChange={(e) => editarNumeroFactura(f.id, e.target.value)} placeholder="N.° (opcional)" className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
                 <AdjuntarArchivo nombre={f.url} onSeleccionar={() => {}} />
+                <input defaultValue={f.comentario || ""} onBlur={(e) => { if (e.target.value !== (f.comentario || "")) editarComentarioFactura(f.id, e.target.value); }} placeholder="Comentario de la factura" className="flex-1 min-w-[120px] border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
                 <button onClick={() => quitarFactura(f.id)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
               </div>
             ))}
@@ -6090,11 +6116,9 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
 
 // la orden ya salió hacia el proveedor cuando la solicitud llegó (o pasó) por el paso "enviada al proveedor"
 const ordenEnviadaAlProveedor = (s) => ["oc_enviada", "recepcion", "completada"].includes(s.status) || (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl && o.enviadaEn);
-// resumen de los comentarios de la orden: nota del estado de la orden, observaciones de recepción y variaciones
-const comentariosDeOrden = (s) => {
-  const notas = (s.ocEnviada?.ordenesProveedor || []).map((o) => o.notaEstadoOrden).filter(Boolean);
-  return [...notas, s.recepcion?.comentario, s.recepcion?.variacionesOT, s.ultimoRechazo && s.status === "rechazada" ? `Rechazo: ${s.ultimoRechazo.observacion}` : ""].filter((x) => x && String(x).trim()).join(" · ");
-};
+// comentarios de la orden = los que se escriben en cada factura / cuenta de cobro (no los de la recepción)
+const comentariosDeOrden = (s) =>
+  (s.recepcion?.facturas || []).filter((f) => (f.comentario || "").trim()).map((f) => (f.numero ? `${f.numero}: ` : "") + f.comentario.trim()).join(" · ");
 function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas }) {
   const [enviandoId, setEnviandoId] = useState(null);
   const [seleccionadas, setSeleccionadas] = useState([]);
@@ -7072,7 +7096,7 @@ export default function App() {
         <div className={`flex items-center gap-2 mb-4 ${menuExpandido ? "px-1 justify-between" : "justify-center"}`}>
           {menuExpandido && (
             <div className="flex items-center gap-2 min-w-0">
-              <img src={LOGO_FULL} alt="Compra SPD&ZF" className="h-10 w-auto shrink-0" />
+              <img src={LOGO_FULL} alt="SiCompras" className="h-10 w-auto shrink-0" />
             </div>
           )}
           <button title={menuExpandido ? "Contraer menú" : "Expandir menú"} onClick={() => setMenuExpandido(!menuExpandido)} className="text-slate-400 hover:text-indigo-600 hover:bg-slate-100 rounded-lg p-1.5 shrink-0">
@@ -7117,7 +7141,7 @@ export default function App() {
         ) : <div className="mt-3" />}
         {(gruposAbiertos.gestion || !menuExpandido) && (
           <>
-            <NavBtn id="dashboard" icon={LayoutDashboard} label="Dashboard" />
+            <NavBtn id="dashboard" icon={LayoutDashboard} label="Gestión de Presupuesto" />
             <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
             {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
             {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Órdenes enviadas" />}
@@ -7148,6 +7172,18 @@ export default function App() {
         </div>
 
       <main className="flex-1 p-6 pt-2 overflow-auto">
+        {MODO_DEMO && (
+          <div className="no-print flex items-center gap-3 flex-wrap bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2 mb-3">
+            <b>Versión de prueba</b>
+            <span>Datos de ejemplo — no ingreses información real.</span>
+            <label className="flex items-center gap-1.5 ml-auto">Ver como:
+              <select value={currentUser.rol} onChange={async (e) => { await actualizarPerfil({ rol: e.target.value }); setTab("solicitudes"); setAbierta(null); setCreando(false); setPerfil(false); }} className="border border-amber-300 rounded-md px-1.5 py-1 bg-white text-slate-700">
+                {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </label>
+            <button onClick={async () => { if (!window.confirm("¿Borrar todas las solicitudes de prueba y empezar de cero?")) return; const { error } = await supabase.rpc("demo_restablecer"); if (error) alert("No se pudo restablecer: " + error.message); else window.location.reload(); }} className="bg-white border border-amber-300 text-amber-800 px-2 py-1 rounded-md font-medium">Restablecer demo</button>
+          </div>
+        )}
         {empresas.some((e) => e.logoUrl) && (
           <div className="no-print flex items-center justify-end gap-6 pb-2 mb-3 border-b border-slate-200">
             {empresas.filter((e) => e.logoUrl).map((e) => <img key={e.id} src={e.logoUrl} alt={e.nombre} title={e.nombre} className="h-10 max-w-[140px] object-contain" />)}
