@@ -16,7 +16,6 @@ import { filasExportarAreas, filasDirectoresValidos, filasInstruccionesAreas, va
 import { enviarCorreo } from "./lib/correo";
 import LoginReal from "./LoginReal";
 import { LOGO_FULL } from "./lib/logo";
-import { MODO_DEMO } from "./lib/demo";
 import { supabase } from "./lib/supabaseClient";
 import {
   ShoppingCart, Wrench, Building2, CheckCircle2, XCircle, Clock,
@@ -689,7 +688,8 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 // otro rol (el gerente general tiene rol Gerencia; quien lleva la Dirección Financiera, rol Dirección Financiera)
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
-const VERSION_APP = "novedades v4";
+const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
+const VERSION_APP = "novedades v5";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
