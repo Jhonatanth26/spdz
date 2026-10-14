@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v9";
+const VERSION_APP = "novedades v10";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -5687,27 +5687,6 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         </SeccionColapsable>
       )}
 
-      {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
-        <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos sugerido, por ítem (opcional)" descripcion={<>Pasa como valor inicial al plan de pagos que revisan Compras y Dirección Financiera.</>} abierto={fases.abierto("sugerido")} onToggle={() => fases.alternar("sugerido")}>
-          <ControlExpandirTodo n={solicitud.items.length} onTodos={abSug.todos} />
-          {solicitud.items.map((it, idx) => {
-            const totalIt = totalItemConAiu(it, solicitud.tipo === "servicio");
-            const sug = planSugeridoItem(solicitud, it);
-            return (
-              <ItemColapsable key={it.id} abierto={abSug.abierto(it.id)} onToggle={() => abSug.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)} resumen={<span>Total {fmt(totalIt)}{planTieneValores(sug) ? " · con plan" : ""}</span>}>
-              <div className="space-y-1.5 p-1">
-                {exigeAnticipoPago(it)
-                  ? <PlanPagoCotizacion key={it.id} sinPagoUnico servicio={solicitud.tipo === "servicio"} pagos={null} total={0} onChange={() => {}} />
-                  : totalIt > 0
-                  ? <PlanPagoCotizacion key={it.id} servicio={solicitud.tipo === "servicio"} sinPagoUnico={false} pagos={planTieneValores(sug) ? sug : null} total={totalIt} onChange={(pg) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, pagosSugeridos: pg } : x)) })} etiqueta="+ Sugerir plan de pagos para este ítem" titulo="Plan de pagos sugerido de este ítem" />
-                  : <div className="text-[11px] text-amber-600">Pon un precio estimado para poder sugerir un plan de pagos.</div>}
-              </div>
-              </ItemColapsable>
-            );
-          })}
-        </SeccionColapsable>
-      )}
-
       {currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && solicitud.historialEstados.some((h) => h.status === "rechazada") && (
         <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
           <div className="text-sm text-indigo-700">Cuando termines de corregir, avísale a quien debe aprobarla — le llega un correo directo.</div>
@@ -7140,7 +7119,7 @@ export default function App() {
             <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
             {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
             {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Gestión integral de OC/OS/OT" />}
-            {puedeVerPlanInversion(currentUser) && <NavBtn id="planInversion" icon={TrendingUp} label="Cronograma de pagos" />}
+            {puedeVerPlanInversion(currentUser) && <NavBtn id="planInversion" icon={DollarSign} label="Cronograma de pagos" />}
             {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
           </>
         )}
