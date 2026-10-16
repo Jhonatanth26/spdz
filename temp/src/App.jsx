@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v18";
+const VERSION_APP = "novedades v19";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -977,15 +977,80 @@ function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta, soloPdf
   );
 }
 
-// foto guardada en Storage privado: pide su enlace firmado y la muestra pequeña; al hacer clic se abre grande
-function MiniaturaPrivada({ path, onQuitar }) {
+// visor de fotos a pantalla completa: zoom con la rueda o los botones, arrastrar para moverse, doble clic para acercar, flechas para cambiar de foto
+function VisorFotos({ paths, inicio = 0, onCerrar }) {
+  const [i, setI] = useState(inicio);
+  const [url, setUrl] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [pos, setPos] = useState({ x: 0, y: 0 });
+  const arrastre = useRef(null);
+  const reset = () => { setZoom(1); setPos({ x: 0, y: 0 }); };
+  const cambiarZoom = (z) => { const n = Math.min(6, Math.max(1, z)); setZoom(n); if (n === 1) setPos({ x: 0, y: 0 }); };
+  useEffect(() => { let vivo = true; setUrl(null); reset(); obtenerUrlFirmada(paths[i]).then((u) => { if (vivo) setUrl(u); }); return () => { vivo = false; }; }, [i, paths]);
+  const ir = (d) => setI((x) => (x + d + paths.length) % paths.length);
+  useEffect(() => {
+    const tecla = (e) => {
+      if (e.key === "Escape") onCerrar();
+      else if (e.key === "ArrowRight" && paths.length > 1) ir(1);
+      else if (e.key === "ArrowLeft" && paths.length > 1) ir(-1);
+      else if (e.key === "+" || e.key === "=") setZoom((z) => Math.min(6, z + 0.5));
+      else if (e.key === "-") { setZoom((z) => { const n = Math.max(1, z - 0.5); if (n === 1) setPos({ x: 0, y: 0 }); return n; }); }
+    };
+    window.addEventListener("keydown", tecla);
+    return () => window.removeEventListener("keydown", tecla);
+  }, [paths.length]);
+  const btn = "w-9 h-9 rounded-full bg-white/15 hover:bg-white/30 text-white text-lg leading-none flex items-center justify-center";
+  return (
+    <div className="fixed inset-0 z-[200] bg-black/85 flex flex-col" onClick={(e) => { e.stopPropagation(); onCerrar(); }} role="dialog" aria-label="Vista previa de la foto">
+      <div className="flex items-center justify-between gap-3 px-4 py-3 text-white" onClick={(e) => e.stopPropagation()}>
+        <span className="text-xs text-white/70">{paths.length > 1 ? `Foto ${i + 1} de ${paths.length}` : "Foto"} · {Math.round(zoom * 100)}%</span>
+        <div className="flex items-center gap-2">
+          <button type="button" className={btn} title="Alejar" onClick={() => cambiarZoom(zoom - 0.5)}>−</button>
+          <button type="button" className={btn} title="Acercar" onClick={() => cambiarZoom(zoom + 0.5)}>+</button>
+          <button type="button" className="h-9 px-3 rounded-full bg-white/15 hover:bg-white/30 text-xs" onClick={reset}>Tamaño original</button>
+          {url && <a href={url} target="_blank" rel="noopener noreferrer" className="h-9 px-3 rounded-full bg-white/15 hover:bg-white/30 text-xs flex items-center">Abrir aparte</a>}
+          <button type="button" className={btn} title="Cerrar (Esc)" onClick={onCerrar}>×</button>
+        </div>
+      </div>
+      <div
+        className="flex-1 min-h-0 relative flex items-center justify-center overflow-hidden select-none"
+        style={{ touchAction: "none", cursor: zoom > 1 ? (arrastre.current ? "grabbing" : "grab") : "zoom-in" }}
+        onWheel={(e) => { e.stopPropagation(); cambiarZoom(zoom + (e.deltaY < 0 ? 0.25 : -0.25)); }}
+        onMouseDown={(e) => { if (zoom > 1) arrastre.current = { x: e.clientX - pos.x, y: e.clientY - pos.y }; }}
+        onMouseMove={(e) => { if (arrastre.current) setPos({ x: e.clientX - arrastre.current.x, y: e.clientY - arrastre.current.y }); }}
+        onMouseUp={() => { arrastre.current = null; }}
+        onMouseLeave={() => { arrastre.current = null; }}
+        onClick={(e) => { e.stopPropagation(); if (e.target === e.currentTarget) onCerrar(); }}
+      >
+        {url ? (
+          <img
+            src={url} alt="Foto del ítem" draggable={false}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={() => (zoom > 1 ? reset() : cambiarZoom(2.5))}
+            style={{ transform: `translate(${pos.x}px, ${pos.y}px) scale(${zoom})`, transition: arrastre.current ? "none" : "transform 0.12s" }}
+            className="max-h-full max-w-full object-contain"
+          />
+        ) : <span className="text-white/60 text-sm">Cargando foto...</span>}
+        {paths.length > 1 && (
+          <>
+            <button type="button" className={`${btn} absolute left-3 top-1/2 -translate-y-1/2`} title="Anterior" onClick={(e) => { e.stopPropagation(); ir(-1); }}>‹</button>
+            <button type="button" className={`${btn} absolute right-3 top-1/2 -translate-y-1/2`} title="Siguiente" onClick={(e) => { e.stopPropagation(); ir(1); }}>›</button>
+          </>
+        )}
+      </div>
+      <div className="text-center text-[11px] text-white/50 py-2">Rueda del mouse para acercar · arrastra para moverte · doble clic para ampliar</div>
+    </div>
+  );
+}
+// foto guardada en Storage privado: pide su enlace firmado y la muestra pequeña; al hacer clic se abre el visor con zoom
+function MiniaturaPrivada({ path, onQuitar, onAbrir }) {
   const [url, setUrl] = useState(null);
   useEffect(() => { let vivo = true; obtenerUrlFirmada(path).then((u) => { if (vivo) setUrl(u); }); return () => { vivo = false; }; }, [path]);
   return (
     <div className="relative">
-      <a href={url || undefined} target="_blank" rel="noopener noreferrer" title="Ver foto" className="block h-14 w-14 rounded-md border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center">
+      <button type="button" onClick={() => url && onAbrir && onAbrir()} title="Ampliar foto" className="block h-14 w-14 rounded-md border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center cursor-zoom-in">
         {url ? <img src={url} alt="Foto del ítem" className="h-full w-full object-cover" /> : <Camera size={16} className="text-slate-300" />}
-      </a>
+      </button>
       {onQuitar && <button type="button" onClick={onQuitar} title="Quitar foto" className="absolute -top-1.5 -right-1.5 bg-white border border-slate-200 rounded-full w-4 h-4 text-[10px] leading-none text-slate-500 hover:text-rose-600">×</button>}
     </div>
   );
@@ -993,6 +1058,7 @@ function MiniaturaPrivada({ path, onQuitar }) {
 // fotos de apoyo de un ítem (para que Compras identifique bien lo que se necesita)
 function FotosItem({ fotos = [], onChange, editable }) {
   const [subiendo, setSubiendo] = useState(false);
+  const [visor, setVisor] = useState(null);
   const agregar = async (lista) => {
     setSubiendo(true);
     const nuevas = [];
@@ -1008,7 +1074,8 @@ function FotosItem({ fotos = [], onChange, editable }) {
   if (!editable && !fotos.length) return null;
   return (
     <div className="flex items-center gap-2 flex-wrap">
-      {fotos.map((f) => <MiniaturaPrivada key={f} path={f} onQuitar={editable ? () => onChange(fotos.filter((x) => x !== f)) : null} />)}
+      {fotos.map((f, n) => <MiniaturaPrivada key={f} path={f} onAbrir={() => setVisor(n)} onQuitar={editable ? () => onChange(fotos.filter((x) => x !== f)) : null} />)}
+      {visor !== null && <VisorFotos paths={fotos} inicio={Math.min(visor, fotos.length - 1)} onCerrar={() => setVisor(null)} />}
       {editable && (
         <label className="inline-flex items-center gap-1.5 border border-dashed border-slate-300 rounded-md px-2 py-1 cursor-pointer text-[11px] text-slate-500 hover:border-indigo-400 hover:text-indigo-600">
           <Camera size={12} /> {subiendo ? "Subiendo..." : fotos.length ? "Agregar otra foto" : "Agregar fotos del ítem (opcional)"}
