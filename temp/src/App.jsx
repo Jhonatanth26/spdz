@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v16";
+const VERSION_APP = "novedades v17";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -7019,7 +7019,7 @@ function Catalogos({
 --------------------------------------------------------- */
 // Campanita de notificaciones dentro de la app — se refresca sola, con contador de no leídas,
 // desplegable con las últimas, clic para ir directo a la solicitud y marcarla leída de una vez.
-function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas, onAbrir }) {
+function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas, onAbrir, onBorrar, onBorrarTodas }) {
   const [abierto, setAbierto] = useState(false);
   const ref = useRef(null);
   const sinLeer = notificaciones.filter((n) => !n.leida).length;
@@ -7056,7 +7056,10 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
         <div className="absolute right-0 mt-2 w-80 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
           <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
             <span className="text-sm font-medium text-slate-700">Notificaciones</span>
-            {sinLeer > 0 && <button onClick={onMarcarTodasLeidas} className="text-[11px] text-indigo-600 font-medium">Marcar todas leídas</button>}
+            <div className="flex items-center gap-3">
+              {sinLeer > 0 && <button onClick={onMarcarTodasLeidas} className="text-[11px] text-indigo-600 font-medium">Marcar todas leídas</button>}
+              {onBorrarTodas && notificaciones.length > 0 && <button onClick={() => { if (window.confirm("¿Borrar todas tus notificaciones?")) onBorrarTodas(); }} className="text-[11px] text-slate-500 hover:text-rose-600 font-medium">Borrar todas</button>}
+            </div>
           </div>
           <div className="max-h-96 overflow-y-auto">
             {notificaciones.length === 0 ? (
@@ -7066,10 +7069,11 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
                 <div key={n.id} onClick={() => clickNotificacion(n)} className={`px-4 py-2.5 border-b border-slate-50 cursor-pointer hover:bg-slate-50 ${!n.leida ? "bg-indigo-50/40" : ""}`}>
                   <div className="flex items-start gap-2">
                     {!n.leida && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 shrink-0" />}
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className={`text-xs ${!n.leida ? "text-slate-700 font-medium" : "text-slate-500"}`}>{n.mensaje}</div>
                       <div className="text-[10px] text-slate-400 mt-0.5">{hace(n.creadoEn)}</div>
                     </div>
+                    {onBorrar && <button title="Borrar esta notificación" onClick={(e) => { e.stopPropagation(); onBorrar(n.id); }} className="text-slate-300 hover:text-rose-500 text-sm leading-none shrink-0">×</button>}
                   </div>
                 </div>
               ))
@@ -7197,7 +7201,15 @@ export default function App() {
       else mostrarToast("Paleta guardada en tu cuenta", "ok");
     }, 700);
   };
-  const { notificaciones: notisUsuario, cargando: cargandoNotis, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas } = useNotificaciones(perfilAuth?.id);
+  const { notificaciones: notisCrudas, cargando: cargandoNotis, crear: crearNotiUsuario, marcarLeida: marcarNotiLeida, marcarTodasLeidas: marcarTodasNotisLeidas, eliminar: eliminarNoti, recargar: recargarNotis } = useNotificaciones(perfilAuth?.id);
+  // una notificación de una solicitud que ya no existe (se borró) no se muestra: quedaría un aviso que no lleva a ningún lado
+  const notisUsuario = useMemo(() => (cargandoSolicitudes ? notisCrudas : notisCrudas.filter((n) => !n.solicitudId || solicitudes.some((s) => s.id === n.solicitudId))), [notisCrudas, solicitudes, cargandoSolicitudes]);
+  const borrarTodasNotis = async () => {
+    if (!perfilAuth?.id) return;
+    const { error } = await supabase.from("notificaciones_usuario").delete().eq("usuario_id", perfilAuth.id);
+    if (error) mostrarToast(`No se pudieron borrar las notificaciones: ${error.message}`, "alerta");
+    recargarNotis();
+  };
 
   // ---- avisos globales ----
   const [toasts, setToasts] = useState([]);
@@ -7286,13 +7298,15 @@ export default function App() {
     if (!window.confirm(`¿Eliminar por completo la solicitud ${folio}? Esta acción no se puede deshacer — se borra todo su historial, cotizaciones, firmas y evaluación.`)) return;
     const error = await eliminarSolicitudDB(id);
     if (error) { mostrarToast(`No se pudo eliminar la solicitud: ${error.message || "error desconocido"}`, "alerta"); return; }
+    supabase.from("notificaciones_usuario").delete().eq("solicitud_id", id).then(() => recargarNotis(), () => {});
     setAbierta(null);
     mostrarToast(`Solicitud ${folio} eliminada`);
   };
   const eliminarSolicitudesSeleccionadas = async (ids) => {
     if (currentUser.rol !== "Administrador") return;
     let eliminadas = 0;
-    for (const id of ids) { const error = await eliminarSolicitudDB(id); if (!error) eliminadas++; }
+    for (const id of ids) { const error = await eliminarSolicitudDB(id); if (!error) { eliminadas++; supabase.from("notificaciones_usuario").delete().eq("solicitud_id", id).then(() => {}, () => {}); } }
+    recargarNotis();
     mostrarToast(eliminadas === ids.length ? `${eliminadas} solicitud(es) eliminada(s)` : `Se eliminaron ${eliminadas} de ${ids.length} solicitudes — revisa las que no se pudieron borrar`, eliminadas === ids.length ? "ok" : "alerta");
   };
   // La foto de firma del perfil, por ahora, solo se guarda en memoria durante la sesión.
@@ -7389,7 +7403,7 @@ export default function App() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex justify-end items-center gap-2 px-4 pt-3 shrink-0">
           <BotonPaleta tema={temaActual} onElegir={elegirTema} />
-          <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
+          <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onBorrar={eliminarNoti} onBorrarTodas={borrarTodasNotis} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
         </div>
 
       <main className="flex-1 p-6 pt-2 overflow-auto">
