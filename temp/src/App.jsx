@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v17";
+const VERSION_APP = "novedades v18";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -1247,6 +1247,37 @@ function SelectorPaleta({ tema, onElegir, compacto }) {
 }
 
 // botón de acceso rápido, junto a la campana de notificaciones
+// ---- DIRECCIÓN (URL) SEGÚN LA PANTALLA ----
+// La app es de una sola página: para que la dirección del navegador cambie según la vista (y funcionen F5, el botón «atrás» y los
+// enlaces directos) se usa la parte final de la dirección (#/...). Ej.: #/cronograma-de-pagos, #/solicitud/SOL-1005, #/nueva.
+const RUTAS_PANTALLA = { solicitudes: "solicitudes", misPendientes: "pendientes", porFirmar: "ordenes-por-firmar", dashboard: "presupuesto", estadisticas: "estadisticas", evalProveedores: "evaluacion-proveedores", ordenesEnviadas: "gestion-integral", planInversion: "cronograma-de-pagos", catalogos: "catalogo" };
+function hashDesdeEstado({ tab, folio, creando, perfil }) {
+  if (creando) return "#/nueva";
+  if (perfil) return "#/perfil";
+  if (folio) return `#/solicitud/${encodeURIComponent(folio)}`;
+  return `#/${RUTAS_PANTALLA[tab] || "solicitudes"}`;
+}
+function estadoDesdeHash(hash) {
+  const partes = String(hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (!partes.length) return null;
+  if (partes[0] === "nueva") return { nueva: true };
+  if (partes[0] === "perfil") return { perfil: true };
+  if (partes[0] === "solicitud" && partes[1]) { try { return { folio: decodeURIComponent(partes[1]) }; } catch { return null; } }
+  const tab = Object.keys(RUTAS_PANTALLA).find((k) => RUTAS_PANTALLA[k] === partes[0]);
+  return tab ? { tab } : null;
+}
+// la misma regla que usa el menú: una pantalla a la que la persona no tiene acceso no se abre ni escribiendo la dirección a mano
+function pantallaPermitida(tab, u) {
+  switch (tab) {
+    case "misPendientes": return puedeVerMisPendientes(u);
+    case "porFirmar": return puedeAprobarFinanciera(u);
+    case "evalProveedores": return puedeVerEvaluaciones(u);
+    case "ordenesEnviadas": return puedeVerOrdenesEnviadas(u);
+    case "planInversion": return puedeVerPlanInversion(u);
+    case "catalogos": return puedeVerCatalogos(u);
+    default: return true;
+  }
+}
 function BotonPaleta({ tema, onElegir }) {
   const [abierto, setAbierto] = useState(false);
   const ref = useRef(null);
@@ -7241,6 +7272,36 @@ export default function App() {
     else if (sinLeerNuevas.length > 1) mostrarToast(`Tienes ${sinLeerNuevas.length} notificaciones nuevas (campana)`, "info", { duracion: 5000 });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notisUsuario, cargandoNotis, perfilAuth?.id]);
+
+  // ---- la dirección del navegador sigue a la pantalla (y al revés: atrás / adelante / enlaces directos) ----
+  const [rutaLista, setRutaLista] = useState(false);
+  const primeraEscrituraRuta = useRef(true);
+  const listoRuta = !cargandoSesion && !!perfilAuth && !cargandoCatalogos && !cargandoSolicitudes;
+  const aplicarRuta = () => {
+    const r = estadoDesdeHash(window.location.hash);
+    const limpiar = () => { setAbierta(null); setCreando(false); setPerfil(false); };
+    if (r?.nueva) { setBorrador(null); setAbierta(null); setPerfil(false); setCreando(true); }
+    else if (r?.perfil) { setAbierta(null); setCreando(false); setPerfil(true); }
+    else if (r?.folio) {
+      const sol = solicitudes.find((x) => x.folio === r.folio);
+      if (sol) { setCreando(false); setPerfil(false); setAbierta(sol.id); } else { limpiar(); setTab("solicitudes"); }
+    } else if (r?.tab && pantallaPermitida(r.tab, { rol: perfilAuth?.rol })) { limpiar(); setTab(r.tab); }
+    else { limpiar(); setTab("solicitudes"); }
+  };
+  useEffect(() => { if (!listoRuta) return; aplicarRuta(); setRutaLista(true); }, [listoRuta]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!rutaLista) return;
+    window.addEventListener("hashchange", aplicarRuta);
+    return () => window.removeEventListener("hashchange", aplicarRuta);
+  }, [rutaLista, solicitudes]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!rutaLista) return;
+    const folio = abierta ? solicitudes.find((x) => x.id === abierta)?.folio : null;
+    const nuevo = hashDesdeEstado({ tab, folio, creando, perfil });
+    if (window.location.hash === nuevo) return;
+    if (primeraEscrituraRuta.current) window.history.replaceState(null, "", nuevo); else window.history.pushState(null, "", nuevo);
+    primeraEscrituraRuta.current = false;
+  }, [rutaLista, tab, abierta, creando, perfil]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (cargandoSesion) {
     return <div className="min-h-screen flex items-center justify-center text-slate-400 text-sm">Cargando...</div>;
