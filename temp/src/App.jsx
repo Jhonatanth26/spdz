@@ -1918,6 +1918,8 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
   });
   const [planActivoId, setPlanActivoId] = useState(null);
   const [fEmpresaPlan, setFEmpresaPlan] = useState("");
+  const [fDesde, setFDesde] = useState("");
+  const [fHasta, setFHasta] = useState("");
   const [exportandoPDF, setExportandoPDF] = useState(false);
   const [seleccionados, setSeleccionados] = useState([]);
   // buffer local: la pantalla se actualiza al instante con cada tecla; el guardado en Supabase
@@ -1948,6 +1950,23 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
 
   const plan = planLocal && planesVisibles.some((p) => p.id === planLocal.id) ? planLocal : null;
   const puedeEditar = puedeEditarPlanInversion(currentUser);
+
+  // filtro por fechas (desde / hasta): deja visibles solo los periodos (columnas) que caen dentro del rango, y las
+  // órdenes que tienen valor en esos periodos. Los totales se calculan solo con lo visible. No modifica lo guardado.
+  const hayFiltroFecha = !!(fDesde || fHasta);
+  const periodoEnRango = (pe) => {
+    const ini = fechaAproximadaPeriodo(pe, plan.anio);
+    if (!ini) return true; // sin mes reconocible (ej. columna recién agregada): no se puede clasificar, se deja a la vista
+    const { hasta } = parsearRangoDias(pe.rango);
+    const [a, m] = ini.split("-");
+    const ultimo = new Date(parseInt(a), parseInt(m), 0).getDate();
+    const fin = `${a}-${m}-${String(Math.min(hasta, ultimo)).padStart(2, "0")}`;
+    return (!fHasta || ini <= fHasta) && (!fDesde || fin >= fDesde);
+  };
+  const periodosVista = plan ? (hayFiltroFecha ? plan.periodos.filter(periodoEnRango) : plan.periodos) : [];
+  const sumaVista = (p) => periodosVista.reduce((acc, pe) => acc + (parseFloat(p.valores?.[pe.id]) || 0), 0);
+  const proyectosVista = plan ? (hayFiltroFecha ? plan.proyectos.filter((p) => sumaVista(p) > 0) : plan.proyectos) : [];
+  const totalVistaPeriodo = (id) => totalPorPeriodo(proyectosVista, id);
 
   // actualiza la pantalla al instante, y guarda en Supabase con un pequeño retraso (no en cada
   // tecla) para no saturar la base de datos en una tabla con tantos campos
@@ -2046,15 +2065,15 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     const filas = [];
     filas.push([tituloCronograma(plan.titulo).toUpperCase()]);
     filas.push([]);
-    filas.push(["ITEM", "ORDEN", "VALOR TOTAL", ...plan.periodos.map((pe) => etiquetaMes(pe.mes, plan.anio))]);
-    filas.push(["", "", "", ...plan.periodos.map((pe) => pe.etiqueta)]);
-    filas.push(["", "", "", ...plan.periodos.map((pe) => pe.rango)]);
-    plan.proyectos.forEach((p) => {
-      filas.push([p.item, p.nombre, inversionProyecto(p), ...plan.periodos.map((pe) => parseFloat(p.valores?.[pe.id]) || "")]);
+    filas.push(["ITEM", "ORDEN", "VALOR TOTAL", ...periodosVista.map((pe) => etiquetaMes(pe.mes, plan.anio))]);
+    filas.push(["", "", "", ...periodosVista.map((pe) => pe.etiqueta)]);
+    filas.push(["", "", "", ...periodosVista.map((pe) => pe.rango)]);
+    proyectosVista.forEach((p) => {
+      filas.push([p.item, p.nombre, sumaVista(p), ...periodosVista.map((pe) => parseFloat(p.valores?.[pe.id]) || "")]);
     });
-    filas.push(["", "VALOR TOTAL", totalGeneralPlan(plan.proyectos), ...plan.periodos.map((pe) => totalPorPeriodo(plan.proyectos, pe.id))]);
+    filas.push(["", "VALOR TOTAL", proyectosVista.reduce((acc, p) => acc + sumaVista(p), 0), ...periodosVista.map((pe) => totalVistaPeriodo(pe.id))]);
     const hoja = XLSX.utils.aoa_to_sheet(filas);
-    hoja["!cols"] = [{ wch: 6 }, { wch: 45 }, { wch: 16 }, ...plan.periodos.map(() => ({ wch: 14 }))];
+    hoja["!cols"] = [{ wch: 6 }, { wch: 45 }, { wch: 16 }, ...periodosVista.map(() => ({ wch: 14 }))];
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, "Cronograma de pagos");
     XLSX.writeFile(libro, `${tituloCronograma(plan.titulo).replace(/[^a-zA-Z0-9]/g, "_")}_${plan.anio}.xlsx`);
@@ -2095,6 +2114,12 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
         </div>
       ) : (
         <>
+          <div className="bg-white rounded-xl border border-slate-200 p-3 flex flex-wrap gap-3 items-end no-print">
+            <div><label className="text-[11px] font-medium text-slate-500">Desde</label><input type="date" value={fDesde} onChange={(e) => setFDesde(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white" /></div>
+            <div><label className="text-[11px] font-medium text-slate-500">Hasta</label><input type="date" value={fHasta} onChange={(e) => setFHasta(e.target.value)} className="block mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white" /></div>
+            {hayFiltroFecha && <button onClick={() => { setFDesde(""); setFHasta(""); }} className="text-xs text-slate-500 underline pb-2">Quitar filtro</button>}
+            {hayFiltroFecha && <div className="text-[11px] text-slate-400 pb-2 ml-auto">{periodosVista.length} de {plan.periodos.length} periodos · {proyectosVista.length} de {plan.proyectos.length} órdenes</div>}
+          </div>
           {puedeEditar && (
             <div className="bg-white rounded-xl border border-slate-200 p-4 grid grid-cols-1 md:grid-cols-3 gap-3 no-print">
               <div><label className="text-[11px] font-medium text-slate-500">Título</label><input value={plan.titulo} onChange={(e) => actualizarPlan({ titulo: e.target.value })} className="w-full mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
@@ -2122,7 +2147,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-10">ITEM</th>
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 min-w-[340px]">ORDEN</th>
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-28">VALOR TOTAL</th>
-                  {plan.periodos.map((pe) => (
+                  {periodosVista.map((pe) => (
                     <th key={pe.id} className="border border-slate-200 px-1 py-1 min-w-[72px] max-w-[80px] relative group">
                       {puedeEditar ? <input key={`${pe.id}-${etiquetaMes(pe.mes, plan.anio)}`} defaultValue={etiquetaMes(pe.mes, plan.anio)} onBlur={(e) => { if (e.target.value !== etiquetaMes(pe.mes, plan.anio)) editarPeriodo(pe.id, "mes", e.target.value); }} placeholder="Mes" className="w-full text-center text-xs font-semibold border-0 bg-transparent focus:bg-white" /> : etiquetaMes(pe.mes, plan.anio)}
                       {puedeEditar && <button onClick={() => quitarPeriodo(pe.id)} className="no-print absolute -top-1 -right-1 text-rose-400 hover:text-rose-600 bg-white rounded-full opacity-0 group-hover:opacity-100"><Trash2 size={11} /></button>}
@@ -2131,14 +2156,14 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
                   {puedeEditar && <th rowSpan={3} className="no-print border border-slate-200 px-2 py-1.5 w-10"><button onClick={agregarPeriodo} title="Agregar periodo" className="text-indigo-600"><Plus size={14} /></button></th>}
                 </tr>
                 <tr className="bg-slate-50">
-                  {plan.periodos.map((pe) => (
+                  {periodosVista.map((pe) => (
                     <th key={pe.id} className="border border-slate-200 px-1 py-1">
                       {puedeEditar ? <input value={pe.etiqueta} onChange={(e) => editarPeriodo(pe.id, "etiqueta", e.target.value)} className="w-full text-center text-[11px] border-0 bg-transparent focus:bg-white" /> : pe.etiqueta}
                     </th>
                   ))}
                 </tr>
                 <tr className="bg-slate-50">
-                  {plan.periodos.map((pe) => (
+                  {periodosVista.map((pe) => (
                     <th key={pe.id} className="border border-slate-200 px-1 py-1">
                       {puedeEditar ? <input value={pe.rango} onChange={(e) => editarPeriodo(pe.id, "rango", e.target.value)} placeholder="Rango" className="w-full text-center text-[11px] font-normal border-0 bg-transparent focus:bg-white" /> : pe.rango}
                     </th>
@@ -2146,7 +2171,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
                 </tr>
               </thead>
               <tbody>
-                {plan.proyectos.map((p) => (
+                {proyectosVista.map((p) => (
                   <tr key={p.id} className={`${p.destacado ? "bg-emerald-100/70" : ""} ${seleccionados.includes(p.id) ? "outline outline-2 outline-indigo-300" : ""}`}>
                     {puedeEditar && <td className="no-print border border-slate-200 px-1 py-1.5 text-center align-top"><input type="checkbox" checked={seleccionados.includes(p.id)} onChange={() => alternarSeleccion(p.id)} /></td>}
                     <td className="border border-slate-200 px-2 py-1.5 text-center align-top">
@@ -2172,8 +2197,8 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
                       )}
                       {puedeEditar ? <textarea value={p.nombre} onChange={(e) => editarProyecto(p.id, "nombre", e.target.value)} rows={p.nombre?.length > 80 ? 4 : 1} className="w-full text-xs border-0 bg-transparent resize-y focus:bg-white" /> : <span className="whitespace-pre-wrap">{p.nombre}</span>}
                     </td>
-                    <td className="border border-slate-200 px-2 py-1.5 text-right align-top font-medium">{fmt(inversionProyecto(p))}</td>
-                    {plan.periodos.map((pe) => (
+                    <td className="border border-slate-200 px-2 py-1.5 text-right align-top font-medium">{fmt(sumaVista(p))}</td>
+                    {periodosVista.map((pe) => (
                       <td key={pe.id} className="border border-slate-200 px-1 py-1.5 text-right align-top">
                         {puedeEditar ? <InputMiles value={p.valores?.[pe.id] || ""} onChange={(v) => editarValor(p.id, pe.id, v)} className="w-full text-right text-xs border-0 bg-transparent focus:bg-white px-1" /> : (parseFloat(p.valores?.[pe.id]) > 0 ? fmt(p.valores[pe.id]) : "")}
                       </td>
@@ -2183,11 +2208,11 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
                 ))}
                 <tr className="bg-slate-100 font-semibold">
                   {puedeEditar && <td className="no-print border border-slate-200"></td>}
-                  <td className="border border-slate-200 px-2 py-1.5 text-center">{plan.proyectos.length}</td>
+                  <td className="border border-slate-200 px-2 py-1.5 text-center">{proyectosVista.length}</td>
                   <td className="border border-slate-200 px-2 py-1.5">VALOR TOTAL</td>
-                  <td className="border border-slate-200 px-2 py-1.5 text-right">{fmt(totalGeneralPlan(plan.proyectos))}</td>
-                  {plan.periodos.map((pe) => (
-                    <td key={pe.id} className="border border-slate-200 px-2 py-1.5 text-right">{fmt(totalPorPeriodo(plan.proyectos, pe.id))}</td>
+                  <td className="border border-slate-200 px-2 py-1.5 text-right">{fmt(proyectosVista.reduce((acc, p) => acc + sumaVista(p), 0))}</td>
+                  {periodosVista.map((pe) => (
+                    <td key={pe.id} className="border border-slate-200 px-2 py-1.5 text-right">{fmt(totalVistaPeriodo(pe.id))}</td>
                   ))}
                   {puedeEditar && <td className="no-print border border-slate-200"></td>}
                 </tr>
