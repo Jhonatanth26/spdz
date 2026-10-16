@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v19";
+const VERSION_APP = "novedades v21";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -3069,7 +3069,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Solicitante <span className="text-slate-400 font-normal">(firma automática)</span></label><div title={currentUser.nombre} className="w-full mt-1 border border-slate-100 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-600 truncate">{currentUser.nombre}</div></div>
         <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Empresa</label><select value={empresaId} onChange={(e) => { setEmpresaId(e.target.value); setConceptoGastoId(""); }} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
         <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
-        <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">Departamento que reporta</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
+        <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">Dirección a cargo</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
         <div className="md:col-span-2 xl:col-span-8"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><SelectorBuscable opciones={opcionesConcepto} value={conceptoGastoId} onChange={setConceptoGastoId} placeholder="Buscar por grupo, código, cuenta o centro de costo…" /></div>
         <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
         <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea ref={(el) => { if (el) autoResize({ target: el }); }} value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
@@ -4855,8 +4855,7 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
     facturas: solicitud.recepcion.facturas || (solicitud.recepcion.facturaUrl ? [{ id: nextId(), numero: "", url: solicitud.recepcion.facturaUrl }] : []),
     actas: solicitud.recepcion.actas || [],
   });
-  const [enviado, setEnviado] = useState(false);
-  const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); setEnviado(false); };
+  const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
   const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
   const agregarActa = (url, itemId) => {
@@ -4889,23 +4888,27 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
   // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
   const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
   const elegir = (tipo) => {
-    set({ recibidoSatisfaccion: true, tipoRecepcion: tipo });
+    // si cambia la forma de recepción, el envío anterior a Compras ya no aplica y se puede volver a enviar
+    set({ recibidoSatisfaccion: true, tipoRecepcion: tipo, ...(tipo !== estado ? { enviadoACompras: null } : {}) });
     anunciarCambio({ mostrar: mostrarToast, crearNotificacion, currentUser, solicitud, texto: tipo === "observaciones" ? `Recepción de ${solicitud.folio} registrada con observaciones` : `Recepción de ${solicitud.folio} registrada a satisfacción`,
       para: usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol)), mensajePara: `${currentUser.nombre} registró la recepción de ${solicitud.folio} ${tipo === "observaciones" ? "con observaciones" : "a satisfacción"}: ya puedes evaluar al proveedor y completar la solicitud.` });
   };
 
   const enviarACompras = () => {
+    const textoTipo = estado === "observaciones" ? "con observaciones" : "a satisfacción";
+    const coment = (r.comentario || "").trim();
     const equipoCompras = usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol) && u.email);
     if (equipoCompras.length) {
       enviarCorreo(
         equipoCompras.map((u) => u.email),
-        `Recepción con observaciones: ${solicitud.folio}`,
-        `<p>Hola,</p><p>${currentUser.nombre} registró la recepción de la solicitud <b>${solicitud.folio}</b> con observaciones:</p><p><i>"${r.comentario}"</i></p><p>Queda pendiente de revisión.</p>`
+        `Recepción ${textoTipo}: ${solicitud.folio}`,
+        `<p>Hola,</p><p>${currentUser.nombre} registró la recepción de la solicitud <b>${solicitud.folio}</b> ${textoTipo}${coment ? ":</p><p><i>\"" + coment + "\"</i></p>" : ".</p>"}<p>${estado === "observaciones" ? "Queda pendiente de revisión." : "Ya puedes evaluar al proveedor y completar la solicitud."}</p>`
       );
     }
-    usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol)).forEach((u) => crearNotificacion?.(u.id, `${currentUser.nombre} registró la recepción de ${solicitud.folio} con observaciones: "${r.comentario}"`, solicitud.id));
-    setEnviado(true);
-    mostrarToast("Observaciones enviadas a Compras");
+    usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol)).forEach((u) => crearNotificacion?.(u.id, `${currentUser.nombre} registró la recepción de ${solicitud.folio} ${textoTipo}${coment ? `: "${coment}"` : ""}`, solicitud.id));
+    // queda guardado en la solicitud: cualquier usuario que entre después ve que ya se envió, y no el botón
+    set({ enviadoACompras: { por: currentUser.nombre, fecha: hoy(), tipo: estado } });
+    mostrarToast("Enviado a Compras");
   };
 
   return (
@@ -4983,11 +4986,12 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
       </div>
       <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Observaciones {estado === "observaciones" ? "(describe las observaciones)" : "(opcional)"}</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
       {estado === "observaciones" && !r.comentario.trim() && <div className="text-[11px] text-amber-600">Describe en las observaciones qué fue lo que pasó.</div>}
-      {estado === "observaciones" && r.comentario.trim() && (
-        <div className="flex items-center gap-2">
-          <button onClick={enviarACompras} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Send size={13} /> Enviar a Compras</button>
-          {enviado && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Enviado</span>}
-        </div>
+      {estado && (estado !== "observaciones" || r.comentario.trim()) && (
+        r.enviadoACompras
+          ? <div className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Enviado a Compras por {r.enviadoACompras.por} · {r.enviadoACompras.fecha}</div>
+          : <div className="flex items-center gap-2">
+              <button onClick={enviarACompras} className={`text-xs text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 ${estado === "observaciones" ? "bg-amber-600" : "bg-emerald-600"}`}><Send size={13} /> Enviar a Compras</button>
+            </div>
       )}
       {!estado && <div className="text-[11px] text-amber-600">Marca cómo se recibió para que Compras pueda hacer la evaluación y finalizar la solicitud.</div>}
       {estado === "satisfaccion" && <div className="text-[11px] text-emerald-600">✓ Recibida a satisfacción — falta que Compras complete la evaluación del proveedor para finalizar.</div>}
@@ -5691,7 +5695,28 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     });
     setMostrarCotGeneralCompras(false);
   };
-  const seleccionarCotizacion = (itemId, idx, obs) => patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizacionSeleccionada: idx, observacionSeleccion: obs } : i)) });
+  // al cambiar el proveedor de un ítem, su plan de pagos pasa a ser el que ese proveedor cotizó (pago único / por etapas / anticipo),
+  // ajustado al nuevo total. Si el plan ya estaba confirmado, queda por confirmar de nuevo, porque era el de otro proveedor.
+  const seleccionarCotizacion = (itemId, idx, obs) => {
+    const sinIvaSel = solicitud.tipo === "servicio";
+    let planCambiado = false;
+    const items = solicitud.items.map((i) => {
+      if (i.id !== itemId) return i;
+      const nuevo = { ...i, cotizacionSeleccionada: idx, observacionSeleccion: obs };
+      const cambioProveedor = idxCotizacionActiva(i, sinIvaSel) !== idx;
+      const cot = i.cotizaciones?.[idx];
+      if (cambioProveedor && cot && planTieneValores(cot.pagos)) {
+        const total = totalItemConAiu(nuevo, sinIvaSel);
+        const plan = total > 0 ? reescalarPlanPago({ ...planPagosVacio(), ...cot.pagos }, total) : { ...planPagosVacio(), ...cot.pagos };
+        nuevo.pagos = exigeAnticipoPago(nuevo) ? planPagoAnticipado(i.pagos?.pagoUnico?.fecha ? i.pagos : plan, total) : plan;
+        if (nuevo.pagosConfirmados) { nuevo.pagosConfirmados = false; delete nuevo.pagosConfirmadosPor; }
+        planCambiado = true;
+      }
+      return nuevo;
+    });
+    patch({ items });
+    if (planCambiado) mostrarToast("Cambió el proveedor: el plan de pagos del ítem se actualizó al de ese proveedor. Revísalo y confírmalo.");
+  };
   const guardarItemsRevision = (items) => patch({ items });
   const decidirRevisionCompras = (estado, obs) => {
     if (estado === "rechazada") { anunciar("Revisión rechazada — se devolvió al solicitante", [solicitante], `Tu solicitud ${solicitud.folio} fue rechazada por Compras.${obs ? ` Motivo: "${obs}"` : ""}`, "alerta"); patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: obs, fecha: hoy(), pasoOrigen: solicitud.status }, revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() }, notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada por Compras.`) }); return; }
