@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v12";
+const VERSION_APP = "novedades v13";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -1247,6 +1247,13 @@ function SelectorPaleta({ tema, onElegir, compacto }) {
 }
 
 // botón de acceso rápido, junto a la campana de notificaciones
+// ---- TAMAÑO DE LA PANTALLA (automático) ----
+// Toda la interfaz está medida en rem, así que cambiar el tamaño de letra base de la página la agranda o la achica completa.
+// La base crece con el ancho de la ventana: 12 px en pantallas pequeñas, 16 px desde ~1500 px de ancho.
+function aplicarTamanoPantalla() {
+  const base = Math.min(16, Math.max(12, window.innerWidth / 95));
+  document.documentElement.style.fontSize = `${Math.round(base * 100) / 100}px`;
+}
 function BotonPaleta({ tema, onElegir }) {
   const [abierto, setAbierto] = useState(false);
   const ref = useRef(null);
@@ -6382,28 +6389,28 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
       <table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10"><tr>
           {esAdmin && <th className="px-4 py-2 w-8"><input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} /></th>}
-          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Estado</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Lead Time</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-center px-4 py-2 font-medium">Orden enviada al proveedor</th><th className="text-left px-4 py-2 font-medium">Comentarios</th><th></th><th></th>{onDuplicar && <th></th>}</tr></thead>
+          <th className="text-left px-3 py-2 font-medium">Consecutivo</th><th className="text-left px-3 py-2 font-medium">Tipo</th><th className="text-left px-3 py-2 font-medium">Estado</th><th className="text-left px-3 py-2 font-medium hidden 2xl:table-cell">Prioridad</th><th className="text-left px-3 py-2 font-medium">Área</th><th className="text-left px-3 py-2 font-medium hidden 2xl:table-cell">Lead Time</th><th className="text-left px-3 py-2 font-medium">Empresa</th><th className="text-left px-3 py-2 font-medium">Fecha de registro</th><th className="text-left px-3 py-2 font-medium">Objetivo</th><th className="text-left px-3 py-2 font-medium hidden 2xl:table-cell">Proveedor adjudicado</th><th className="text-right px-3 py-2 font-medium">Total (IVA incl.)</th><th className="text-center px-3 py-2 font-medium">Orden enviada al proveedor</th><th className="text-left px-3 py-2 font-medium hidden 2xl:table-cell">Comentarios</th><th></th><th></th>{onDuplicar && <th></th>}</tr></thead>
         <tbody>{solicitudesPagina.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
           const puedeReenviar = currentUser && puedeGestionarCotizaciones(currentUser) && (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl);
           return (<tr key={s.id} className={`border-t border-slate-100 hover:bg-slate-50 cursor-pointer ${seleccionadas.includes(s.id) ? "bg-rose-50/40" : ""}`} onClick={() => onAbrir(s.id)}>
-            {esAdmin && <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} /></td>}
-            <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
-            <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
-            <td className="px-4 py-2.5"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : (s.status === "recepcion" && s.recepcion?.recibidoSatisfaccion) ? "blue" : "slate"}>{estadoMostrado(s)}</Badge></td>
-            <td className="px-4 py-2.5">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td>
-            <td className="px-4 py-2.5 text-slate-600">{area?.nombre}</td>
-            <td className="px-4 py-2.5"><Badge tone={toneDemora(s)}>{diasTranscurridos(s)} día{diasTranscurridos(s) === 1 ? "" : "s"}</Badge></td>
-            <td className="px-4 py-2.5 text-slate-600">{empresa?.nombre}</td>
-            <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap">{s.fechaCreacion}</td>
-            <td className="px-4 py-2.5 text-slate-600 max-w-[220px] truncate" title={s.objetivo}>{s.objetivo}</td>
-            <td className="px-4 py-2.5 text-slate-600 max-w-[160px] truncate" title={proveedoresAdjudicados(s, proveedores)}>{proveedoresAdjudicados(s, proveedores)}</td>
-            <td className="px-4 py-2.5 text-right text-slate-600">{fmt(totalSolicitud(s))}</td>
-            <td className="px-4 py-2.5 text-center">{ordenEnviadaAlProveedor(s) ? <Badge tone="green">Sí</Badge> : <Badge tone="slate">No</Badge>}</td>
-            <td className="px-4 py-2.5 text-slate-600 max-w-[220px] truncate" title={comentariosDeOrden(s)}>{comentariosDeOrden(s) || <span className="text-slate-300 text-xs">—</span>}</td>
-            {puedeReenviar && <td className="px-4 py-2.5 text-right"><button title="Reenviar orden firmada al proveedor" disabled={enviandoId === s.id} onClick={(e) => reenviarTodas(e, s, empresa)} className="text-slate-400 hover:text-indigo-600 p-1 disabled:opacity-40"><Send size={15} /></button></td>}
-            {onDuplicar && <td className="px-4 py-2.5 text-right">{puedeDuplicarSolicitud(s, currentUser) && <button title="Duplicar esta solicitud" onClick={(e) => { e.stopPropagation(); onDuplicar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><Copy size={15} /></button>}</td>}
-            <td className="px-4 py-2.5 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
-            <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
+            {esAdmin && <td className="px-3 py-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} /></td>}
+            <td className="px-3 py-2 font-medium text-slate-700">{s.folio}</td>
+            <td className="px-3 py-2"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
+            <td className="px-3 py-2"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : (s.status === "recepcion" && s.recepcion?.recibidoSatisfaccion) ? "blue" : "slate"}>{estadoMostrado(s)}</Badge></td>
+            <td className="px-3 py-2 hidden 2xl:table-cell">{s.prioridad ? <Badge tone={s.prioridad === "Alto" ? "red" : s.prioridad === "Medio" ? "amber" : "slate"}>{s.prioridad}</Badge> : <span className="text-slate-300 text-xs">—</span>}</td>
+            <td className="px-3 py-2 text-slate-600">{area?.nombre}</td>
+            <td className="px-3 py-2 hidden 2xl:table-cell"><Badge tone={toneDemora(s)}>{diasTranscurridos(s)} día{diasTranscurridos(s) === 1 ? "" : "s"}</Badge></td>
+            <td className="px-3 py-2 text-slate-600">{empresa?.nombre}</td>
+            <td className="px-3 py-2 text-slate-600 whitespace-nowrap">{s.fechaCreacion}</td>
+            <td className="px-3 py-2 text-slate-600 max-w-[220px] truncate" title={s.objetivo}>{s.objetivo}</td>
+            <td className="px-3 py-2 text-slate-600 max-w-[160px] truncate hidden 2xl:table-cell" title={proveedoresAdjudicados(s, proveedores)}>{proveedoresAdjudicados(s, proveedores)}</td>
+            <td className="px-3 py-2 text-right text-slate-600">{fmt(totalSolicitud(s))}</td>
+            <td className="px-3 py-2 text-center">{ordenEnviadaAlProveedor(s) ? <Badge tone="green">Sí</Badge> : <Badge tone="slate">No</Badge>}</td>
+            <td className="px-3 py-2 text-slate-600 max-w-[220px] truncate hidden 2xl:table-cell" title={comentariosDeOrden(s)}>{comentariosDeOrden(s) || <span className="text-slate-300 text-xs">—</span>}</td>
+            {puedeReenviar && <td className="px-3 py-2 text-right"><button title="Reenviar orden firmada al proveedor" disabled={enviandoId === s.id} onClick={(e) => reenviarTodas(e, s, empresa)} className="text-slate-400 hover:text-indigo-600 p-1 disabled:opacity-40"><Send size={15} /></button></td>}
+            {onDuplicar && <td className="px-3 py-2 text-right">{puedeDuplicarSolicitud(s, currentUser) && <button title="Duplicar esta solicitud" onClick={(e) => { e.stopPropagation(); onDuplicar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><Copy size={15} /></button>}</td>}
+            <td className="px-3 py-2 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
+            <td className="px-3 py-2 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
       </table>
     </div>
     {solicitudes.length > 0 && (
@@ -7074,6 +7081,11 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
 }
 
 export default function App() {
+  useEffect(() => {
+    aplicarTamanoPantalla();
+    window.addEventListener("resize", aplicarTamanoPantalla);
+    return () => window.removeEventListener("resize", aplicarTamanoPantalla);
+  }, []);
   // --- Catálogos leídos/guardados en Supabase (áreas, departamentos, empresas, proveedores, ítems, centros de costo, conceptos de gasto, usuarios) ---
   const { datos: areas, cargando: cargandoAreas, guardar: guardarArea, eliminar: eliminarArea, guardarLote: guardarAreasLote } = useSupabaseTable('areas', {
     desdeDb: areaDesdeDb,
