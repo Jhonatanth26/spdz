@@ -23,7 +23,7 @@ import {
   Calendar, Award, ArrowLeft, LayoutDashboard, ListChecks, BarChart3,
   DollarSign, PackageCheck, CalendarClock, Boxes, Users, Truck,
   Settings, Target, ClipboardList, Lock, LogOut, History, PenTool, ShieldCheck,
-  Paperclip, Mail, Camera, Timer, AlertTriangle, Info, Palette, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive,
+  Paperclip, Mail, Camera, Timer, AlertTriangle, Info, Palette, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive, Copy,
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip,
@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v11";
+const VERSION_APP = "novedades v12";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -1652,6 +1652,79 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
 /* ---------------------------------------------------------
    ÓRDENES ENVIADAS A PROVEEDORES — consolidado para contabilidad
 --------------------------------------------------------- */
+// ---- DUPLICAR SOLICITUD ----
+// el solicitante duplica las suyas; Compras y el Administrador pueden duplicar cualquiera
+function puedeDuplicarSolicitud(s, user) {
+  if (!s || !user) return false;
+  return ["Administrador", "Compras"].includes(user.rol) || s.solicitanteId === user.id;
+}
+// copia real de un archivo guardado (así la copia no depende de la solicitud original, aunque ésta se borre).
+// Si por alguna razón no se puede copiar, se conserva la ruta original: es mejor tener la foto que perderla.
+async function copiarArchivoPrivado(path, carpeta) {
+  try {
+    const url = await obtenerUrlFirmada(path);
+    if (!url) return path;
+    const resp = await fetch(url);
+    if (!resp.ok) return path;
+    const blob = await resp.blob();
+    const nombre = decodeURIComponent(String(path).split("/").pop().replace(/^\d+_/, "")) || "foto.jpg";
+    return (await subirArchivo(new File([blob], nombre, { type: blob.type || "image/jpeg" }), carpeta)) || path;
+  } catch { return path; }
+}
+// arma el borrador de la nueva solicitud a partir de una existente. Siempre: ítems con sus cantidades y fotos (copiadas);
+// sin fecha, firmas, órdenes, recepción, facturas ni fechas de pago. Con mantenerPrecios, también los proveedores y precios
+// (marcados como "copiados"); sin ellos, los ítems quedan sin precio ni cotizaciones.
+async function construirBorrador(s, mantenerPrecios) {
+  const origen = `${s.folio}, ${s.fechaCreacion}`;
+  const items = [];
+  for (const it of s.items || []) {
+    const { cotizacionSeleccionada, observacionSeleccion, pagos, pagosSugeridos, pagosConfirmados, pagosConfirmadosPor, fotos, cotizaciones, ...resto } = it;
+    const nuevo = { ...resto, id: nextId(), cotizacionSeleccionada: null, observacionSeleccion: "", fotos: [], cotizaciones: [] };
+    if (mantenerPrecios) {
+      nuevo.cotizaciones = (cotizaciones || []).map((c) => { const { pagos: _p, ...cr } = c; return { ...cr, id: idCotizacion(), copiadaDe: origen }; });
+    } else {
+      nuevo.precioEstimado = "";
+      nuevo.descuentoValor = "";
+    }
+    if (fotos?.length) nuevo.fotos = await Promise.all(fotos.map((f) => copiarArchivoPrivado(f, "fotos-items")));
+    items.push(nuevo);
+  }
+  return {
+    clave: nextId(), origen, mantenerPrecios,
+    tipo: s.tipo, empresaId: s.empresaId, areaId: s.areaId, departamentoId: s.departamentoId || "", conceptoGastoId: s.conceptoGastoId || "",
+    objetivo: s.objetivo || "", justificacion: s.justificacion || "", aiu: s.aiu || { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, items,
+  };
+}
+function DuplicarModal({ solicitud, onCancelar, onConfirmar }) {
+  const [mantener, setMantener] = useState(true);
+  const [copiando, setCopiando] = useState(false);
+  const hayFotos = (solicitud.items || []).some((it) => it.fotos?.length);
+  const confirmar = async () => { setCopiando(true); await onConfirmar(solicitud, mantener); setCopiando(false); };
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4 no-print" role="dialog" aria-label="Duplicar solicitud">
+      <div className="bg-white rounded-xl border border-slate-200 shadow-xl w-full max-w-md p-5 space-y-4">
+        <div>
+          <h3 className="text-base font-semibold text-slate-800">Duplicar {solicitud.folio}</h3>
+          <p className="text-xs text-slate-500 mt-0.5 truncate" title={solicitud.objetivo}>{solicitud.objetivo}</p>
+        </div>
+        <div className="text-sm font-medium text-slate-700">¿Los proveedores mantienen los precios?</div>
+        <label className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${mantener ? "border-indigo-400 bg-indigo-50/50" : "border-slate-200"}`}>
+          <input type="radio" name="dup-precios" checked={mantener} onChange={() => setMantener(true)} className="mt-1" />
+          <span className="text-sm"><b>Sí</b>, copiar proveedores y precios<span className="block text-xs text-slate-500">Quedan marcados como «copiado de {solicitud.folio}» para que Compras los confirme. Puedes agregar un proveedor nuevo.</span></span>
+        </label>
+        <label className={`flex items-start gap-2 border rounded-lg p-3 cursor-pointer ${!mantener ? "border-indigo-400 bg-indigo-50/50" : "border-slate-200"}`}>
+          <input type="radio" name="dup-precios" checked={!mantener} onChange={() => setMantener(false)} className="mt-1" />
+          <span className="text-sm"><b>No</b>, solo copiar los ítems<span className="block text-xs text-slate-500">Los precios y cotizaciones hay que ponerlos de nuevo.</span></span>
+        </label>
+        <p className="text-[11px] text-slate-400">Se copian los ítems con sus cantidades{hayFotos ? " y fotos" : ""}. No se copian la fecha estimada, las firmas, las órdenes ni los pagos: la copia pasa de nuevo por la aprobación del Director de Área.</p>
+        <div className="flex justify-end gap-2">
+          <button onClick={onCancelar} disabled={copiando} className="text-sm px-3 py-1.5 rounded-md border border-slate-200 text-slate-600 disabled:opacity-50">Cancelar</button>
+          <button onClick={confirmar} disabled={copiando} className="text-sm px-3 py-1.5 rounded-md bg-indigo-600 text-white font-medium disabled:opacity-60">{copiando ? (hayFotos ? "Copiando fotos..." : "Creando...") : "Crear borrador"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 // quién puede borrar una solicitud: el Administrador siempre; el solicitante solo la suya y mientras el Director de Área no la haya aprobado
 function puedeBorrarSolicitud(s, user) {
   if (!s || !user) return false;
@@ -2702,21 +2775,21 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   );
 }
 
-function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, conceptosGasto, usuarios, currentUser, solicitudes, onCrear, onCancel }) {
-  const [tipo, setTipo] = useState("compra");
-  const [empresaId, setEmpresaId] = useState(empresas[0]?.id || "");
-  const [areaId, setAreaId] = useState(currentUser.areaId || areas[0].id);
-  const [departamentoId, setDepartamentoId] = useState("");
-  const [conceptoGastoId, setConceptoGastoId] = useState("");
+function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, conceptosGasto, usuarios, currentUser, solicitudes, onCrear, onCancel, borrador }) {
+  const [tipo, setTipo] = useState(borrador?.tipo || "compra");
+  const [empresaId, setEmpresaId] = useState(borrador?.empresaId || empresas[0]?.id || "");
+  const [areaId, setAreaId] = useState(borrador?.areaId || currentUser.areaId || areas[0].id);
+  const [departamentoId, setDepartamentoId] = useState(borrador?.departamentoId || "");
+  const [conceptoGastoId, setConceptoGastoId] = useState(borrador?.conceptoGastoId || "");
   const opcionesConcepto = useMemo(() => conceptosGasto
     .filter((c) => !c.empresaId || c.empresaId === empresaId)
     .sort((a, b) => ((a.grupo || a.codigo) ? 0 : 1) - ((b.grupo || b.codigo) ? 0 : 1) || (a.grupo || "").localeCompare(b.grupo || "") || (a.codigo || "").localeCompare(b.codigo || ""))
     .map((c) => ({ value: c.id, label: labelConcepto(c) })), [conceptosGasto, empresaId]);
   const [fechaEstimada, setFechaEstimada] = useState("");
-  const [objetivo, setObjetivo] = useState("");
-  const [justificacion, setJustificacion] = useState("");
-  const [items, setItems] = useState([{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [] }]);
-  const [aiu, setAiu] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "" });
+  const [objetivo, setObjetivo] = useState(borrador?.objetivo || "");
+  const [justificacion, setJustificacion] = useState(borrador?.justificacion || "");
+  const [items, setItems] = useState(borrador?.items ? () => borrador.items : [{ id: nextId(), itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: 19, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [] }]);
+  const [aiu, setAiu] = useState(borrador?.aiu || { administracionPct: "", utilidadPct: "", imprevistosPct: "" });
 
   const resumenItemForm = (it) => {
     const d = desgloseItem(it, tipo === "servicio");
@@ -2880,7 +2953,12 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   return (
     <div className="flex gap-5 items-start w-full">
     <div className="bg-white rounded-xl border border-slate-200 p-6 flex-1 min-w-0">
-      <h2 className="text-lg font-semibold text-slate-800 mb-5">Nueva solicitud</h2>
+      <h2 className="text-lg font-semibold text-slate-800 mb-5">{borrador ? `Nueva solicitud — copia de ${borrador.origen.split(",")[0]}` : "Nueva solicitud"}</h2>
+      {borrador && (
+        <div className="mb-4 text-xs bg-amber-50 border border-amber-200 text-amber-800 rounded-lg px-3 py-2">
+          Es una copia de <b>{borrador.origen}</b>. Revisa los ítems y las cantidades, y pon la <b>fecha estimada</b>.{borrador.mantenerPrecios ? " Los precios copiados los confirma Compras; puedes agregar un proveedor nuevo en cada ítem (máx. 3)." : " Los ítems vienen sin precio: ponlos de nuevo."}
+        </div>
+      )}
       {/* en pantallas anchas los campos se reparten en 12 columnas (4 filas en vez de 9); en pantallas medianas, 2 columnas; en celular, 1 */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 mb-5">
         <div className="xl:col-span-8">
@@ -3186,7 +3264,8 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo, sinPagoU
 }
 
 function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo, sinIva, tinte }) {
-  const [abierto, setAbierto] = useState(!compacto);
+  // en una solicitud duplicada, las cotizaciones copiadas se muestran abiertas para que se vean (y se pueda agregar un proveedor nuevo)
+  const [abierto, setAbierto] = useState(!compacto || (item.cotizaciones || []).some((c) => c.copiadaDe));
   // el "precio final negociado" ya no se digita (se confundía con el descuento): si una cotización antigua lo traía, se convierte en descuento en $
   const migrarPrecioFinal = (c) => {
     const ini = parseFloat(c.precioUnitario) || 0, fin = parseFloat(c.precioFinal) || 0;
@@ -3283,7 +3362,10 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
           <div key={i} className="space-y-2 border-b border-slate-200 pb-3 last:border-0 last:pb-0">
             <div className="grid grid-cols-8 gap-1.5 items-end">
               <div className="col-span-2 flex flex-col gap-0.5">
-                <label className="text-[10px] text-slate-400">Proveedor</label>
+                <label className="text-[10px] text-slate-400 flex items-center gap-1.5">Proveedor
+                  {c.copiadaDe && <span title={`Precio copiado de ${c.copiadaDe}`} className="px-1.5 rounded bg-slate-100 text-slate-500 text-[9px] font-medium">copiado de {String(c.copiadaDe).split(",")[0]}</span>}
+                  {!c.copiadaDe && cots.some((x) => x.copiadaDe) && <span className="px-1.5 rounded bg-emerald-100 text-emerald-700 text-[9px] font-medium">nuevo</span>}
+                </label>
                 <AutocompletarProveedor
                   proveedores={proveedores}
                   valorTexto={c.proveedorId ? (proveedores.find((p) => p.id === c.proveedorId)?.nombre || "") : (c.proveedorNombre || "")}
@@ -5209,7 +5291,7 @@ function accionLabel(solicitud, total) {
   }
 }
 
-function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver, crearNotificacion: crearNotificacionBase, guardarItemCatalogo, solicitudes }) {
+function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver, crearNotificacion: crearNotificacionBase, guardarItemCatalogo, solicitudes, onDuplicar }) {
   const [observacion, setObservacion] = useState("");
   const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
   // Compras corrige el nombre que escribió el solicitante y queda guardado en el catálogo de ítems
@@ -5656,7 +5738,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
-            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone={solicitud.recepcion.tipoRecepcion === "observaciones" ? "amber" : "green"}>{solicitud.recepcion.tipoRecepcion === "observaciones" ? "Recibida con observaciones" : "Recibida"}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{puedeBorrarSolicitud(solicitud, currentUser) && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> {solicitud.tipo === "compra" ? "Borrar solicitud" : "Borrar orden"}</button>}</div>
+            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone={solicitud.recepcion.tipoRecepcion === "observaciones" ? "amber" : "green"}>{solicitud.recepcion.tipoRecepcion === "observaciones" ? "Recibida con observaciones" : "Recibida"}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{onDuplicar && puedeDuplicarSolicitud(solicitud, currentUser) && <button onClick={() => onDuplicar(solicitud)} className="text-xs bg-white text-indigo-600 border border-indigo-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Copy size={13} /> Duplicar</button>}{puedeBorrarSolicitud(solicitud, currentUser) && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> {solicitud.tipo === "compra" ? "Borrar solicitud" : "Borrar orden"}</button>}</div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span><span className="flex items-center gap-1"><Clock size={13} /> {diasTranscurridos(solicitud)} día{diasTranscurridos(solicitud) === 1 ? "" : "s"} {["completada", "rechazada"].includes(solicitud.status) ? "en total" : "en curso"}</span></div>
           </div>
           <div className="text-right">
@@ -6121,7 +6203,7 @@ function requiereMiAccion(currentUser, s, proveedores) {
   }
 }
 
-function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas, titulo }) {
+function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas, onDuplicar, titulo }) {
   const [fArea, setFArea] = useState("todas");
   const [fEmpresa, setFEmpresa] = useState("todas");
   const [fEstado, setFEstado] = useState("todos");
@@ -6230,7 +6312,7 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
         {hayFiltros && <button onClick={limpiarFiltros} className="text-xs text-slate-500 underline mb-1.5">Limpiar filtros</button>}
         <div className="text-xs text-slate-400 ml-auto mb-1.5">{filtradas.length} de {solicitudes.length} solicitudes</div>
       </div>
-      <ListaSolicitudes solicitudes={ordenadas} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={onAbrir} onExportar={onExportar} onEliminarSeleccionadas={onEliminarSeleccionadas} />
+      <ListaSolicitudes solicitudes={ordenadas} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={onAbrir} onExportar={onExportar} onEliminarSeleccionadas={onEliminarSeleccionadas} onDuplicar={onDuplicar} />
     </div>
   );
 }
@@ -6239,7 +6321,7 @@ function VistaSolicitudes({ solicitudes, areas, empresas, usuarios, proveedores,
 const ordenEnviadaAlProveedor = (s) => ["oc_enviada", "recepcion", "completada"].includes(s.status) || (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl && o.enviadaEn);
 // comentario de la orden = lo que se registra en "En caso de variaciones en la OC/OT/OS inicial" (Recepción)
 const comentariosDeOrden = (s) => (s.recepcion?.variacionesOT || "").trim();
-function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas }) {
+function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUser, onAbrir, onExportar, onEliminarSeleccionadas, onDuplicar }) {
   const [enviandoId, setEnviandoId] = useState(null);
   const [seleccionadas, setSeleccionadas] = useState([]);
   const [porPagina, setPorPagina] = useState(25);
@@ -6300,7 +6382,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
       <table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10"><tr>
           {esAdmin && <th className="px-4 py-2 w-8"><input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} /></th>}
-          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Estado</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Lead Time</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-center px-4 py-2 font-medium">Orden enviada al proveedor</th><th className="text-left px-4 py-2 font-medium">Comentarios</th><th></th><th></th></tr></thead>
+          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Estado</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Lead Time</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-center px-4 py-2 font-medium">Orden enviada al proveedor</th><th className="text-left px-4 py-2 font-medium">Comentarios</th><th></th><th></th>{onDuplicar && <th></th>}</tr></thead>
         <tbody>{solicitudesPagina.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
           const puedeReenviar = currentUser && puedeGestionarCotizaciones(currentUser) && (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl);
           return (<tr key={s.id} className={`border-t border-slate-100 hover:bg-slate-50 cursor-pointer ${seleccionadas.includes(s.id) ? "bg-rose-50/40" : ""}`} onClick={() => onAbrir(s.id)}>
@@ -6319,6 +6401,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
             <td className="px-4 py-2.5 text-center">{ordenEnviadaAlProveedor(s) ? <Badge tone="green">Sí</Badge> : <Badge tone="slate">No</Badge>}</td>
             <td className="px-4 py-2.5 text-slate-600 max-w-[220px] truncate" title={comentariosDeOrden(s)}>{comentariosDeOrden(s) || <span className="text-slate-300 text-xs">—</span>}</td>
             {puedeReenviar && <td className="px-4 py-2.5 text-right"><button title="Reenviar orden firmada al proveedor" disabled={enviandoId === s.id} onClick={(e) => reenviarTodas(e, s, empresa)} className="text-slate-400 hover:text-indigo-600 p-1 disabled:opacity-40"><Send size={15} /></button></td>}
+            {onDuplicar && <td className="px-4 py-2.5 text-right">{puedeDuplicarSolicitud(s, currentUser) && <button title="Duplicar esta solicitud" onClick={(e) => { e.stopPropagation(); onDuplicar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><Copy size={15} /></button>}</td>}
             <td className="px-4 py-2.5 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
             <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
       </table>
@@ -7066,6 +7149,8 @@ export default function App() {
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   const [creando, setCreando] = useState(false);
+  const [duplicando, setDuplicando] = useState(null); // solicitud que se está duplicando (muestra la pregunta de precios)
+  const [borrador, setBorrador] = useState(null); // datos de la copia que se está armando en «Nueva solicitud»
   const [perfil, setPerfil] = useState(false);
   const [menuExpandido, setMenuExpandido] = useState(true);
   const [gruposAbiertos, setGruposAbiertos] = useState({ misSolicitudes: true, misPendientes: true, gestion: true });
@@ -7164,7 +7249,7 @@ export default function App() {
     const idReal = resultadoCrear?.id;
     // si no se pudo guardar, el formulario se queda abierto para no perder lo escrito
     if (error) { mostrarToast(`No se pudo crear la solicitud: ${error.message || "error desconocido"}. Inténtalo de nuevo.`, "alerta"); return; }
-    setCreando(false); setTab("solicitudes");
+    setCreando(false); setBorrador(null); setTab("solicitudes");
     const destinos = { aprobacion_director: "aprobación del director de área", cotizando: "Compras para cotizar" };
     const textoToast = `Solicitud ${nueva.folio} creada y enviada a ${destinos[nueva.status] || PASOS.find((p) => p.key === nueva.status)?.label || "aprobación"}`;
     const siguientes = nueva.status === "aprobacion_director"
@@ -7180,6 +7265,14 @@ export default function App() {
     return error;
   };
 
+  const confirmarDuplicado = async (solicitud, mantenerPrecios) => {
+    try {
+      const b = await construirBorrador(solicitud, mantenerPrecios);
+      setBorrador(b); setDuplicando(null); setCreando(true); setAbierta(null); setPerfil(false);
+    } catch (e) {
+      mostrarToast(`No se pudo duplicar la solicitud: ${e.message || "error desconocido"}`, "alerta");
+    }
+  };
   const eliminarSolicitud = async (id, folio) => {
     if (!puedeBorrarSolicitud(solicitudes.find((x) => x.id === id), currentUser)) return;
     if (!window.confirm(`¿Eliminar por completo la solicitud ${folio}? Esta acción no se puede deshacer — se borra todo su historial, cotizaciones, firmas y evaluación.`)) return;
@@ -7231,7 +7324,7 @@ export default function App() {
         ) : <div className="mt-1" />}
         {(gruposAbiertos.misSolicitudes || !menuExpandido) && (
           <>
-            <button title="Nueva solicitud" onClick={() => { setCreando(true); setAbierta(null); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left mb-1 ${!menuExpandido ? "justify-center px-2" : ""} ${creando ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+            <button title="Nueva solicitud" onClick={() => { setBorrador(null); setCreando(true); setAbierta(null); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left mb-1 ${!menuExpandido ? "justify-center px-2" : ""} ${creando ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
               <Plus size={16} className="shrink-0" /> {menuExpandido && "Nueva solicitud"}
             </button>
             <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
@@ -7310,11 +7403,11 @@ export default function App() {
           </div>
         )}
         {creando ? (
-          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => setCreando(false)} />
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => { setCreando(false); setBorrador(null); }} borrador={borrador} key={borrador?.clave || "nueva"} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} onCambiarContrasena={cambiarContrasena} tema={temaActual} onElegirTema={elegirTema} />
         ) : solicitudAbierta ? (
-          <SolicitudDetalle solicitudes={solicitudes} guardarItemCatalogo={guardarItemCatalogo} solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
+          <SolicitudDetalle solicitudes={solicitudes} guardarItemCatalogo={guardarItemCatalogo} solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onDuplicar={setDuplicando} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
         ) : tab === "dashboard" ? (
           <Dashboard areas={areas} solicitudes={solicitudesVisibles} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onVerCalendario={puedeVerPlanInversion(currentUser) ? () => setTab("planInversion") : undefined} />
         ) : tab === "misPendientes" && puedeVerMisPendientes(currentUser) ? (
@@ -7324,7 +7417,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mt-1">Solicitudes que están esperando una acción tuya en este momento, según tu rol.</p>
             </div>
             {solicitudesMisPendientes.length ? (
-              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} />
+              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} onDuplicar={setDuplicando} />
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No tienes solicitudes pendientes de tu acción en este momento.</div>
             )}
@@ -7336,7 +7429,7 @@ export default function App() {
               <p className="text-xs text-slate-400 mt-1">Solicitudes en el paso "Orden generada" que tienen al menos una orden de proveedor pendiente de tu firma.</p>
             </div>
             {solicitudesPorFirmar.length ? (
-              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} />
+              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} onDuplicar={setDuplicando} />
             ) : (
               <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay órdenes pendientes de firma en este momento.</div>
             )}
@@ -7363,7 +7456,7 @@ export default function App() {
             permisos={permisos} togglePermiso={togglePermiso} parametros={parametros} guardarParametro={guardarParametro}
           />
         ) : (
-          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
+          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} onDuplicar={setDuplicando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
         )}
       </main>
       </div>
@@ -7382,6 +7475,7 @@ export default function App() {
         </div>
       )}
     </div>
+    {duplicando && <DuplicarModal solicitud={duplicando} onCancelar={() => setDuplicando(null)} onConfirmar={confirmarDuplicado} />}
     <ToastHost toasts={toasts} onCerrar={cerrarToast} />
     </ToastContext.Provider>
   );
