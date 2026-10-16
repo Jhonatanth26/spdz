@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v15";
+const VERSION_APP = "novedades v16";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -6327,6 +6327,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
   const [porPagina, setPorPagina] = useState(25);
   const [paginaActual, setPaginaActual] = useState(1);
   const esAdmin = currentUser?.rol === "Administrador";
+  const hayCasillas = esAdmin || !!onDuplicar; // casillas para elegir una solicitud (Administrador: borrar; todos: duplicar)
 
   // paginaSegura ya se encarga de que nunca quede "atascado" en una página que dejó de existir
   // (ej. si el filtro reduce la lista) — no hace falta un efecto aparte que reinicie el estado.
@@ -6372,21 +6373,28 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
 
   return (
     <div className="space-y-2">
-      {esAdmin && seleccionadas.length > 0 && (
-        <div className="flex items-center justify-between bg-rose-50 border border-rose-200 rounded-lg px-4 py-2">
-          <span className="text-sm text-rose-700">{seleccionadas.length} solicitud(es) seleccionada(s)</span>
-          <button onClick={eliminarSeleccion} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Trash2 size={13} /> Eliminar seleccionadas</button>
-        </div>
-      )}
+      {hayCasillas && seleccionadas.length > 0 && (() => {
+        const unica = seleccionadas.length === 1 ? solicitudes.find((x) => x.id === seleccionadas[0]) : null;
+        const puedeDup = !!onDuplicar && unica && puedeDuplicarSolicitud(unica, currentUser);
+        return (
+          <div className="flex items-center justify-between gap-3 flex-wrap bg-indigo-50 border border-indigo-200 rounded-lg px-4 py-2">
+            <span className="text-sm text-indigo-800">{seleccionadas.length} solicitud(es) seleccionada(s){onDuplicar && seleccionadas.length > 1 ? " — para duplicar, elige solo una" : ""}</span>
+            <div className="flex items-center gap-2">
+              {puedeDup && <button onClick={() => onDuplicar(unica)} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Copy size={13} /> Duplicar esta solicitud</button>}
+              {esAdmin && <button onClick={eliminarSeleccion} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Trash2 size={13} /> Eliminar seleccionadas</button>}
+            </div>
+          </div>
+        );
+      })()}
     <div className="bg-white rounded-xl border border-slate-200 overflow-auto max-h-[70vh]">
       <table className="w-full text-sm">
         <thead className="bg-slate-50 text-slate-500 sticky top-0 z-10"><tr>
-          {esAdmin && <th className="px-4 py-2 w-8"><input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} /></th>}
-          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Estado</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Lead Time</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-center px-4 py-2 font-medium">Orden enviada al proveedor</th><th className="text-left px-4 py-2 font-medium">Comentarios</th><th></th><th></th>{onDuplicar && <th></th>}</tr></thead>
+          {hayCasillas && <th className="px-4 py-2 w-8">{esAdmin && <input type="checkbox" checked={todasSeleccionadas} onChange={alternarTodas} />}</th>}
+          <th className="text-left px-4 py-2 font-medium">Consecutivo</th><th className="text-left px-4 py-2 font-medium">Tipo</th><th className="text-left px-4 py-2 font-medium">Estado</th><th className="text-left px-4 py-2 font-medium">Prioridad</th><th className="text-left px-4 py-2 font-medium">Área</th><th className="text-left px-4 py-2 font-medium">Lead Time</th><th className="text-left px-4 py-2 font-medium">Empresa</th><th className="text-left px-4 py-2 font-medium">Fecha de registro</th><th className="text-left px-4 py-2 font-medium">Objetivo</th><th className="text-left px-4 py-2 font-medium">Proveedor adjudicado</th><th className="text-right px-4 py-2 font-medium">Total (IVA incl.)</th><th className="text-center px-4 py-2 font-medium">Orden enviada al proveedor</th><th className="text-left px-4 py-2 font-medium">Comentarios</th><th colSpan={3 + (onDuplicar ? 1 : 0)} className="text-center px-4 py-2 font-medium">Acciones</th></tr></thead>
         <tbody>{solicitudesPagina.map((s) => { const area = areas.find((a) => a.id === s.areaId), empresa = empresas.find((e) => e.id === s.empresaId), paso = PASOS.find((p) => p.key === s.status);
           const puedeReenviar = currentUser && puedeGestionarCotizaciones(currentUser) && (s.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl);
           return (<tr key={s.id} className={`border-t border-slate-100 hover:bg-slate-50 cursor-pointer ${seleccionadas.includes(s.id) ? "bg-rose-50/40" : ""}`} onClick={() => onAbrir(s.id)}>
-            {esAdmin && <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}><input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} /></td>}
+            {hayCasillas && <td className="px-4 py-2.5" onClick={(e) => e.stopPropagation()}>{(esAdmin || puedeDuplicarSolicitud(s, currentUser)) && <input type="checkbox" checked={seleccionadas.includes(s.id)} onChange={() => alternar(s.id)} />}</td>}
             <td className="px-4 py-2.5 font-medium text-slate-700">{s.folio}</td>
             <td className="px-4 py-2.5"><Badge tone={s.tipo === "compra" ? "blue" : "amber"}>{s.tipo === "compra" ? "Compra" : "Servicio"}</Badge></td>
             <td className="px-4 py-2.5"><Badge tone={s.status === "completada" ? "green" : s.status === "rechazada" ? "red" : (s.status === "recepcion" && s.recepcion?.recibidoSatisfaccion) ? "blue" : "slate"}>{estadoMostrado(s)}</Badge></td>
@@ -6400,7 +6408,7 @@ function ListaSolicitudes({ solicitudes, areas, empresas, proveedores, currentUs
             <td className="px-4 py-2.5 text-right text-slate-600">{fmt(totalSolicitud(s))}</td>
             <td className="px-4 py-2.5 text-center">{ordenEnviadaAlProveedor(s) ? <Badge tone="green">Sí</Badge> : <Badge tone="slate">No</Badge>}</td>
             <td className="px-4 py-2.5 text-slate-600 max-w-[220px] truncate" title={comentariosDeOrden(s)}>{comentariosDeOrden(s) || <span className="text-slate-300 text-xs">—</span>}</td>
-            {puedeReenviar && <td className="px-4 py-2.5 text-right"><button title="Reenviar orden firmada al proveedor" disabled={enviandoId === s.id} onClick={(e) => reenviarTodas(e, s, empresa)} className="text-slate-400 hover:text-indigo-600 p-1 disabled:opacity-40"><Send size={15} /></button></td>}
+            <td className="px-4 py-2.5 text-right">{puedeReenviar && <button title="Reenviar orden firmada al proveedor" disabled={enviandoId === s.id} onClick={(e) => reenviarTodas(e, s, empresa)} className="text-slate-400 hover:text-indigo-600 p-1 disabled:opacity-40"><Send size={15} /></button>}</td>
             {onDuplicar && <td className="px-4 py-2.5 text-right">{puedeDuplicarSolicitud(s, currentUser) && <button title="Duplicar esta solicitud" onClick={(e) => { e.stopPropagation(); onDuplicar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><Copy size={15} /></button>}</td>}
             <td className="px-4 py-2.5 text-right"><button title="Exportar a PDF" onClick={(e) => { e.stopPropagation(); onExportar(s); }} className="text-slate-400 hover:text-indigo-600 p-1"><FileText size={15} /></button></td>
             <td className="px-4 py-2.5 text-right"><ChevronRight size={15} className="text-slate-300" /></td></tr>); })}</tbody>
