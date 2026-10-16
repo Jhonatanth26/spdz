@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v10";
+const VERSION_APP = "novedades v11";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -937,6 +937,9 @@ function ImagenPrivada({ path, alt, className }) {
 }
 
 // enlace que resuelve la URL temporal justo al hacer clic (no queda expuesta en el HTML)
+// las actas de recibo antiguas eran solo la ruta (texto); las nuevas son {id, url, itemId} para poder asociarlas a un ítem
+const urlActa = (a) => (typeof a === "string" ? a : a?.url || "");
+const itemIdActa = (a) => (typeof a === "string" ? null : a?.itemId || null);
 function EnlacePrivado({ path, children, className, title }) {
   const [cargando, setCargando] = useState(false);
   const abrir = async () => {
@@ -971,6 +974,48 @@ function AdjuntarArchivo({ nombre, onSeleccionar, label, small, carpeta, soloPdf
       </label>
       {nombre && !subiendo && <EnlacePrivado path={nombre} className={`text-indigo-600 underline ${small ? "text-[11px]" : "text-xs"}`}>ver</EnlacePrivado>}
     </span>
+  );
+}
+
+// foto guardada en Storage privado: pide su enlace firmado y la muestra pequeña; al hacer clic se abre grande
+function MiniaturaPrivada({ path, onQuitar }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => { let vivo = true; obtenerUrlFirmada(path).then((u) => { if (vivo) setUrl(u); }); return () => { vivo = false; }; }, [path]);
+  return (
+    <div className="relative">
+      <a href={url || undefined} target="_blank" rel="noopener noreferrer" title="Ver foto" className="block h-14 w-14 rounded-md border border-slate-200 bg-slate-50 overflow-hidden flex items-center justify-center">
+        {url ? <img src={url} alt="Foto del ítem" className="h-full w-full object-cover" /> : <Camera size={16} className="text-slate-300" />}
+      </a>
+      {onQuitar && <button type="button" onClick={onQuitar} title="Quitar foto" className="absolute -top-1.5 -right-1.5 bg-white border border-slate-200 rounded-full w-4 h-4 text-[10px] leading-none text-slate-500 hover:text-rose-600">×</button>}
+    </div>
+  );
+}
+// fotos de apoyo de un ítem (para que Compras identifique bien lo que se necesita)
+function FotosItem({ fotos = [], onChange, editable }) {
+  const [subiendo, setSubiendo] = useState(false);
+  const agregar = async (lista) => {
+    setSubiendo(true);
+    const nuevas = [];
+    for (const file of Array.from(lista)) {
+      if (!file.type.startsWith("image/")) { alert(`«${file.name}» no es una foto.`); continue; }
+      if (!archivoDentroDelLimite(file)) { alert(`«${file.name}» pesa más de ${TAMANO_MAXIMO_MB} MB. Sube una más liviana.`); continue; }
+      const ruta = await subirArchivo(file, "fotos-items");
+      if (ruta) nuevas.push(ruta);
+    }
+    setSubiendo(false);
+    if (nuevas.length) onChange([...fotos, ...nuevas]);
+  };
+  if (!editable && !fotos.length) return null;
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      {fotos.map((f) => <MiniaturaPrivada key={f} path={f} onQuitar={editable ? () => onChange(fotos.filter((x) => x !== f)) : null} />)}
+      {editable && (
+        <label className="inline-flex items-center gap-1.5 border border-dashed border-slate-300 rounded-md px-2 py-1 cursor-pointer text-[11px] text-slate-500 hover:border-indigo-400 hover:text-indigo-600">
+          <Camera size={12} /> {subiendo ? "Subiendo..." : fotos.length ? "Agregar otra foto" : "Agregar fotos del ítem (opcional)"}
+          <input type="file" accept="image/*" multiple className="hidden" disabled={subiendo} onChange={(e) => { if (e.target.files?.length) agregar(e.target.files); e.target.value = ""; }} />
+        </label>
+      )}
+    </div>
   );
 }
 
@@ -1607,6 +1652,12 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
 /* ---------------------------------------------------------
    ÓRDENES ENVIADAS A PROVEEDORES — consolidado para contabilidad
 --------------------------------------------------------- */
+// quién puede borrar una solicitud: el Administrador siempre; el solicitante solo la suya y mientras el Director de Área no la haya aprobado
+function puedeBorrarSolicitud(s, user) {
+  if (!s || !user) return false;
+  if (user.rol === "Administrador") return true;
+  return s.solicitanteId === user.id && s.firmas?.director?.aprobado !== true;
+}
 function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir }) {
   const ESTADO_ETIQUETA = { cancelada: "Cancelada", cambiada: "Cambiada" };
   const [fEmpresa, setFEmpresa] = useState("");
@@ -1619,11 +1670,22 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
     if (!["oc_enviada", "recepcion", "completada"].includes(s.status)) return;
     // facturas / cuentas de cobro y comprobante de recepción (remisión, acta o correo) viven en la recepción de
     // la SOLICITUD (no por proveedor) — con varios proveedores adjudicados, esto aplica al conjunto de la solicitud
-    const facturas = s.recepcion?.facturas || (s.recepcion?.facturaUrl ? [{ url: s.recepcion.facturaUrl }] : []);
-    const tieneComprobanteRecepcion = (s.recepcion?.archivos?.length > 0) || (s.recepcion?.actas?.length > 0);
+    const facturasTodas = s.recepcion?.facturas || (s.recepcion?.facturaUrl ? [{ url: s.recepcion.facturaUrl }] : []);
+    const ordenesFirmadas = (s.ocEnviada?.ordenesProveedor || []).filter((o) => o.archivoFirmadoUrl);
     (s.ocEnviada?.ordenesProveedor || []).forEach((o) => {
       if (!o.archivoFirmadoUrl) return;
       const prov = buscarProveedorDeOrden(o, proveedores);
+      // ítems que se le adjudicaron a ESTE proveedor: sus facturas, actas y notas son las de esta orden
+      const itemsDeOrden = s.items.filter((it) => { const cot = it.cotizaciones?.[idxCotizacionActiva(it, s.tipo === "servicio")]; return cot && mismoProveedor({ proveedorId: cot.proveedorId, proveedorNombre: cot.proveedorNombre }, o); });
+      const idsOrden = itemsDeOrden.map((it) => it.id);
+      const facturas = facturasTodas.filter((f) => !f.itemId || idsOrden.includes(f.itemId));
+      const actasFila = (s.recepcion?.actas || []).filter((a) => !itemIdActa(a) || idsOrden.includes(itemIdActa(a)));
+      const tieneComprobanteRecepcion = (s.recepcion?.archivos?.length > 0) || actasFila.length > 0;
+      const notas = itemsDeOrden.map((it) => (s.recepcion?.itemsRecibidos?.[it.id]?.nota || "").trim()).filter(Boolean);
+      const comFacturas = facturas.map((f) => (f.comentario || "").trim()).filter(Boolean);
+      // las variaciones son de toda la solicitud: solo se muestran en la fila cuando hay una única orden (si no, se repetirían)
+      const variaciones = ordenesFirmadas.length === 1 ? comentariosDeOrden(s) : "";
+      const comentarios = [...notas, ...comFacturas, variaciones].filter(Boolean).join(" · ");
       const cotsAnticipo = s.items.flatMap((it) => (it.cotizaciones || []).filter((c) => c.anticipoObligatorio && mismoProveedor({ proveedorId: c.proveedorId, proveedorNombre: c.proveedorNombre }, o)));
       const itemsDelProveedor = cotsAnticipo;
       filasTodas.push({
@@ -1642,8 +1704,8 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
         notaEstadoOrden: o.notaEstadoOrden || "",
         tieneFactura: facturas.length > 0,
         urlsFactura: facturas.map((f) => f.url).filter(Boolean),
-        actas: s.recepcion?.actas || [],
-        comentarios: comentariosDeOrden(s),
+        actas: actasFila.map(urlActa).filter(Boolean),
+        comentarios,
         etiquetaFactura: prov?.personaNatural === "si" ? "Cuenta de cobro" : "Factura",
         tieneComprobanteRecepcion,
         anticipoObligatorio: itemsDelProveedor.length > 0,
@@ -1712,7 +1774,7 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
                 <td className="px-4 py-2 text-slate-600">{f.proveedor} {f.anticipoObligatorio && <span title="Pago anticipado obligatorio: se paga el valor final negociado antes de despachar" className="text-amber-600 inline-block align-middle"><Timer size={12} /></span>}</td>
                 <td className="px-4 py-2 text-right font-medium">{fmt(f.total)}</td>
                 <td className="px-4 py-2">{f.estadoOrden === "enviada" ? <Badge tone="green">Enviada</Badge> : <span title={f.notaEstadoOrden}><Badge tone={f.estadoOrden === "cancelada" ? "red" : "amber"}>{ESTADO_ETIQUETA[f.estadoOrden]}</Badge></span>}</td>
-                <td className="px-4 py-2 text-center">{f.tieneFactura ? <div className="flex flex-col items-center gap-0.5">{f.urlsFactura.map((u, k) => <EnlacePrivado key={k} path={u} className="text-indigo-600 underline text-xs">{f.etiquetaFactura}{f.urlsFactura.length > 1 ? ` ${k + 1}` : ""}</EnlacePrivado>)}</div> : <Badge tone="red">Falta {f.etiquetaFactura.toLowerCase()}</Badge>}</td>
+                <td className="px-4 py-2 text-center">{f.tieneFactura ? <div className="flex flex-col items-center gap-0.5">{f.urlsFactura.map((u, k) => <EnlacePrivado key={k} path={u} className="text-indigo-600 underline text-xs">{f.etiquetaFactura}{f.urlsFactura.length > 1 ? ` ${k + 1}` : ""}</EnlacePrivado>)}</div> : <Badge tone="red">Falta</Badge>}</td>
                 <td className="px-4 py-2 text-slate-600 max-w-[220px] truncate" title={f.comentarios}>{f.comentarios || <span className="text-slate-300 text-xs">—</span>}</td>
                 <td className="px-4 py-2 text-center">{f.tieneComprobanteRecepcion ? (f.actas.length ? <div className="flex flex-col items-center gap-0.5">{f.actas.map((u, k) => <EnlacePrivado key={k} path={u} className="text-indigo-600 underline text-xs">Acta de recibo{f.actas.length > 1 ? ` ${k + 1}` : ""}</EnlacePrivado>)}</div> : <Badge tone="green">Sí</Badge>) : <Badge tone="red">Falta</Badge>}</td>
                 <td className="px-4 py-2 text-center"><EnlacePrivado path={f.archivo} className="text-indigo-600 underline text-xs">Descargar</EnlacePrivado></td>
@@ -1741,6 +1803,20 @@ function abrevMes(texto) {
   if (!m || indiceMesDesdeTexto(m[2]) < 0) return texto || "";
   return m[2].charAt(0).toUpperCase() + m[2].slice(1, 3).toLowerCase() + m[3];
 }
+// año de un periodo: el que trae escrito el mes ("Abr 2026", "Abr/26") o, si no, el del cronograma
+function anioDePeriodo(periodo, anioPlan) {
+  const m = String(periodo?.mes || "").match(/(\d{4}|\d{2})\s*$/);
+  if (m) return m[1].length === 4 ? parseInt(m[1]) : 2000 + parseInt(m[1]);
+  return anioPlan ? parseInt(anioPlan) : null;
+}
+// el mes como se ve en el cronograma: tres letras y año de dos cifras → "Sep/26", "Oct/26"
+function etiquetaMes(texto, anioPlan) {
+  const base = abrevMes(texto);
+  const m = String(base).match(/^\s*([A-Za-zÁÉÍÓÚáéíóúñÑ]+)\s*[\/\-\s]*(\d{4}|\d{2})?\s*$/);
+  if (!m || indiceMesDesdeTexto(m[1]) < 0) return base;
+  const y = m[2] ? m[2].slice(-2) : (anioPlan ? String(anioPlan).slice(-2) : "");
+  return y ? `${m[1]}/${y}` : m[1];
+}
 // interpreta un rango de días como "14-18" → {desde: 14, hasta: 18}; si no tiene guion, usa todo el mes
 function parsearRangoDias(rango) {
   const m = (rango || "").match(/(\d{1,2})\s*-\s*(\d{1,2})/);
@@ -1751,7 +1827,7 @@ function parsearRangoDias(rango) {
 // fecha de cada pago (anticipo/intermedio/final, o pago único). Si no existe un periodo para el
 // mes de un pago, lo crea automáticamente. Devuelve los periodos (con los nuevos agregados) y los
 // valores a poner en la fila de ese proyecto.
-function distribuirPagosEnPeriodos(solicitud, periodosExistentes) {
+function distribuirPagosEnPeriodos(solicitud, periodosExistentes, anioPlan) {
   // pagos de cada ítem: su plan confirmado, o el que sugirió el solicitante si aún no se confirma; un ítem
   // sin ningún plan usa la fecha estimada de entrega y su valor total como un solo pago
   const sinIvaPlan = solicitud.tipo === "servicio";
@@ -1770,13 +1846,14 @@ function distribuirPagosEnPeriodos(solicitud, periodosExistentes) {
     let periodo = periodos.find((pe) => {
       const idxMes = indiceMesDesdeTexto(pe.mes);
       if (idxMes !== mes - 1) return false;
+      if (anioPlan && anioDePeriodo(pe, anioPlan) !== anio) return false; // otro año: no es el mismo periodo
       const { desde, hasta } = parsearRangoDias(pe.rango);
       return diaNum >= desde && diaNum <= hasta;
     });
     if (!periodo) {
       // no hay ningún periodo para ese mes/rango todavía — se crea uno nuevo automáticamente
       const nombreMes = NOMBRES_MESES[mes - 1];
-      periodo = { id: nextId(), mes: abrevMes(nombreMes), etiqueta: "Semana", rango: `${dia}` };
+      periodo = { id: nextId(), mes: abrevMes(nombreMes) + (anioPlan && anio !== parseInt(anioPlan) ? ` ${anio}` : ""), etiqueta: "Semana", rango: `${dia}` };
       periodos.push(periodo);
     }
     valores[periodo.id] = (parseFloat(valores[periodo.id]) || 0) + parseFloat(t.valor);
@@ -1792,7 +1869,7 @@ function fechaAproximadaPeriodo(periodo, anio) {
   const { desde } = parsearRangoDias(periodo.rango);
   const mesStr = String(idxMes + 1).padStart(2, "0");
   const diaStr = String(Math.min(Math.max(desde, 1), 28)).padStart(2, "0"); // 28 para no salirse de ningún mes
-  return `${anio}-${mesStr}-${diaStr}`;
+  return `${anioDePeriodo(periodo, anio)}-${mesStr}-${diaStr}`;
 }
 
 // operación inversa a distribuirPagosEnPeriodos: toma los valores que quedaron en la fila del plan
@@ -1840,6 +1917,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     orderBy: 'anio',
   });
   const [planActivoId, setPlanActivoId] = useState(null);
+  const [fEmpresaPlan, setFEmpresaPlan] = useState("");
   const [exportandoPDF, setExportandoPDF] = useState(false);
   const [seleccionados, setSeleccionados] = useState([]);
   // buffer local: la pantalla se actualiza al instante con cada tecla; el guardado en Supabase
@@ -1847,9 +1925,11 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
   const [planLocal, setPlanLocal] = useState(null);
   const guardarTimer = useRef(null);
 
+  const planesVisibles = fEmpresaPlan ? planes.filter((p) => p.empresaId === fEmpresaPlan) : planes;
   useEffect(() => {
-    if (!planActivoId && planes.length) setPlanActivoId(planes[0].id);
-  }, [planes, planActivoId]);
+    if (planesVisibles.length && !planesVisibles.some((p) => p.id === planActivoId)) setPlanActivoId(planesVisibles[0].id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planes, planActivoId, fEmpresaPlan]);
 
   // sincroniza el buffer local cuando cambia de plan, o cuando llega la primera carga desde la BD
   useEffect(() => {
@@ -1866,7 +1946,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     return () => { clearTimeout(t); window.removeEventListener("afterprint", limpiar); };
   }, [exportandoPDF]);
 
-  const plan = planLocal;
+  const plan = planLocal && planesVisibles.some((p) => p.id === planLocal.id) ? planLocal : null;
   const puedeEditar = puedeEditarPlanInversion(currentUser);
 
   // actualiza la pantalla al instante, y guarda en Supabase con un pequeño retraso (no en cada
@@ -1879,7 +1959,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
   };
 
   const crearPlan = async () => {
-    const nuevo = { id: nextId(), titulo: "Cronograma de Pagos", empresaId: empresas[0]?.id || null, anio: new Date().getFullYear(), periodos: [], proyectos: [] };
+    const nuevo = { id: nextId(), titulo: "Cronograma de Pagos", empresaId: fEmpresaPlan || empresas[0]?.id || null, anio: new Date().getFullYear(), periodos: [], proyectos: [] };
     const creado = await guardarPlanDB(nuevo);
     if (creado?.id) { setPlanActivoId(creado.id); setPlanLocal(creado); }
   };
@@ -1911,7 +1991,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     if (!solicitudId) { actualizarPlan({ proyectos: plan.proyectos.map((p) => (p.id === proyectoId ? { ...p, solicitudId: null } : p)) }); return; }
     const solicitud = solicitudes.find((s) => s.id === solicitudId);
     if (!solicitud) return;
-    const { periodos: periodosActualizados, valores } = distribuirPagosEnPeriodos(solicitud, plan.periodos);
+    const { periodos: periodosActualizados, valores } = distribuirPagosEnPeriodos(solicitud, plan.periodos, plan.anio);
     actualizarPlan({
       periodos: periodosActualizados,
       proyectos: plan.proyectos.map((p) => (p.id === proyectoId ? { ...p, solicitudId, nombre: `${solicitud.folio} — ${solicitud.objetivo}`, valores } : p)),
@@ -1937,7 +2017,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     let periodos = [...plan.periodos];
     let siguienteItem = (plan.proyectos.reduce((max, p) => Math.max(max, parseFloat(p.item) || 0), 0)) + 1;
     const nuevosProyectos = candidatas.map((s) => {
-      const r = distribuirPagosEnPeriodos(s, periodos);
+      const r = distribuirPagosEnPeriodos(s, periodos, plan.anio);
       periodos = r.periodos;
       return { id: nextId(), item: siguienteItem++, nombre: `${s.folio} — ${s.objetivo}`, valores: r.valores, destacado: false, solicitudId: s.id };
     });
@@ -1966,7 +2046,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
     const filas = [];
     filas.push([tituloCronograma(plan.titulo).toUpperCase()]);
     filas.push([]);
-    filas.push(["ITEM", "ORDEN", "VALOR TOTAL", ...plan.periodos.map((pe) => abrevMes(pe.mes))]);
+    filas.push(["ITEM", "ORDEN", "VALOR TOTAL", ...plan.periodos.map((pe) => etiquetaMes(pe.mes, plan.anio))]);
     filas.push(["", "", "", ...plan.periodos.map((pe) => pe.etiqueta)]);
     filas.push(["", "", "", ...plan.periodos.map((pe) => pe.rango)]);
     plan.proyectos.forEach((p) => {
@@ -1990,8 +2070,14 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
         </div>
         <div className="flex items-center gap-2 no-print">
           {planes.length > 0 && (
+            <select value={fEmpresaPlan} onChange={(e) => setFEmpresaPlan(e.target.value)} title="Filtrar por empresa" className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm bg-white">
+              <option value="">Todas las empresas</option>
+              {empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+            </select>
+          )}
+          {planesVisibles.length > 1 && (
             <select value={planActivoId || ""} onChange={(e) => setPlanActivoId(e.target.value)} className="border border-slate-200 rounded-lg px-2 py-1.5 text-sm">
-              {planes.map((p) => <option key={p.id} value={p.id}>{tituloCronograma(p.titulo)} ({p.anio})</option>)}
+              {planesVisibles.map((p) => <option key={p.id} value={p.id}>{tituloCronograma(p.titulo)} — {empresas.find((e) => e.id === p.empresaId)?.nombre || "Sin empresa"} ({p.anio})</option>)}
             </select>
           )}
           {puedeEditar && <button onClick={crearPlan} className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Plus size={13} /> Nuevo plan</button>}
@@ -2004,7 +2090,8 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
 
       {!plan ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">
-          {puedeEditar ? <>No hay ningún cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear el primero</button></> : "No hay ningún cronograma de pagos todavía."}
+          {fEmpresaPlan && planes.length > 0 ? (puedeEditar ? <>Esta empresa no tiene cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear uno</button></> : "Esta empresa no tiene cronograma de pagos todavía.")
+            : puedeEditar ? <>No hay ningún cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear el primero</button></> : "No hay ningún cronograma de pagos todavía."}
         </div>
       ) : (
         <>
@@ -2027,7 +2114,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
             }
           `}</style>
           <div id="plan-imprimible" className="bg-white rounded-xl border border-slate-200 p-4 overflow-x-auto">
-            <div className="text-center font-semibold text-slate-800 mb-3 text-sm">{tituloCronograma(plan.titulo)} {plan.anio} {empresas.find((e) => e.id === plan.empresaId)?.nombre || ""}</div>
+            <div className="text-center font-semibold text-slate-800 mb-3 text-sm">{tituloCronograma(plan.titulo)}</div>
             <table className="w-full text-xs border-collapse min-w-[900px]">
               <thead>
                 <tr className="bg-slate-50">
@@ -2037,7 +2124,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
                   <th rowSpan={3} className="border border-slate-200 px-2 py-1.5 w-28">VALOR TOTAL</th>
                   {plan.periodos.map((pe) => (
                     <th key={pe.id} className="border border-slate-200 px-1 py-1 min-w-[72px] max-w-[80px] relative group">
-                      {puedeEditar ? <input value={abrevMes(pe.mes)} onChange={(e) => editarPeriodo(pe.id, "mes", e.target.value)} placeholder="Mes" className="w-full text-center text-xs font-semibold border-0 bg-transparent focus:bg-white" /> : abrevMes(pe.mes)}
+                      {puedeEditar ? <input key={`${pe.id}-${etiquetaMes(pe.mes, plan.anio)}`} defaultValue={etiquetaMes(pe.mes, plan.anio)} onBlur={(e) => { if (e.target.value !== etiquetaMes(pe.mes, plan.anio)) editarPeriodo(pe.id, "mes", e.target.value); }} placeholder="Mes" className="w-full text-center text-xs font-semibold border-0 bg-transparent focus:bg-white" /> : etiquetaMes(pe.mes, plan.anio)}
                       {puedeEditar && <button onClick={() => quitarPeriodo(pe.id)} className="no-print absolute -top-1 -right-1 text-rose-400 hover:text-rose-600 bg-white rounded-full opacity-0 group-hover:opacity-100"><Trash2 size={11} /></button>}
                     </th>
                   ))}
@@ -2831,6 +2918,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               {tipo !== "servicio" && <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
             </div>
+            <div className="pl-7"><FotosItem editable fotos={it.fotos || []} onChange={(f) => updateItem(it.id, "fotos", f)} /></div>
             {parseFloat(it.precioEstimado) > 0 && (() => {
               const d = desgloseItem(it, tipo === "servicio");
               return (
@@ -3014,6 +3102,21 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo, sinPagoU
     onChange(normalizarPlanPago(autoFinalPlanPago({ ...p, [campo]: { ...p[campo], [sub]: val } }, total, campo), total));
   };
   const setTipoPago = (tipo) => onChange({ ...p, tipoPago: tipo, pagoUnico: tipo === "contado" ? { ...p.pagoUnico, valor: total } : p.pagoUnico });
+
+  // si cambia el total (Compras digita un descuento, cambia el precio o la cantidad), el plan se ajusta solo:
+  // el pago único siempre vale el total; un plan por etapas que ya cuadraba se reescala en proporción.
+  const totalAnterior = useRef(total);
+  useEffect(() => {
+    const antes = totalAnterior.current;
+    totalAnterior.current = total;
+    if (!pagos || sinUnico || !(total > 0) || !planTieneValores(p)) return;
+    if (p.tipoPago === "contado") {
+      if (Math.abs((parseFloat(p.pagoUnico?.valor) || 0) - total) > 0.5) onChange(reescalarPlanPago(p, total));
+    } else if (antes !== total && Math.abs(totalPagado(p) - antes) <= 0.5) {
+      onChange(reescalarPlanPago(p, total));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [total]);
 
   // pago anticipado obligatorio: no hay plan que armar ni valores que digitar — el sistema toma el valor final negociado
   if (sinUnico) {
@@ -4551,21 +4654,32 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
   const set = (fields) => { const copy = { ...r, ...fields, usuario: currentUser.nombre, fecha: hoy() }; setR(copy); onGuardar(copy); setEnviado(false); };
   const agregarArchivo = (url) => set({ archivos: [...r.archivos, url] });
   const quitarArchivo = (i) => set({ archivos: r.archivos.filter((_, idx) => idx !== i) });
-  const agregarActa = (url) => {
-    set({ actas: [...r.actas, url] });
+  const agregarActa = (url, itemId) => {
+    set({ actas: [...r.actas, { id: nextId(), url, ...(itemId ? { itemId } : {}) }] });
     anunciarCambio({ mostrar: mostrarToast, crearNotificacion, currentUser, solicitud, texto: `Acta de recibo guardada en ${solicitud.folio}`,
       para: usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol)), mensajePara: `${currentUser.nombre} registró un acta de recibo en ${solicitud.folio}.` });
   };
-  const quitarActa = (i) => set({ actas: r.actas.filter((_, idx) => idx !== i) });
+  const quitarActa = (a) => set({ actas: r.actas.filter((x) => x !== a) });
   // facturas parciales: a medida que el proveedor va despachando, puede llegar más de una (2, 3...).
   // si el proveedor adjudicado es persona natural, lo que entrega es una cuenta de cobro, no una factura.
   const adjudicados = proveedoresAdjudicadosDetalle(solicitud, proveedores).map((n) => buscarProveedorDeOrden(n, proveedores));
   const esPersonaNatural = adjudicados.length > 0 && adjudicados.every((p) => p?.personaNatural === "si");
   const etiquetaDoc = esPersonaNatural ? "cuenta de cobro" : "factura";
-  const agregarFactura = (url) => set({ facturas: [...r.facturas, { id: nextId(), numero: "", url }] });
+  const agregarFactura = (url, itemId) => set({ facturas: [...r.facturas, { id: nextId(), numero: "", url, ...(itemId ? { itemId } : {}) }] });
   const quitarFactura = (id) => set({ facturas: r.facturas.filter((f) => f.id !== id) });
   const editarNumeroFactura = (id, numero) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, numero } : f)) });
   const editarComentarioFactura = (id, comentario) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, comentario } : f)) });
+  const filaFactura = (f) => (
+    <div key={f.id} className="flex items-center gap-1.5">
+      <input value={f.numero} onChange={(e) => editarNumeroFactura(f.id, e.target.value)} placeholder="N.° (opcional)" className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+      <AdjuntarArchivo nombre={f.url} onSeleccionar={() => {}} />
+      <input defaultValue={f.comentario || ""} onBlur={(e) => { if (e.target.value !== (f.comentario || "")) editarComentarioFactura(f.id, e.target.value); }} placeholder="Comentario de la factura" className="flex-1 min-w-[120px] border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+      <button onClick={() => quitarFactura(f.id)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
+    </div>
+  );
+  const variosItems = (solicitud.items || []).length > 1;
+  const facturasGenerales = variosItems ? r.facturas.filter((f) => !f.itemId) : r.facturas;
+  const actasGenerales = variosItems ? r.actas.filter((a) => !itemIdActa(a)) : r.actas;
   // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
   // como "recibido" para el resto del flujo (avanzar, evaluación); solo cambia si quedó con observaciones o no.
   const estado = r.recibidoSatisfaccion ? (r.tipoRecepcion || "satisfaccion") : null;
@@ -4613,10 +4727,22 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
             <label className="text-xs font-medium text-slate-500 mb-1 flex items-center gap-2">Recepción por ítem <span className="text-slate-400 font-normal">({n} de {solicitud.items.length} recibidos)</span></label>
             <div className="border border-slate-200 rounded-lg divide-y divide-slate-100">
               {solicitud.items.map((it, i) => (
-                <div key={it.id} className="flex items-center gap-2 px-3 py-1.5 text-xs flex-wrap">
-                  <label className="flex items-center gap-2 text-slate-700 min-w-[200px]"><input type="checkbox" checked={!!rec[it.id]?.recibido} onChange={(e) => marcar(it, e.target.checked)} /> {i + 1}. {it.nombre} <span className="text-slate-400">({it.cantidad} {it.unidad})</span></label>
-                  {rec[it.id]?.recibido && <span className="text-emerald-600">✓ {rec[it.id].fecha}</span>}
-                  <input defaultValue={rec[it.id]?.nota || ""} onBlur={(e) => { if (e.target.value !== (rec[it.id]?.nota || "")) nota(it, e.target.value); }} placeholder="Nota (opcional)" className="flex-1 min-w-[140px] border border-slate-200 rounded-md px-2 py-1 text-xs" />
+                <div key={it.id} className="px-3 py-1.5 text-xs space-y-1.5">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <label className="flex items-center gap-2 text-slate-700 min-w-[200px]"><input type="checkbox" checked={!!rec[it.id]?.recibido} onChange={(e) => marcar(it, e.target.checked)} /> {i + 1}. {it.nombre} <span className="text-slate-400">({it.cantidad} {it.unidad})</span></label>
+                    {rec[it.id]?.recibido && <span className="text-emerald-600">✓ {rec[it.id].fecha}</span>}
+                    <input defaultValue={rec[it.id]?.nota || ""} onBlur={(e) => { if (e.target.value !== (rec[it.id]?.nota || "")) nota(it, e.target.value); }} placeholder="Nota (opcional)" className="flex-1 min-w-[140px] border border-slate-200 rounded-md px-2 py-1 text-xs" />
+                    <AdjuntarArchivo small nombre={null} label={`+ ${esPersonaNatural ? "Cuenta de cobro" : "Factura"}`} carpeta="facturas" onSeleccionar={(url) => agregarFactura(url, it.id)} />
+                    <AdjuntarArchivo small nombre={null} label="+ Acta de recibo" carpeta="actas-trabajo" onSeleccionar={(url) => agregarActa(url, it.id)} />
+                  </div>
+                  {(r.facturas.some((f) => f.itemId === it.id) || r.actas.some((a) => itemIdActa(a) === it.id)) && (
+                    <div className="pl-6 space-y-1.5">
+                      {r.facturas.filter((f) => f.itemId === it.id).map(filaFactura)}
+                      {r.actas.filter((a) => itemIdActa(a) === it.id).map((a) => (
+                        <div key={a.id} className="flex items-center gap-2"><span className="text-[11px] text-slate-500 w-24">Acta de recibo</span><AdjuntarArchivo nombre={urlActa(a)} onSeleccionar={() => {}} /><button onClick={() => quitarActa(a)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button></div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
@@ -4625,40 +4751,33 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
       })()}
       <div className="grid sm:grid-cols-2 gap-3">
         <div>
-          <label className="text-xs font-medium text-slate-500 mb-1 block">{esPersonaNatural ? "Cuenta(s) de cobro del proveedor" : "Factura(s) del proveedor"} <span className="text-slate-400 font-normal">(pueden ser varias, a medida que despache)</span></label>
+          <label className="text-xs font-medium text-slate-500 mb-1 block">{esPersonaNatural ? "Cuenta(s) de cobro del proveedor" : "Factura(s) del proveedor"} <span className="text-slate-400 font-normal">{variosItems ? "(generales; las de cada ítem se adjuntan arriba, junto a su nota)" : "(pueden ser varias, a medida que despache)"}</span></label>
           <div className="space-y-1.5">
-            {r.facturas.map((f, i) => (
-              <div key={f.id} className="flex items-center gap-1.5">
-                <input value={f.numero} onChange={(e) => editarNumeroFactura(f.id, e.target.value)} placeholder="N.° (opcional)" className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-                <AdjuntarArchivo nombre={f.url} onSeleccionar={() => {}} />
-                <input defaultValue={f.comentario || ""} onBlur={(e) => { if (e.target.value !== (f.comentario || "")) editarComentarioFactura(f.id, e.target.value); }} placeholder="Comentario de la factura" className="flex-1 min-w-[120px] border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
-                <button onClick={() => quitarFactura(f.id)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
-              </div>
-            ))}
-            <AdjuntarArchivo nombre={null} label={r.facturas.length ? `Adjuntar otra ${etiquetaDoc} (parcial)` : `Adjuntar ${etiquetaDoc} del proveedor (PDF)`} carpeta="facturas" onSeleccionar={agregarFactura} />
+            {facturasGenerales.map(filaFactura)}
+            <AdjuntarArchivo nombre={null} label={facturasGenerales.length ? `Adjuntar otra ${etiquetaDoc} (parcial)` : variosItems ? `Adjuntar ${etiquetaDoc} general (varios ítems)` : `Adjuntar ${etiquetaDoc} del proveedor (PDF)`} carpeta="facturas" onSeleccionar={agregarFactura} />
           </div>
         </div>
         <div>
           <label className="text-xs font-medium text-slate-500 mb-1 block">Acta de recibo (opcional, puedes adjuntar varias)</label>
           <div className="space-y-1.5">
-            {r.actas.map((url, i) => (
-              <div key={i} className="flex items-center gap-2">
-                <AdjuntarArchivo nombre={url} onSeleccionar={() => {}} />
-                <button onClick={() => quitarActa(i)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
+            {actasGenerales.map((a, i) => (
+              <div key={a.id || i} className="flex items-center gap-2">
+                <AdjuntarArchivo nombre={urlActa(a)} onSeleccionar={() => {}} />
+                <button onClick={() => quitarActa(a)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
               </div>
             ))}
-            <AdjuntarArchivo nombre={null} label={r.actas.length ? "Adjuntar otra acta" : "Adjuntar acta de recibo (PDF/foto)"} carpeta="actas-trabajo" onSeleccionar={agregarActa} />
+            <AdjuntarArchivo nombre={null} label={actasGenerales.length ? "Adjuntar otra acta" : variosItems ? "Adjuntar acta general (varios ítems)" : "Adjuntar acta de recibo (PDF/foto)"} carpeta="actas-trabajo" onSeleccionar={agregarActa} />
           </div>
           <label htmlFor={`variaciones-${solicitud.id}`} className="text-xs font-medium text-slate-500 mt-3 mb-1 block">{`En caso de variaciones en la ${solicitud.tipo === "servicio" ? "OT/OS" : "OC"} inicial, favor registrar aquí los detalles:`}</label>
           <textarea id={`variaciones-${solicitud.id}`} value={r.variacionesOT || ""} onChange={(e) => setR({ ...r, variacionesOT: e.target.value })} onBlur={() => { if ((r.variacionesOT || "") !== (solicitud.recepcion?.variacionesOT || "")) { set({ variacionesOT: r.variacionesOT || "" }); anunciarCambio({ mostrar: mostrarToast, crearNotificacion, currentUser, solicitud, texto: `Variaciones de la OT/OS de ${solicitud.folio} registradas`, para: usuarios.filter((u) => ["Compras", "Administrador"].includes(u.rol)), mensajePara: `${currentUser.nombre} registró variaciones en la OT/OS de ${solicitud.folio}: "${(r.variacionesOT || "").slice(0, 160)}"` }); } }} rows={3} placeholder="Detalla qué varió frente a la orden inicial (cantidades, alcance, fechas, valores...)" className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs bg-white" />
         </div>
       </div>
-      <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Comentarios {estado === "observaciones" ? "(describe las observaciones)" : "(opcional)"}</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
       <div className="flex gap-4">
         <label className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name={`recepcion-${solicitud.id}`} checked={estado === "satisfaccion"} onChange={() => elegir("satisfaccion")} /> Recibido a satisfacción</label>
         <label className="flex items-center gap-2 text-sm text-slate-700"><input type="radio" name={`recepcion-${solicitud.id}`} checked={estado === "observaciones"} onChange={() => elegir("observaciones")} /> Recibido con observaciones</label>
       </div>
-      {estado === "observaciones" && !r.comentario.trim() && <div className="text-[11px] text-amber-600">Describe en los comentarios cuáles fueron las observaciones.</div>}
+      <div><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><MessageSquare size={12} /> Observaciones {estado === "observaciones" ? "(describe las observaciones)" : "(opcional)"}</label><textarea value={r.comentario} onChange={(e) => set({ comentario: e.target.value })} rows={2} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none" /></div>
+      {estado === "observaciones" && !r.comentario.trim() && <div className="text-[11px] text-amber-600">Describe en las observaciones qué fue lo que pasó.</div>}
       {estado === "observaciones" && r.comentario.trim() && (
         <div className="flex items-center gap-2">
           <button onClick={enviarACompras} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Send size={13} /> Enviar a Compras</button>
@@ -5193,7 +5312,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     });
     (solicitud.recepcion?.archivos || []).forEach((path, i) => items.push({ titulo: `Recepción — soporte ${i + 1}`, path }));
     (solicitud.recepcion?.facturas || (solicitud.recepcion?.facturaUrl ? [{ numero: "", url: solicitud.recepcion.facturaUrl }] : [])).forEach((f, i) => items.push({ titulo: `Factura del proveedor${f.numero ? ` N.° ${f.numero}` : ` ${i + 1}`}`, path: f.url }));
-    (solicitud.recepcion?.actas || []).forEach((path, i) => items.push({ titulo: `Acta de recibo ${i + 1}`, path }));
+    (solicitud.recepcion?.actas || []).forEach((a, i) => items.push({ titulo: `Acta de recibo ${i + 1}`, path: urlActa(a) }));
     if (!items.length) { mostrarToast("Esta solicitud no tiene archivos adjuntos para unificar.", "alerta"); return; }
     setUnificando(true);
     try {
@@ -5512,7 +5631,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         <div className="flex items-start justify-between flex-wrap gap-3">
           {empresa?.logoUrl && <img src={empresa.logoUrl} alt={empresa.nombre} className="h-10 max-w-[100px] object-contain order-first" />}
           <div>
-            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone={solicitud.recepcion.tipoRecepcion === "observaciones" ? "amber" : "green"}>{solicitud.recepcion.tipoRecepcion === "observaciones" ? "Recibida con observaciones" : "Recibida"}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{currentUser.rol === "Administrador" && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> Eliminar solicitud</button>}</div>
+            <div className="flex items-center gap-2 flex-wrap"><h2 className="text-lg font-semibold text-slate-800">{solicitud.folio}</h2><Badge tone={solicitud.tipo === "compra" ? "blue" : "amber"}>{solicitud.tipo === "compra" ? <ShoppingCart size={12} /> : <Wrench size={12} />} {solicitud.tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}</Badge>{solicitud.prioridad && <Badge tone={solicitud.prioridad === "Alto" ? "red" : solicitud.prioridad === "Medio" ? "amber" : "slate"}>Prioridad {solicitud.prioridad}</Badge>}{["recepcion", "completada"].includes(solicitud.status) && solicitud.recepcion?.recibidoSatisfaccion && <Badge tone={solicitud.recepcion.tipoRecepcion === "observaciones" ? "amber" : "green"}>{solicitud.recepcion.tipoRecepcion === "observaciones" ? "Recibida con observaciones" : "Recibida"}</Badge>}{solicitud.status === "rechazada" && <Badge tone="red">Rechazada</Badge>}<button onClick={() => window.print()} className="text-xs bg-slate-800 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><FileText size={13} /> Exportar solicitud completa a PDF</button>{puedeBorrarSolicitud(solicitud, currentUser) && <button onClick={() => onEliminar(solicitud.id, solicitud.folio)} className="text-xs bg-rose-50 text-rose-600 border border-rose-200 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 no-print"><Trash2 size={13} /> {solicitud.tipo === "compra" ? "Borrar solicitud" : "Borrar orden"}</button>}</div>
             <div className="text-sm text-slate-500 mt-1 flex items-center gap-3 flex-wrap"><span className="flex items-center gap-1"><Building2 size={13} /> {empresa?.nombre}</span><span>Área: {area?.nombre}{departamento && ` · Depto: ${departamento.nombre}`}</span><span>Solicitante: {solicitante?.nombre}</span><span className="flex items-center gap-1"><Calendar size={13} /> Est.: {solicitud.fechaEstimada || "—"}</span><span className="flex items-center gap-1"><Clock size={13} /> {diasTranscurridos(solicitud)} día{diasTranscurridos(solicitud) === 1 ? "" : "s"} {["completada", "rechazada"].includes(solicitud.status) ? "en total" : "en curso"}</span></div>
           </div>
           <div className="text-right">
@@ -5612,6 +5731,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           const d = desgloseItem(it, solicitud.tipo === "servicio");
           const unitario = parseFloat(it.cantidad) > 0 ? d.subtotal / parseFloat(it.cantidad) : 0;
           const cotConArchivo = (it.cotizaciones || []).filter((c) => c.archivoNombre);
+          const puedeEditarFotos = currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status);
           const puedeAjustarEstimado = (currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (it.cotizaciones?.length > 0);
           const puedeEditarPrecio = (currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && !(it.cotizaciones?.length > 0);
           return (
@@ -5624,6 +5744,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
                     <div className="text-[10px] text-slate-400 mt-0.5">Compras: corrige el nombre si hace falta — se guarda en el catálogo.</div>
                   </>
                 ) : it.nombre}
+                {(it.fotos?.length > 0 || puedeEditarFotos) && <div className="mt-1.5"><FotosItem editable={puedeEditarFotos} fotos={it.fotos || []} onChange={(f) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, fotos: f } : x)) })} /></div>}
               </td>
               <td className="py-2 px-2 text-right whitespace-nowrap">
                 {puedeAjustarCantidades
@@ -7035,7 +7156,7 @@ export default function App() {
   };
 
   const eliminarSolicitud = async (id, folio) => {
-    if (currentUser.rol !== "Administrador") return;
+    if (!puedeBorrarSolicitud(solicitudes.find((x) => x.id === id), currentUser)) return;
     if (!window.confirm(`¿Eliminar por completo la solicitud ${folio}? Esta acción no se puede deshacer — se borra todo su historial, cotizaciones, firmas y evaluación.`)) return;
     const error = await eliminarSolicitudDB(id);
     if (error) { mostrarToast(`No se pudo eliminar la solicitud: ${error.message || "error desconocido"}`, "alerta"); return; }
