@@ -689,7 +689,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v21";
+const VERSION_APP = "novedades v22";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -4094,11 +4094,41 @@ function ItemPlanPago({ servicio, item, numero, totalItem, planInicial, esSugeri
   );
 }
 
+// reparte un plan único entre los ítems: cada ítem recibe su parte proporcional (misma forma y mismas fechas),
+// ajustando el último centavo para que cada ítem cuadre exacto con su propio valor
+function repartirPlanEnItem(plan, totalItem, totalGeneral) {
+  if (!plan) return plan;
+  if (plan.tipoPago === "contado") return { ...plan, pagoUnico: { ...plan.pagoUnico, valor: totalItem } };
+  const factor = totalGeneral > 0 ? totalItem / totalGeneral : 1;
+  const esc = (x) => (x && parseFloat(x.valor) > 0 ? { ...x, valor: Math.round(parseFloat(x.valor) * factor) } : x);
+  const r = { ...plan, anticipo: esc(plan.anticipo), intermedio: plan.intermedio?.activo ? esc(plan.intermedio) : plan.intermedio, final: esc(plan.final) };
+  const dif = Math.round(totalItem - totalPagado(r));
+  if (dif !== 0) {
+    if (parseFloat(r.final?.valor) > 0) r.final = { ...r.final, valor: Math.round(parseFloat(r.final.valor)) + dif };
+    else if (parseFloat(r.anticipo?.valor) > 0) r.anticipo = { ...r.anticipo, valor: Math.round(parseFloat(r.anticipo.valor)) + dif };
+  }
+  return r;
+}
+// ¿los planes de estos ítems tienen la misma forma (tipo, fechas y proporciones)? Sirve para saber si ya se manejan como un plan único
+function planesEquivalentes(lista) {
+  const conPlan = lista.filter((f) => planTieneValores(f.plan));
+  if (conPlan.length !== lista.length || !lista.length) return false;
+  const firma = (f) => {
+    const p = f.plan; const t = totalPagado(p) || 1;
+    if (p.tipoPago === "contado") return `c|${p.pagoUnico?.fecha || ""}`;
+    const part = (x) => (parseFloat(x?.valor) > 0 ? `${Math.round((parseFloat(x.valor) / t) * 100)}@${x.fecha || ""}` : "-");
+    return `e|${part(p.anticipo)}|${p.intermedio?.activo ? part(p.intermedio) : "-"}|${part(p.final)}`;
+  };
+  const f0 = firma(conPlan[0]);
+  return conPlan.every((f) => firma(f) === f0);
+}
+
 function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmados, onIrAccion, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
   const ab = useAbiertosItems(solicitud.items);
   const sinIva = solicitud.tipo === "servicio";
   const opcional = solicitud.tipo === "compra"; // en solicitudes de compra el plan no bloquea la aprobación
+  const [modoPlan, setModoPlan] = useState(null); // null = según el caso; "unico" = un solo plan para todos los ítems; "items" = uno por ítem
   const ocYaEnviada = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
   const sinPrecio = !(totalSolicitud(solicitud) > 0);
   // en órdenes de servicio el director de área solo consulta el plan de pagos (no lo edita)
@@ -4119,6 +4149,23 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmad
   const conPlan = filas.filter((f) => f.conf || planTieneValores(f.inicial));
   const todosConfirmados = opcional ? (conPlan.length > 0 && conPlan.every((f) => f.conf)) : filas.every((f) => f.conf);
   const hayAlgoPorConfirmar = filas.some((f) => !f.conf && (!opcional || planTieneValores(f.inicial)));
+  // PLAN ÚNICO: un solo plan de pagos para toda la solicitud, repartido en proporción entre los ítems. En OT/OS es lo normal;
+  // en compras es opcional. Por defecto se usa si es OT/OS (y los ítems no tienen planes distintos) o si los planes ya son iguales.
+  const varios = solicitud.items.length > 1;
+  const hayPlanDistinto = filas.some((f) => planTieneValores(f.inicial)) && !planesEquivalentes(filas.map((f) => ({ plan: f.inicial })));
+  const modoPorDefecto = varios && ((solicitud.tipo === "servicio" && !hayPlanDistinto) || (planesEquivalentes(filas.map((f) => ({ plan: f.inicial }))) && filas.some((f) => f.conf)) ) ? "unico" : "items";
+  const modo = varios ? (modoPlan || modoPorDefecto) : "items";
+  const totalGeneralPlan = filas.reduce((a, f) => a + f.totalItem, 0);
+  const todosConf = filas.every((f) => f.conf);
+  const planUnicoInicial = (() => {
+    const base = filas.find((f) => planTieneValores(f.inicial));
+    return base ? (totalGeneralPlan > 0 && base.totalItem > 0 ? repartirPlanEnItem(base.inicial, totalGeneralPlan, base.totalItem) : base.inicial) : planPagosVacio();
+  })();
+  const itemSintetico = { id: "__todos__", nombre: `Todos los ítems (${solicitud.items.length})`, cotizaciones: filas.some((f) => exigeAnticipoPago(f.it)) ? [{ anticipoObligatorio: true }] : [], cotizacionSeleccionada: 0 };
+  const guardarUnico = (plan) => onGuardarItems(solicitud.items.map((it) => ({ ...it, pagos: repartirPlanEnItem(plan, totalItemConAiu(it, sinIva), totalGeneralPlan) })));
+  const confirmarUnico = (plan) => guardarYAvisar(solicitud.items.map((it) => ({ ...it, pagos: repartirPlanEnItem(plan, totalItemConAiu(it, sinIva), totalGeneralPlan), pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } })), "Plan de pagos confirmado para todos los ítems");
+  const reabrirUnico = () => { onGuardarItems(solicitud.items.map((it) => ({ ...it, pagosConfirmados: false }))); mostrarToast("Plan de pagos reabierto para editarlo"); };
+  const puedeTocarUnico = puedeEditarRol && (!ocYaEnviada || filas.some((f) => f.descuadrado) || puedeAjustarPostOrden);
 
   const guardarItem = (itemId, pagos) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos } : it)));
   // ¿con estos ítems quedarían confirmados todos los planes? (misma regla que el aviso "Todos los ítems confirmados")
@@ -4199,9 +4246,39 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmad
           </div>
         );
       })()}
-      <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />
+      {varios && (
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className="text-[11px] text-slate-500 mr-1">Forma de programar los pagos:</span>
+          <button type="button" disabled={!puedeTocarUnico && modo !== "unico"} onClick={() => { if (modo !== "unico" && hayPlanDistinto && !window.confirm("Los ítems tienen planes de pago distintos. Al editar el plan único se reemplazarán por uno solo para todos. ¿Continuar?")) return; setModoPlan("unico"); }} className={`px-2 py-1 rounded text-[11px] font-medium border ${modo === "unico" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Un solo plan para todos los ítems</button>
+          <button type="button" onClick={() => setModoPlan("items")} className={`px-2 py-1 rounded text-[11px] font-medium border ${modo === "items" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Un plan por ítem</button>
+        </div>
+      )}
+      {modo === "unico" && (
+        <>
+          <div className="text-[11px] text-slate-500">El plan se arma una sola vez sobre el total de la solicitud ({fmt(totalGeneralPlan)}) y el sistema lo reparte en proporción entre los {solicitud.items.length} ítems.</div>
+          <ItemPlanPago
+            servicio={sinIva}
+            key={`unico-${todosConf}`}
+            abierto
+            onToggle={() => {}}
+            item={itemSintetico}
+            numero={1}
+            totalItem={totalGeneralPlan}
+            planInicial={planUnicoInicial}
+            esSugerido={false}
+            confirmado={todosConf}
+            opcional={opcional}
+            editable={puedeTocarUnico && !todosConf}
+            puedeReabrirPlan={puedeTocarUnico}
+            onGuardar={guardarUnico}
+            onConfirmar={confirmarUnico}
+            onEditarDeNuevo={reabrirUnico}
+          />
+        </>
+      )}
+      {modo !== "unico" && <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />}
       <div className="space-y-3">
-        {filas.map((f, idx) => (
+        {modo !== "unico" && filas.map((f, idx) => (
           <ItemPlanPago
             servicio={sinIva}
             key={f.it.id}
@@ -5393,6 +5470,38 @@ function accionLabel(solicitud, total) {
   }
 }
 
+// formulario corto para agregar un ítem que faltaba a una solicitud ya creada (al corregirla o mientras está en aprobación)
+function AgregarItemForm({ tipo, itemsCatalogo, onAgregar }) {
+  const vacio = { itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: tipo === "servicio" ? 0 : 19 };
+  const [abierto, setAbierto] = useState(false);
+  const [f, setF] = useState(vacio);
+  const guardar = () => {
+    if (!f.nombre.trim()) { alert("Escribe o elige el nombre del ítem."); return; }
+    if (!(parseFloat(f.cantidad) > 0)) { alert("La cantidad debe ser mayor que cero."); return; }
+    onAgregar({ id: nextId(), itemCatalogoId: f.itemCatalogoId, nombre: f.nombre.trim(), cantidad: parseFloat(f.cantidad), unidad: f.unidad, precioEstimado: f.precioEstimado, moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: f.ivaEstimado, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [], cotizacionSeleccionada: null, observacionSeleccion: "" });
+    setF(vacio); setAbierto(false);
+  };
+  if (!abierto) return <button type="button" onClick={() => setAbierto(true)} className="text-xs text-indigo-600 font-medium flex items-center gap-1 border border-dashed border-indigo-300 rounded-md px-3 py-1.5 hover:bg-indigo-50"><Plus size={13} /> Agregar un ítem que faltaba</button>;
+  return (
+    <div className="border border-indigo-200 bg-indigo-50/40 rounded-lg p-3 space-y-2">
+      <div className="text-xs font-medium text-indigo-700">Nuevo ítem</div>
+      <AutocompletarItem itemsCatalogo={itemsCatalogo} valorTexto={f.nombre} catalogoId={f.itemCatalogoId}
+        onElegir={(cat) => setF((x) => ({ ...x, itemCatalogoId: cat.id, nombre: cat.nombre, unidad: cat.unidadDefault || x.unidad }))}
+        onEscribir={(texto) => setF((x) => ({ ...x, itemCatalogoId: "", nombre: texto }))} />
+      <div className="flex gap-2 items-center flex-wrap">
+        <input type="number" min="0" step="any" placeholder="Cant." value={f.cantidad} onChange={(e) => setF({ ...f, cantidad: e.target.value })} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white" />
+        <select value={f.unidad} onChange={(e) => setF({ ...f, unidad: e.target.value })} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+        <InputMiles placeholder="Precio est." value={f.precioEstimado} onChange={(v) => setF({ ...f, precioEstimado: v })} className="w-28 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white" />
+        {tipo !== "servicio" && <select value={f.ivaEstimado} onChange={(e) => setF({ ...f, ivaEstimado: e.target.value })} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
+      </div>
+      <div className="flex gap-2">
+        <button type="button" onClick={guardar} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium">Agregar ítem</button>
+        <button type="button" onClick={() => { setF(vacio); setAbierto(false); }} className="text-xs text-slate-500 px-2">Cancelar</button>
+      </div>
+    </div>
+  );
+}
+
 function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios, proveedores, guardarProveedor, itemsCatalogo, conceptosGasto, historico, setHistorico, currentUser, onUpdate, onEliminar, onVolver, crearNotificacion: crearNotificacionBase, guardarItemCatalogo, solicitudes, onDuplicar }) {
   const [observacion, setObservacion] = useState("");
   const [prioridadSel, setPrioridadSel] = useState(solicitud.prioridad || "Medio");
@@ -5401,6 +5510,15 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   // la orden cambió después de enviada: mientras se vuelve a cotizar, Compras puede ajustar cantidades (y los precios en las cotizaciones)
   const enCambioDeOrden = ["cotizando", "comparativo"].includes(solicitud.status) && (solicitud.ocEnviada?.historialOrdenes || []).some((o) => o.estadoOrden === "cambiada");
   const puedeAjustarCantidades = enCambioDeOrden && puedeGestionarCotizaciones(currentUser);
+  // el solicitante (o quien puede reabrir) puede agregar o quitar ítems mientras la solicitud está en aprobación / corrección
+  const puedeAgregarItems = (currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status);
+  const agregarItemSol = (nuevo) => { patch({ items: [...solicitud.items, nuevo] }); mostrarToast(`Ítem agregado: ${nuevo.nombre}`); };
+  const quitarItemSol = (it) => {
+    if (solicitud.items.length <= 1) { alert("La solicitud necesita al menos un ítem."); return; }
+    if (!window.confirm(`¿Quitar el ítem «${it.nombre}» de la solicitud?`)) return;
+    patch({ items: solicitud.items.filter((x) => x.id !== it.id) });
+    mostrarToast("Ítem quitado");
+  };
   const registrarCambio = (texto, tipo) => ({ ...solicitud.ocEnviada, cambiosLog: [...(solicitud.ocEnviada?.cambiosLog || []), { id: nextId(), tipo, fecha: ahoraISO(), usuario: currentUser.nombre, texto }] });
   const cambiarCantidadItem = (it, idx, valor) => {
     const nueva = parseFloat(String(valor).replace(",", "."));
@@ -6010,6 +6128,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
                 ) : <span className="text-slate-300 text-xs">Sin archivo</span>}
               </td>
               <td className="py-2 pl-2 text-right">
+                {puedeAgregarItems && solicitud.items.length > 1 && <button type="button" onClick={() => quitarItemSol(it)} title="Quitar este ítem" className="text-slate-300 hover:text-rose-500 p-1"><Trash2 size={14} /></button>}
                 {desactualizado && (
                   <button
                     onClick={() => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, nombre: cat.nombre, unidad: cat.unidadDefault } : x)) })}
@@ -6025,6 +6144,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           })}</tbody>
         </table>
         </div>
+        {puedeAgregarItems && <div className="mt-2"><AgregarItemForm tipo={solicitud.tipo} itemsCatalogo={itemsCatalogo} onAgregar={agregarItemSol} /></div>}
       </SeccionColapsable>
 
       {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
