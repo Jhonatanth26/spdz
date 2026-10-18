@@ -702,7 +702,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v24";
+const VERSION_APP = "novedades v25";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -2783,7 +2783,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   // una cotización con datos lleva SIEMPRE su documento (PDF o foto)
   // si algún ítem seleccionado queda con esta como única cotización, hay que explicar por qué (igual que en la cotización por ítem)
   const requiereComentario = seleccionados.some((id) => ((items.find((i) => i.id === id)?.cotizaciones || []).length === 0));
-  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre && (!requiereComentario || !!comentario.trim());
+  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre;
 
   const aplicar = async () => {
     if (!listo) return;
@@ -2895,7 +2895,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
       )}
 
       <div className={requiereComentario ? "bg-amber-50 border border-amber-200 rounded-lg p-2.5" : ""}>
-        <label className={`text-[11px] font-medium block ${requiereComentario ? "text-amber-700" : "text-slate-500"}`}>Comentario de la cotización {requiereComentario ? "(obligatorio: es la única cotización de algunos ítems — explica por qué solo se cotizó con este proveedor)" : "(opcional)"}</label>
+        <label className={`text-[11px] font-medium block ${requiereComentario ? "text-amber-700" : "text-slate-500"}`}>Comentario de la cotización {requiereComentario ? "(opcional ahora: si algún ítem se queda con esta como única cotización, antes de continuar habrá que explicar por qué; si luego agregas otra cotización, no hace falta)" : "(opcional)"}</label>
         <textarea value={comentario} onChange={(e) => setComentario(e.target.value)} rows={2} placeholder="Ej. proveedor único en la zona, marca exclusiva, urgencia..." className="w-full mt-1 border border-slate-200 rounded-md px-2 py-1.5 text-xs resize-none bg-white" />
       </div>
 
@@ -2908,7 +2908,6 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
             !(proveedorId || proveedorNombre.trim()) && "el proveedor",
             seleccionados.some((id) => !(parseFloat(precios[id]) > 0)) && "el precio de uno o más ítems seleccionados",
             !archivoNombre && "el archivo de la cotización (PDF o foto) — es obligatorio",
-            requiereComentario && !comentario.trim() && "el comentario de la cotización",
           ].filter(Boolean).join(", ")}.
         </div>
       )}
