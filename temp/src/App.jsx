@@ -702,7 +702,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v23";
+const VERSION_APP = "novedades v24";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -3429,7 +3429,21 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
   };
   const cambiarMoneda = (i, moneda) => { update(i, "moneda", moneda); if (moneda !== "COP") actualizarTasaAutomatica(i, moneda); };
   const addCot = () => cots.length < 3 && setCots([...cots, { id: idCotizacion(), proveedorId: "", proveedorNombre: "", unidadCotizada: item.unidad, factorConversion: 1, precioUnitario: item.precioEstimado || "", precioFinal: "", moneda: item.moneda || "COP", tasaCambio: item.tasaCambio || 1, descuentoTipo: "porcentaje", descuentoValor: "", diasEntrega: "", condicionesScore: 5, ivaPct: sinIva ? 0 : (item.ivaEstimado ?? 19), aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, pagos: null, archivoNombre: "" }]);
-  const removeCot = (i) => setCots(cots.filter((_, idx) => idx !== i));
+  const removeCot = (i) => {
+    const c = cots[i];
+    const nombre = c.proveedorId ? "" : (c.proveedorNombre || "");
+    if (c.precioUnitario && !window.confirm(`¿Eliminar esta cotización${nombre ? ` de ${nombre}` : ""}?`)) return;
+    setCots(cots.filter((_, idx) => idx !== i));
+  };
+  // si desde afuera se agregó una cotización a este ítem (p. ej. con «Cotización general») mientras el formulario estaba abierto,
+  // se suma aquí; si no, el formulario quedaría con una copia vieja y podría borrar la nueva al guardar
+  const idsExternos = (item.cotizaciones || []).map((c) => c.id).filter(Boolean).join("|");
+  useEffect(() => {
+    const idsLocales = new Set(cots.map((c) => c.id));
+    const faltan = (item.cotizaciones || []).filter((c) => c.id && !idsLocales.has(c.id));
+    if (faltan.length) setCots((prev) => [...prev, ...faltan.map(migrarPrecioFinal)].slice(0, 3));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsExternos]);
   // AIU vigente de una cotización: el que está guardado en la solicitud (se edita en el panel de AIU), no la copia local
   const aiuDe = (c) => {
     const previas = item.cotizaciones || [];
@@ -3546,7 +3560,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               )}
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Días entrega</label>
-                <div className="flex gap-1"><input type="number" value={c.diasEntrega} onChange={(e) => update(i, "diasEntrega", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" />{cots.length > 1 && <button onClick={() => removeCot(i)} className="text-slate-400 hover:text-rose-500 shrink-0"><Trash2 size={13} /></button>}</div>
+                <div className="flex gap-1"><input type="number" value={c.diasEntrega} onChange={(e) => update(i, "diasEntrega", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs" /><button type="button" onClick={() => removeCot(i)} title="Eliminar esta cotización" className="text-slate-400 hover:text-rose-500 shrink-0"><Trash2 size={13} /></button></div>
               </div>
             </div>
 
