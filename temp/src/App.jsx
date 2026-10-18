@@ -702,7 +702,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v25";
+const VERSION_APP = "novedades v27";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -2774,6 +2774,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   const [precios, setPrecios] = useState(() => Object.fromEntries(items.map((i) => [i.id, parseFloat(i.precioEstimado) > 0 ? String(i.precioEstimado) : ""])));
   const [aiuGen, setAiuGen] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "" }); // OT/OS: un solo AIU para toda la cotización
   const [comentario, setComentario] = useState("");
+  const [pagosGen, setPagosGen] = useState(null); // plan de pagos general de esta cotización (se reparte entre los ítems)
   const [guardando, setGuardando] = useState(false);
 
   const toggleItem = (id) => setSeleccionados((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -2784,6 +2785,18 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   // si algún ítem seleccionado queda con esta como única cotización, hay que explicar por qué (igual que en la cotización por ítem)
   const requiereComentario = seleccionados.some((id) => ((items.find((i) => i.id === id)?.cotizaciones || []).length === 0));
   const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre;
+
+  // total de cada ítem con esta cotización (costo directo + IVA, o + AIU en OT/OS) y total de todos los seleccionados
+  const totalDeItem = (it) => {
+    const c = { precioUnitario: parseFloat(precios[it.id]) || 0, moneda, tasaCambio, descuentoTipo: "porcentaje", descuentoValor: "", ivaPct: servicio ? 0 : 19, unidadCotizada: it.unidad, factorConversion: 1 };
+    const d = desgloseCotizacion(c, it.cantidad);
+    if (!servicio) return d.total;
+    const pc = (v) => (parseFloat(v) || 0) / 100;
+    const util = d.subtotal * pc(aiuGen.utilidadPct);
+    return d.subtotal + d.subtotal * pc(aiuGen.administracionPct) + util + d.subtotal * pc(aiuGen.imprevistosPct) + util * 0.19;
+  };
+  const itemsSel = items.filter((it) => seleccionados.includes(it.id));
+  const totalGeneralCot = itemsSel.reduce((a, it) => a + totalDeItem(it), 0);
 
   const aplicar = async () => {
     if (!listo) return;
@@ -2811,8 +2824,14 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
     };
     const preciosLimpios = {};
     seleccionados.forEach((id) => { preciosLimpios[id] = precios[id]; });
+    // plan de pagos general: cada ítem recibe su parte proporcional (misma forma y fechas), cuadrada con su propio total
+    let pagosPorItem = null;
+    if (planTieneValores(pagosGen) && totalGeneralCot > 0) {
+      pagosPorItem = {};
+      itemsSel.forEach((it) => { pagosPorItem[it.id] = repartirPlanEnItem(pagosGen, totalDeItem(it), totalGeneralCot); });
+    }
     setGuardando(false);
-    onAplicar(preciosLimpios, base);
+    onAplicar(preciosLimpios, base, pagosPorItem);
   };
 
   return (
@@ -2892,6 +2911,10 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
             ))}
           </div>
         </div>
+      )}
+
+      {totalGeneralCot > 0 && (
+        <PlanPagoCotizacion servicio={servicio} sinPagoUnico={false} pagos={pagosGen} total={Math.round(totalGeneralCot)} onChange={setPagosGen} etiqueta={`+ Definir el plan de pagos general de esta cotización (todos los ítems: ${fmt(totalGeneralCot)})`} titulo="Plan de pagos general — se reparte entre los ítems" />
       )}
 
       <div className={requiereComentario ? "bg-amber-50 border border-amber-200 rounded-lg p-2.5" : ""}>
@@ -2993,11 +3016,11 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const seSalDelPresupuesto = areaSel?.presupuesto > 0 && totalGeneral.total > disponibleArea;
   // aplica una misma cotización (proveedor + archivo) a varios ítems seleccionados de una sola vez,
   // cada uno con su propio precio dentro del mismo documento
-  const aplicarCotizacionGeneral = (precios, cotizacionBase) => {
+  const aplicarCotizacionGeneral = (precios, cotizacionBase, pagosPorItem) => {
     setItems((prev) => prev.map((i) => {
       if (!(i.id in precios)) return i;
       if (i.cotizaciones.length >= 3) return i;
-      return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
+      return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), pagos: pagosPorItem?.[i.id] || null, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
     }));
     setMostrarCotGeneral(false);
   };
@@ -4283,7 +4306,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmad
   };
 
   return (
-    <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos" descripcion={opcional ? "En las solicitudes de compra el plan de pagos es opcional: no bloquea la aprobación." : undefined} acciones={todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : (puedeEditarRol && !ocYaEnviada && hayAlgoPorConfirmar && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>)} abierto={abierto} onToggle={onToggle}>
+    <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos" descripcion={opcional ? "En las solicitudes de compra el plan de pagos es opcional: no bloquea la aprobación." : undefined} acciones={todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : (puedeEditarRol && !ocYaEnviada && hayAlgoPorConfirmar && modo !== "unico" && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>)} abierto={abierto} onToggle={onToggle}>
       {ocYaEnviada && (puedeAjustarPostOrden
         ? <div className="text-[11px] text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2">La orden ya fue generada, pero tienes permiso para ajustar las fechas y los montos finales de pago (factura parcial, cambio de fecha, etc.).</div>
         : <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">🔒 La orden ya fue generada — las condiciones de pago quedaron fijas. Dirección Financiera o Contabilidad pueden ajustarlas si es necesario.</div>)}
@@ -4301,7 +4324,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmad
           if (!opcional && !c.hayPlan && !f.conf) lista.push("todavía no tiene plan de pagos");
           return { f, idx, lista };
         }).filter((x) => x.lista.length);
-        if (!problemas.length || !puedeEditarRol) return null; // quien solo mira (p. ej. el director) no necesita este aviso
+        if (!problemas.length || !puedeEditarRol || modo === "unico") return null; // en plan único el aviso lo da el propio plan; quien solo mira (p. ej. el director) no necesita este aviso
         return (
           <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-1.5">
             <div className="text-xs font-semibold text-amber-800 flex items-center gap-1.5"><AlertTriangle size={14} /> {problemas.length === 1 ? "1 ítem necesita atención" : `${problemas.length} ítems necesitan atención`} antes de confirmar</div>
@@ -5910,11 +5933,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   };
   const [mostrarCotGeneralCompras, setMostrarCotGeneralCompras] = useState(false);
   // aplica una misma cotización (proveedor + archivo) a varios ítems a la vez, cada uno con su propio precio
-  const aplicarCotizacionGeneralCompras = (precios, cotizacionBase) => {
+  const aplicarCotizacionGeneralCompras = (precios, cotizacionBase, pagosPorItem) => {
     patch({
       items: solicitud.items.map((i) => {
         if (!(i.id in precios) || i.cotizaciones.length >= 3) return i;
-        return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
+        return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), pagos: pagosPorItem?.[i.id] || null, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
       }),
     });
     setMostrarCotGeneralCompras(false);
