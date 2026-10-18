@@ -552,7 +552,20 @@ function siguientePasoPlanes(solicitud, currentUser) {
   }
 }
 // tramos de pago de los ítems con plan confirmado (marcando de qué ítem viene cada uno cuando hay varios)
+// OT/OS con un plan único (los ítems confirmados tienen la misma forma de pago): se muestra UN solo valor por tramo, sin repetirlo por ítem
+function unirPlanesPago(planes) {
+  const v = (x) => parseFloat(x?.valor) || 0;
+  const p0 = planes[0];
+  const todos = (k) => planes.every((p) => !!p[k]?.pagado);
+  if (p0.tipoPago === "contado") return { ...p0, pagoUnico: { ...p0.pagoUnico, valor: planes.reduce((a, p) => a + v(p.pagoUnico), 0), pagado: todos("pagoUnico") } };
+  const suma = (k) => planes.reduce((a, p) => a + v(p[k]), 0);
+  return { ...p0, anticipo: { ...p0.anticipo, valor: suma("anticipo") || "", pagado: todos("anticipo") }, intermedio: { ...p0.intermedio, valor: p0.intermedio?.activo ? suma("intermedio") : p0.intermedio?.valor, pagado: todos("intermedio") }, final: { ...p0.final, valor: suma("final") || "", pagado: todos("final") } };
+}
 function tramosDePagoSolicitud(s) {
+  const confirmados = s.items.filter((it) => planConfirmadoItem(s, it));
+  if (s.tipo === "servicio" && confirmados.length > 1 && confirmados.length === s.items.length && planesEquivalentes(confirmados.map((it) => ({ plan: planOficialItem(s, it) })))) {
+    return tramosDePago(unirPlanesPago(confirmados.map((it) => planOficialItem(s, it))));
+  }
   return s.items.flatMap((it) => (planConfirmadoItem(s, it) ? tramosDePago(planOficialItem(s, it)).map((t) => ({ ...t, itemNombre: s.items.length > 1 ? it.nombre : undefined })) : []));
 }
 // filas para el calendario y el dashboard: un pago por cada tramo de los planes confirmados; lo que no tiene
@@ -689,7 +702,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v22";
+const VERSION_APP = "novedades v23";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -2748,7 +2761,7 @@ function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir
 // una sola cotización (mismo proveedor, mismo archivo) que cubre varios ítems a la vez —
 // cada ítem seleccionado puede tener su propio precio dentro del mismo documento.
 // Útil cuando un proveedor cotiza varios ítems juntos en un solo PDF.
-function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar, onCerrar }) {
+function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar, onCerrar, servicio }) {
   const [seleccionados, setSeleccionados] = useState(items.map((i) => i.id)); // por defecto: todos (modo "cotización general")
   const [proveedorId, setProveedorId] = useState("");
   const [proveedorNombre, setProveedorNombre] = useState("");
@@ -2757,7 +2770,10 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   const [archivoNombre, setArchivoNombre] = useState(null);
   const [moneda, setMoneda] = useState("COP");
   const [tasaCambio, setTasaCambio] = useState(1);
-  const [precios, setPrecios] = useState({});
+  // por defecto cada ítem trae su cantidad y el valor unitario que estimó el solicitante (se corrige según el documento)
+  const [precios, setPrecios] = useState(() => Object.fromEntries(items.map((i) => [i.id, parseFloat(i.precioEstimado) > 0 ? String(i.precioEstimado) : ""])));
+  const [aiuGen, setAiuGen] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "" }); // OT/OS: un solo AIU para toda la cotización
+  const [comentario, setComentario] = useState("");
   const [guardando, setGuardando] = useState(false);
 
   const toggleItem = (id) => setSeleccionados((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
@@ -2765,7 +2781,9 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   const alternarTodos = () => setSeleccionados(todosSeleccionados ? [] : items.map((i) => i.id));
 
   // una cotización con datos lleva SIEMPRE su documento (PDF o foto)
-  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre;
+  // si algún ítem seleccionado queda con esta como única cotización, hay que explicar por qué (igual que en la cotización por ítem)
+  const requiereComentario = seleccionados.some((id) => ((items.find((i) => i.id === id)?.cotizaciones || []).length === 0));
+  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre && (!requiereComentario || !!comentario.trim());
 
   const aplicar = async () => {
     if (!listo) return;
@@ -2786,8 +2804,10 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
       moneda, tasaCambio,
       descuentoTipo: "porcentaje", descuentoValor: "",
       diasEntrega: "", condicionesScore: 5,
-      ivaPct: 19,
+      ivaPct: servicio ? 0 : 19,
       archivoNombre,
+      aiu: servicio ? { ...aiuGen } : { administracionPct: "", utilidadPct: "", imprevistosPct: "" },
+      ...(comentario.trim() ? { justificacionUnico: comentario.trim() } : {}),
     };
     const preciosLimpios = {};
     seleccionados.forEach((id) => { preciosLimpios[id] = precios[id]; });
@@ -2845,17 +2865,39 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
 
       {seleccionados.length > 0 && (
         <div>
-          <label className="text-[11px] text-slate-500 block mb-1">Precio por ítem (según lo que dice el documento)</label>
+          <label className="text-[11px] text-slate-500 block mb-1">Cantidad, valor unitario y valor total por ítem (vienen del pedido; corrígelos según lo que dice el documento)</label>
           <div className="space-y-1">
+            <div className="flex items-center gap-2 text-[10px] text-slate-400"><span className="flex-1">Ítem</span><span className="w-20 text-right">Cantidad</span><span className="w-32 text-right">Valor unitario</span><span className="w-32 text-right">Valor total</span></div>
             {items.filter((it) => seleccionados.includes(it.id)).map((it, idx) => (
               <div key={it.id} className="flex items-center gap-2">
                 <span className="text-xs text-slate-600 flex-1 truncate">{items.findIndex((x) => x.id === it.id) + 1}. {it.nombre || "(sin nombre)"}</span>
-                <InputMiles placeholder="Precio" value={precios[it.id] || ""} onChange={(v) => setPrecios((prev) => ({ ...prev, [it.id]: v }))} className="w-32 border border-slate-200 rounded-md px-2 py-1 text-xs" />
+                <span className="w-20 text-right text-xs text-slate-600 whitespace-nowrap">{it.cantidad} {it.unidad}</span>
+                <InputMiles placeholder="Valor unitario" value={precios[it.id] || ""} onChange={(v) => setPrecios((prev) => ({ ...prev, [it.id]: v }))} className="w-32 border border-slate-200 rounded-md px-2 py-1 text-xs" />
+                <span className="w-32 text-right text-xs font-medium text-slate-700 whitespace-nowrap">{parseFloat(precios[it.id]) > 0 ? fmt((parseFloat(it.cantidad) || 0) * parseFloat(precios[it.id])) : "—"}</span>
               </div>
             ))}
           </div>
         </div>
       )}
+
+      {servicio && (
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">AIU general — un solo porcentaje para todos los ítems de esta cotización</label>
+          <div className="grid grid-cols-3 gap-2 max-w-md">
+            {[["administracionPct", "Admón. %"], ["utilidadPct", "Utilidad %"], ["imprevistosPct", "Imprevistos %"]].map(([k, et]) => (
+              <div key={k} className="flex flex-col gap-0.5">
+                <span className="text-[10px] text-slate-400">{et}</span>
+                <input type="number" min="0" max="100" step="0.1" value={aiuGen[k]} onChange={(e) => setAiuGen({ ...aiuGen, [k]: pctValido(e.target.value) })} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className={requiereComentario ? "bg-amber-50 border border-amber-200 rounded-lg p-2.5" : ""}>
+        <label className={`text-[11px] font-medium block ${requiereComentario ? "text-amber-700" : "text-slate-500"}`}>Comentario de la cotización {requiereComentario ? "(obligatorio: es la única cotización de algunos ítems — explica por qué solo se cotizó con este proveedor)" : "(opcional)"}</label>
+        <textarea value={comentario} onChange={(e) => setComentario(e.target.value)} rows={2} placeholder="Ej. proveedor único en la zona, marca exclusiva, urgencia..." className="w-full mt-1 border border-slate-200 rounded-md px-2 py-1.5 text-xs resize-none bg-white" />
+      </div>
 
       <button onClick={aplicar} disabled={!listo || guardando} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-40">{guardando ? "Aplicando..." : `Aplicar a ${seleccionados.length} ítem(s)`}</button>
       {!listo && !guardando && (
@@ -2866,6 +2908,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
             !(proveedorId || proveedorNombre.trim()) && "el proveedor",
             seleccionados.some((id) => !(parseFloat(precios[id]) > 0)) && "el precio de uno o más ítems seleccionados",
             !archivoNombre && "el archivo de la cotización (PDF o foto) — es obligatorio",
+            requiereComentario && !comentario.trim() && "el comentario de la cotización",
           ].filter(Boolean).join(", ")}.
         </div>
       )}
@@ -3072,8 +3115,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">Dirección a cargo</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
         <div className="md:col-span-2 xl:col-span-8"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><SelectorBuscable opciones={opcionesConcepto} value={conceptoGastoId} onChange={setConceptoGastoId} placeholder="Buscar por grupo, código, cuenta o centro de costo…" /></div>
         <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
-        <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea ref={(el) => { if (el) autoResize({ target: el }); }} value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
-        <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea ref={(el) => { if (el) autoResize({ target: el }); }} value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
+        <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea ref={(el) => { if (el) autoResize({ target: el }); }} value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
+        <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea ref={(el) => { if (el) autoResize({ target: el }); }} value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
       </div>
 
       <div className="mb-2 flex items-center justify-between flex-wrap gap-2">
@@ -3085,7 +3128,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       </div>
 
       {mostrarCotGeneral && (
-        <CotizacionGeneralForm items={items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneral} onCerrar={() => setMostrarCotGeneral(false)} />
+        <CotizacionGeneralForm servicio={tipo === "servicio"} items={items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneral} onCerrar={() => setMostrarCotGeneral(false)} />
       )}
 
       <div className="space-y-2 mb-5">
@@ -3492,7 +3535,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                 <select value={c.moneda || "COP"} onChange={(e) => cambiarMoneda(i, e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
               </div>
               <div className="flex flex-col gap-0.5">
-                <label className="text-[10px] text-slate-400">Precio inicial</label>
+                <label className="text-[10px] text-slate-400">Valor unitario (precio inicial)</label>
                 <InputMiles value={c.precioUnitario} onChange={(v) => update(i, "precioUnitario", v)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
               </div>
               {!sinIva && (
@@ -3557,6 +3600,10 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
                 ) : (
                   <input type="number" value={c.descuentoValor} onChange={(e) => update(i, "descuentoValor", e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
                 )}
+              </div>
+              <div className="flex flex-col gap-0.5">
+                <label className="text-[10px] text-slate-400">Cantidad</label>
+                <div className="border border-slate-200 bg-slate-50 rounded-md px-2 py-1.5 text-xs text-slate-700 font-medium whitespace-nowrap">{item.cantidad} {item.unidad}</div>
               </div>
               <div className="col-span-2 flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Valor después de descuento</label>
@@ -3806,6 +3853,15 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [], abie
   const guardarRef = useRef(onGuardarItems); guardarRef.current = onGuardarItems;
   const nombreProv = (c) => proveedores.find((pv) => pv.id === c.proveedorId)?.nombre || c.proveedorNombre || "Proveedor";
   // guarda el AIU de UNA cotización de UN ítem, partiendo de lo último que hay guardado
+  // cotización GENERAL: el mismo proveedor y el mismo documento cubren varios ítems → el AIU se define una sola vez para todos
+  const claveGeneral = (c) => (c.archivoNombre ? `${c.proveedorId || (c.proveedorNombre || "").trim().toLowerCase()}|${c.archivoNombre}` : null);
+  const gruposGenerales = (() => {
+    const m = {};
+    solicitud.items.forEach((it) => (it.cotizaciones || []).forEach((c, ci) => { const k = claveGeneral(c); if (!k) return; (m[k] = m[k] || []).push({ it, c, ci }); }));
+    return Object.entries(m).filter(([, l]) => new Set(l.map((x) => x.it.id)).size > 1).map(([k, l]) => ({ k, miembros: l }));
+  })();
+  const esGeneral = (c) => gruposGenerales.some((g) => g.k === claveGeneral(c));
+  const guardarAiuGeneral = (k, aiu) => guardarRef.current?.(itemsRef.current.map((it) => ({ ...it, cotizaciones: (it.cotizaciones || []).map((c) => (claveGeneral(c) === k ? { ...c, aiu } : c)) })));
   const guardarAiu = (itemId, cotIdx, aiu) => guardarRef.current?.(itemsRef.current.map((it) => (it.id === itemId ? { ...it, cotizaciones: it.cotizaciones.map((c, i) => (i === cotIdx ? { ...c, aiu } : c)) } : it)));
 
   return (
@@ -3814,6 +3870,25 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [], abie
         {editable ? " Escribe los porcentajes de cada proveedor directamente en la tabla: se guardan solos." : ""}
       </>} resumen={<span>Total {fmt(d.total)}</span>} abierto={abierto} onToggle={onToggle}>
       <div className="space-y-3">
+        {gruposGenerales.map((g) => {
+          const subtotalGrupo = g.miembros.reduce((a, { it, ci }) => a + (calcularScores(it.cotizaciones, it.cantidad, true, it.aiu)[ci]?.subtotal || 0), 0);
+          const primera = g.miembros[0].c;
+          const itemsDelGrupo = [...new Set(g.miembros.map((x) => solicitud.items.findIndex((i) => i.id === x.it.id) + 1))].sort((a, b) => a - b);
+          return (
+            <div key={g.k} className="border border-indigo-200 bg-indigo-50/40 rounded-lg p-3">
+              <div className="text-xs font-medium text-indigo-700 mb-1">AIU general — cotización de {nombreProv(primera)} que cubre los ítems {itemsDelGrupo.join(", ")}</div>
+              <div className="text-[11px] text-slate-500 mb-2">Es un solo AIU para todos esos ítems: lo que escribas aquí se aplica a cada uno.</div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="text-slate-400 border-b border-slate-200"><tr><th className="text-left py-1 px-2">Proveedor</th><th className="text-right py-1 px-2">Costo directo</th><th className="text-right py-1 px-2">Admón. %</th><th className="text-right py-1 px-2">Utilidad %</th><th className="text-right py-1 px-2">Imprevistos %</th><th className="text-right py-1 px-2">Total con AIU</th><th className="py-1 px-2"></th></tr></thead>
+                  <tbody>
+                    <AiuFilaProveedor key={g.k} nombre={nombreProv(primera)} subtotal={subtotalGrupo} aiuGuardado={primera.aiu} aiuItem={null} usaDelItem={false} aplicada={false} eligio={false} editable={editable} onCommit={(aiu) => guardarAiuGeneral(g.k, aiu)} />
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          );
+        })}
         <ControlExpandirTodo n={solicitud.items.length} onTodos={ab.todos} />
         {solicitud.items.map((it, idx) => {
           const cots = it.cotizaciones || [];
@@ -3844,14 +3919,14 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [], abie
                       {cots.map((c, i) => (
                         <AiuFilaProveedor
                           key={c.id || i}
-                          nombre={nombreProv(c)}
+                          nombre={nombreProv(c) + (esGeneral(c) ? " · AIU general" : "")}
                           subtotal={scored[i].subtotal}
                           aiuGuardado={c.aiu}
                           aiuItem={it.aiu}
                           usaDelItem={!tieneAiuValores(c.aiu) && tieneAiuValores(it.aiu)}
                           aplicada={i === idxActiva}
                           eligio={eligio}
-                          editable={editable}
+                          editable={editable && !esGeneral(c)}
                           onCommit={(aiu) => guardarAiu(it.id, i, aiu)}
                         />
                       ))}
@@ -4195,7 +4270,7 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmad
   };
 
   return (
-    <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos por ítem" descripcion={opcional ? "En las solicitudes de compra el plan de pagos es opcional: no bloquea la aprobación." : undefined} acciones={todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : (puedeEditarRol && !ocYaEnviada && hayAlgoPorConfirmar && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>)} abierto={abierto} onToggle={onToggle}>
+    <SeccionColapsable icono={CalendarClock} titulo="Plan de pagos" descripcion={opcional ? "En las solicitudes de compra el plan de pagos es opcional: no bloquea la aprobación." : undefined} acciones={todosConfirmados ? <Badge tone="green">Todos los ítems confirmados</Badge> : (puedeEditarRol && !ocYaEnviada && hayAlgoPorConfirmar && <button onClick={confirmarTodos} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium">Confirmar todos los ítems</button>)} abierto={abierto} onToggle={onToggle}>
       {ocYaEnviada && (puedeAjustarPostOrden
         ? <div className="text-[11px] text-indigo-600 bg-indigo-50 border border-indigo-200 rounded-md px-3 py-2">La orden ya fue generada, pero tienes permiso para ajustar las fechas y los montos finales de pago (factura parcial, cambio de fecha, etc.).</div>
         : <div className="text-[11px] text-slate-400 bg-slate-50 border border-slate-200 rounded-md px-3 py-2">🔒 La orden ya fue generada — las condiciones de pago quedaron fijas. Dirección Financiera o Contabilidad pueden ajustarlas si es necesario.</div>)}
@@ -4399,15 +4474,17 @@ function OcEnviadaPanel({ solicitud, proveedores, empresa, currentUser, onGuarda
         const util = d.subtotal * pct(aiu.utilidadPct) / 100;
         const imprev = d.subtotal * pct(aiu.imprevistosPct) / 100;
         const ivaUtil = util * 0.19;
-        return { nombre: it.nombre, cantidad: it.cantidad, unidad: it.unidad, valorUnitario: cant > 0 ? d.subtotal / cant : 0, total: d.subtotal, aiuPct: { a: pct(aiu.administracionPct), u: pct(aiu.utilidadPct), i: pct(aiu.imprevistosPct) }, admin, util, imprev, ivaUtil, totalItem: d.subtotal + admin + util + imprev + ivaUtil };
+        return { numero: solicitud.items.findIndex((x) => x.id === it.id) + 1, nombre: it.nombre, cantidad: it.cantidad, unidad: it.unidad, valorUnitario: cant > 0 ? d.subtotal / cant : 0, total: d.subtotal, aiuPct: { a: pct(aiu.administracionPct), u: pct(aiu.utilidadPct), i: pct(aiu.imprevistosPct) }, admin, util, imprev, ivaUtil, totalItem: d.subtotal + admin + util + imprev + ivaUtil };
       });
       const suma = (k) => itemsParaPdf.reduce((acc, x) => acc + x[k], 0);
       const totales = { costoDirecto: suma("total"), administracion: suma("admin"), utilidad: suma("util"), imprevistos: suma("imprev"), ivaUtilidad: suma("ivaUtil"), total: suma("totalItem") };
       const planesPago = baseItems.map((it) => ({ numero: solicitud.items.findIndex((x) => x.id === it.id) + 1, nombre: it.nombre, pagos: planEfectivoItem(solicitud, it, it.cotizaciones?.[idxCotizacionActiva(it, true)]) })).filter((pl) => planTieneValores(pl.pagos));
+      // OT/OS con plan único: en la orden sale un solo valor por tramo, no uno por ítem
+      const planesPagoFinal = planesPago.length > 1 && planesEquivalentes(planesPago.map((pl) => ({ plan: pl.pagos }))) ? [{ numero: 0, nombre: "", pagos: unirPlanesPago(planesPago.map((pl) => pl.pagos)) }] : planesPago;
       // logo de la empresa (público en Storage): si no se puede descargar, la orden se genera igual, sin logo
       let logoBytes = null;
       if (empresa?.logoUrl) { try { const rl = await fetch(empresa.logoUrl); if (rl.ok) logoBytes = new Uint8Array(await rl.arrayBuffer()); } catch { /* sin logo */ } }
-      const bytes = await generarOrdenServicioPDF({ logoBytes, solicitud, empresa, proveedor: buscarProveedorDeOrden(orden, proveedores), proveedorNombre: orden.proveedorNombre, area: area?.nombre, solicitanteNombre: solicitante?.nombre, items: itemsParaPdf, planesPago, ...totales });
+      const bytes = await generarOrdenServicioPDF({ logoBytes, solicitud, empresa, proveedor: buscarProveedorDeOrden(orden, proveedores), proveedorNombre: orden.proveedorNombre, area: area?.nombre, solicitanteNombre: solicitante?.nombre, items: itemsParaPdf, planesPago: planesPagoFinal, ...totales });
       const ruta = await subirBytes(bytes, `Orden_Servicio_${solicitud.folio}_${orden.proveedorNombre.replace(/[^a-zA-Z0-9]/g, "_")}.pdf`, "ordenes-originales");
       if (ruta) { actualizarOrden(idx, { archivoOriginalUrl: ruta, archivoFirmadoUrl: "", fecha: "", usuario: "", cargadaPor: currentUser.nombre, cargadaEn: ahoraISO() }); avisarOrdenCargada(orden.proveedorNombre); }
       else alert("No se pudo generar el documento. Intenta de nuevo.");
@@ -4959,6 +5036,12 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
     </div>
   );
   const variosItems = (solicitud.items || []).length > 1;
+  // OT/OS: se puede recibir con UNA sola factura y/o UNA sola acta para todos los ítems; si se marca, lo que va por ítem se oculta
+  const esServ = solicitud.tipo === "servicio";
+  const facturaUnica = esServ && variosItems && !!r.facturaUnica;
+  const actaUnica = esServ && variosItems && !!r.actaUnica;
+  const ocultasFact = facturaUnica ? r.facturas.filter((f) => f.itemId).length : 0;
+  const ocultasActa = actaUnica ? r.actas.filter((a) => itemIdActa(a)).length : 0;
   const facturasGenerales = variosItems ? r.facturas.filter((f) => !f.itemId) : r.facturas;
   const actasGenerales = variosItems ? r.actas.filter((a) => !itemIdActa(a)) : r.actas;
   // estadoRecepcion: null (pendiente) | "satisfaccion" | "observaciones" — cualquiera de las dos últimas cuenta
@@ -5017,13 +5100,13 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
                     <label className="flex items-center gap-2 text-slate-700 min-w-[200px]"><input type="checkbox" checked={!!rec[it.id]?.recibido} onChange={(e) => marcar(it, e.target.checked)} /> {i + 1}. {it.nombre} <span className="text-slate-400">({it.cantidad} {it.unidad})</span></label>
                     {rec[it.id]?.recibido && <span className="text-emerald-600">✓ {rec[it.id].fecha}</span>}
                     <input defaultValue={rec[it.id]?.nota || ""} onBlur={(e) => { if (e.target.value !== (rec[it.id]?.nota || "")) nota(it, e.target.value); }} placeholder="Nota (opcional)" className="flex-1 min-w-[140px] border border-slate-200 rounded-md px-2 py-1 text-xs" />
-                    <AdjuntarArchivo small nombre={null} label={`+ ${esPersonaNatural ? "Cuenta de cobro" : "Factura"}`} carpeta="facturas" onSeleccionar={(url) => agregarFactura(url, it.id)} />
-                    <AdjuntarArchivo small nombre={null} label="+ Acta de recibo" carpeta="actas-trabajo" onSeleccionar={(url) => agregarActa(url, it.id)} />
+                    {!facturaUnica && <AdjuntarArchivo small nombre={null} label={`+ ${esPersonaNatural ? "Cuenta de cobro" : "Factura"}`} carpeta="facturas" onSeleccionar={(url) => agregarFactura(url, it.id)} />}
+                    {!actaUnica && <AdjuntarArchivo small nombre={null} label="+ Acta de recibo" carpeta="actas-trabajo" onSeleccionar={(url) => agregarActa(url, it.id)} />}
                   </div>
-                  {(r.facturas.some((f) => f.itemId === it.id) || r.actas.some((a) => itemIdActa(a) === it.id)) && (
+                  {((!facturaUnica && r.facturas.some((f) => f.itemId === it.id)) || (!actaUnica && r.actas.some((a) => itemIdActa(a) === it.id))) && (
                     <div className="pl-6 space-y-1.5">
-                      {r.facturas.filter((f) => f.itemId === it.id).map(filaFactura)}
-                      {r.actas.filter((a) => itemIdActa(a) === it.id).map((a) => (
+                      {!facturaUnica && r.facturas.filter((f) => f.itemId === it.id).map(filaFactura)}
+                      {!actaUnica && r.actas.filter((a) => itemIdActa(a) === it.id).map((a) => (
                         <div key={a.id} className="flex items-center gap-2"><span className="text-[11px] text-slate-500 w-24">Acta de recibo</span><AdjuntarArchivo nombre={urlActa(a)} onSeleccionar={() => {}} /><button onClick={() => quitarActa(a)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button></div>
                       ))}
                     </div>
@@ -5036,14 +5119,22 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
       })()}
       <div className="grid sm:grid-cols-2 gap-3">
         <div>
-          <label className="text-xs font-medium text-slate-500 mb-1 block">{esPersonaNatural ? "Cuenta(s) de cobro del proveedor" : "Factura(s) del proveedor"} <span className="text-slate-400 font-normal">{variosItems ? "(generales; las de cada ítem se adjuntan arriba, junto a su nota)" : "(pueden ser varias, a medida que despache)"}</span></label>
+          {esServ && variosItems && (
+            <label className="flex items-center gap-2 text-xs text-slate-700 mb-1.5 cursor-pointer"><input type="checkbox" checked={facturaUnica} onChange={(e) => set({ facturaUnica: e.target.checked })} /> {esPersonaNatural ? "Una sola cuenta de cobro para todos los ítems" : "Una sola factura para todos los ítems"}</label>
+          )}
+          <label className="text-xs font-medium text-slate-500 mb-1 block">{esPersonaNatural ? "Cuenta(s) de cobro del proveedor" : "Factura(s) del proveedor"} <span className="text-slate-400 font-normal">{facturaUnica ? "(única, para todos los ítems)" : variosItems ? "(generales; las de cada ítem se adjuntan arriba, junto a su nota)" : "(pueden ser varias, a medida que despache)"}</span></label>
           <div className="space-y-1.5">
             {facturasGenerales.map(filaFactura)}
             <AdjuntarArchivo nombre={null} label={facturasGenerales.length ? `Adjuntar otra ${etiquetaDoc} (parcial)` : variosItems ? `Adjuntar ${etiquetaDoc} general (varios ítems)` : `Adjuntar ${etiquetaDoc} del proveedor (PDF)`} carpeta="facturas" onSeleccionar={agregarFactura} />
           </div>
         </div>
         <div>
-          <label className="text-xs font-medium text-slate-500 mb-1 block">Acta de recibo (opcional, puedes adjuntar varias)</label>
+          {esServ && variosItems && (
+            <label className="flex items-center gap-2 text-xs text-slate-700 mb-1.5 cursor-pointer"><input type="checkbox" checked={actaUnica} onChange={(e) => set({ actaUnica: e.target.checked })} /> Una sola acta para todos los ítems</label>
+          )}
+          {ocultasFact > 0 && <div className="text-[10px] text-amber-600 mb-1">Hay {ocultasFact} {etiquetaDoc}(s) cargadas por ítem que no se muestran mientras esté marcada «una sola {etiquetaDoc}».</div>}
+          {ocultasActa > 0 && <div className="text-[10px] text-amber-600 mb-1">Hay {ocultasActa} acta(s) cargadas por ítem que no se muestran mientras esté marcada «una sola acta».</div>}
+          <label className="text-xs font-medium text-slate-500 mb-1 block">{actaUnica ? "Acta de recibo única (para todos los ítems)" : "Acta de recibo (opcional, puedes adjuntar varias)"}</label>
           <div className="space-y-1.5">
             {actasGenerales.map((a, i) => (
               <div key={a.id || i} className="flex items-center gap-2">
@@ -5167,6 +5258,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
         <table className="w-full text-xs">
           <thead className="text-slate-400 border-b border-slate-200">
             <tr>
+              <th className="text-left py-1 px-2 w-8">#</th>
               <th className="text-left py-1 px-2">Ítem</th>
               <th className="text-right py-1 px-2">Cant.</th>
               <th className="text-left py-1 px-2">Proveedor</th>
@@ -5186,6 +5278,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
             const aiuTexto = `A${aiuUsado.administracionPct || 0} U${aiuUsado.utilidadPct || 0} I${aiuUsado.imprevistosPct || 0}`;
             return (
               <tr key={it.id} className="border-t border-slate-100">
+                <td className="py-1.5 px-2 text-slate-500">{solicitud.items.findIndex((x) => x.id === it.id) + 1}</td>
                 <td className="py-1.5 px-2">{it.nombre}</td>
                 <td className="py-1.5 px-2 text-right whitespace-nowrap">{it.cantidad} {it.unidad}</td>
                 <td className="py-1.5 px-2">{cot ? nombreProv(cot) : "—"}</td>
@@ -5990,8 +6083,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           </div>
         </div>
         <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div><div className="text-xs font-medium text-slate-400 flex items-center gap-1 mb-1"><Target size={12} /> Objetivo</div><div className="text-sm text-slate-600">{solicitud.objetivo}</div></div>
-          <div><div className="text-xs font-medium text-slate-400 flex items-center gap-1 mb-1"><ClipboardList size={12} /> Justificación</div><div className="text-sm text-slate-600">{solicitud.justificacion}</div></div>
+          <div><div className="text-xs font-medium text-slate-400 flex items-center gap-1 mb-1"><Target size={12} /> Objetivo</div><div className="text-sm text-slate-700 border border-slate-300 rounded-lg px-3 py-2 bg-white whitespace-pre-wrap">{solicitud.objetivo}</div></div>
+          <div><div className="text-xs font-medium text-slate-400 flex items-center gap-1 mb-1"><ClipboardList size={12} /> Justificación</div><div className="text-sm text-slate-700 border border-slate-300 rounded-lg px-3 py-2 bg-white whitespace-pre-wrap">{solicitud.justificacion}</div></div>
         </div>
         <div className="mt-4 pt-4 border-t border-slate-100"><Stepper status={solicitud.status} /></div>
       </div>
@@ -6175,7 +6268,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       {!comparativoBloqueado && ["cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status) && (solicitud.tipo !== "compra" || solicitud.revisionCompras.estado === "aprobada") && puedeGestionarCotizaciones(currentUser) && (
         <SeccionColapsable titulo="Cargar hasta 3 cotizaciones por ítem (Compras)" descripcion={<>Si por error solo guardaste 1 o 2, puedes seguir agregando hasta 3 aquí mismo, incluso después de generar el cuadro comparativo — hasta que se cree la orden.</>} acciones={<button onClick={() => setMostrarCotGeneralCompras(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>} abierto={fases.abierto("cotizaciones")} onToggle={() => fases.alternar("cotizaciones")}>
           {mostrarCotGeneralCompras && (
-            <CotizacionGeneralForm items={solicitud.items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneralCompras} onCerrar={() => setMostrarCotGeneralCompras(false)} />
+            <CotizacionGeneralForm servicio={solicitud.tipo === "servicio"} items={solicitud.items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneralCompras} onCerrar={() => setMostrarCotGeneralCompras(false)} />
           )}
           <ControlExpandirTodo n={solicitud.items.length} onTodos={abCot.todos} />
           {solicitud.items.map((it, idxIt) => (

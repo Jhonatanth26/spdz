@@ -130,7 +130,7 @@ export async function generarOrdenServicioPDF({
   }
 
   // ---------- ÍTEMS (con su AIU por ítem) ----------
-  const cw = [172, 44, 76, 78, 66, ANCHO - 172 - 44 - 76 - 78 - 66]
+  const cw = [24, 150, 42, 74, 76, 64, ANCHO - 24 - 150 - 42 - 74 - 76 - 64]
   const xs = cw.reduce((acc, w, i) => { acc.push(i === 0 ? M : acc[i - 1] + cw[i - 1]); return acc }, [])
   const derecha = (i) => xs[i] + cw[i] - 5
   let topSegmento = null
@@ -143,32 +143,34 @@ export async function generarOrdenServicioPDF({
   const encabezadoTabla = () => {
     topSegmento = y
     pagina.drawRectangle({ x: M, y: y - 22, width: ANCHO, height: 22, color: FONDO })
-    txt('DESCRIPCIÓN', xs[0] + 5, y - 14, 7.5, { bold: true })
-    txtCentro('CANT.', xs[1] + cw[1] / 2, y - 14, 7.5, { bold: true })
-    txtDer('VR. UNITARIO', derecha(2), y - 14, 7.5, { bold: true })
-    txtDer('COSTO DIRECTO', derecha(3), y - 14, 7.5, { bold: true })
-    txtCentro('AIU (A/U/I %)', xs[4] + cw[4] / 2, y - 14, 7.5, { bold: true })
-    txtDer('TOTAL ÍTEM', derecha(5), y - 14, 7.5, { bold: true })
+    txtCentro('#', xs[0] + cw[0] / 2, y - 14, 7.5, { bold: true })
+    txt('DESCRIPCIÓN', xs[1] + 5, y - 14, 7.5, { bold: true })
+    txtCentro('CANT.', xs[2] + cw[2] / 2, y - 14, 7.5, { bold: true })
+    txtDer('VR. UNITARIO', derecha(3), y - 14, 7.5, { bold: true })
+    txtDer('COSTO DIRECTO', derecha(4), y - 14, 7.5, { bold: true })
+    txtCentro('AIU (A/U/I %)', xs[5] + cw[5] / 2, y - 14, 7.5, { bold: true })
+    txtDer('TOTAL ÍTEM', derecha(6), y - 14, 7.5, { bold: true })
     y -= 22
     linea(M, y, M + ANCHO, y, 0.8)
   }
   hay(22 + 40)
   encabezadoTabla()
   const aiuTexto = (a) => [a?.a, a?.u, a?.i].map((v) => (parseFloat(v) ? String(parseFloat(v)) : '0')).join(' / ')
-  items.forEach((it) => {
-    const lDesc = envolver(it.nombre, cw[0] - 10, 8.5, false)
+  items.forEach((it, nItem) => {
+    const lDesc = envolver(it.nombre, cw[1] - 10, 8.5, false)
     const alto = Math.max(30, lDesc.length * 10.5 + 10)
     if (y - alto < PIE) { cerrarSegmento(); nueva(); encabezadoTabla() }
     const base = y - 6 - 8.5 * 0.9
-    lDesc.forEach((l, k) => txt(l, xs[0] + 5, base - k * 10.5, 8.5))
-    txtCentro(String(it.cantidad ?? ''), xs[1] + cw[1] / 2, base, 8.5)
-    txtCentro(it.unidad || '', xs[1] + cw[1] / 2, base - 10.5, 6.5, { color: GRIS })
-    txtDer(fmt(it.valorUnitario), derecha(2), base, 8.5)
-    txtDer(fmt(it.total), derecha(3), base, 8.5)
-    txtCentro(aiuTexto(it.aiuPct), xs[4] + cw[4] / 2, base, 8)
+    txtCentro(String(it.numero ?? nItem + 1), xs[0] + cw[0] / 2, base, 8.5)
+    lDesc.forEach((l, k) => txt(l, xs[1] + 5, base - k * 10.5, 8.5))
+    txtCentro(String(it.cantidad ?? ''), xs[2] + cw[2] / 2, base, 8.5)
+    txtCentro(it.unidad || '', xs[2] + cw[2] / 2, base - 10.5, 6.5, { color: GRIS })
+    txtDer(fmt(it.valorUnitario), derecha(3), base, 8.5)
+    txtDer(fmt(it.total), derecha(4), base, 8.5)
+    txtCentro(aiuTexto(it.aiuPct), xs[5] + cw[5] / 2, base, 8)
     const valorAiu = (parseFloat(it.admin) || 0) + (parseFloat(it.util) || 0) + (parseFloat(it.imprev) || 0) + (parseFloat(it.ivaUtil) || 0)
-    txtCentro(fmt(valorAiu), xs[4] + cw[4] / 2, base - 10.5, 7, { color: GRIS })
-    txtDer(fmt(it.totalItem ?? it.total), derecha(5), base, 8.5, { bold: true })
+    txtCentro(fmt(valorAiu), xs[5] + cw[5] / 2, base - 10.5, 7, { color: GRIS })
+    txtDer(fmt(it.totalItem ?? it.total), derecha(6), base, 8.5, { bold: true })
     y -= alto
     linea(M, y, M + ANCHO, y, 0.4)
   })
