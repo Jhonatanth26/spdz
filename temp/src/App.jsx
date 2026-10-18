@@ -702,7 +702,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v27";
+const VERSION_APP = "novedades v28";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -3730,6 +3730,80 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
   );
 }
 
+// ¿hay algún proveedor que cotizó TODOS los ítems? (entonces tiene sentido el cuadro comparativo general)
+function claveProveedorCot(c) { return c.proveedorId || (c.proveedorNombre || "").trim().toLowerCase(); }
+function hayProveedorQueCubreTodos(items) {
+  if (!items.length || items.some((i) => !(i.cotizaciones || []).length)) return false;
+  const conjuntos = items.map((i) => new Set((i.cotizaciones || []).map(claveProveedorCot).filter(Boolean)));
+  return [...conjuntos[0]].some((k) => conjuntos.every((cj) => cj.has(k)));
+}
+// CUADRO COMPARATIVO GENERAL: una fila por proveedor con el total de TODOS los ítems que cotizó; al elegirlo se selecciona en todos a la vez
+function ComparativoGeneral({ items, proveedores, sinIva, ocultarAiu, soloLectura, onSeleccionarGeneral }) {
+  const conCot = items.filter((i) => (i.cotizaciones || []).length > 0);
+  const [pendiente, setPendiente] = useState(null);
+  const [obs, setObs] = useState("");
+  const nombreProv = (c) => proveedores.find((p) => p.id === c.proveedorId)?.nombre || c.proveedorNombre || "—";
+  const scoredPor = Object.fromEntries(conCot.map((it) => [it.id, calcularScores(it.cotizaciones, it.cantidad, sinIva, it.aiu)]));
+  const grupos = {};
+  conCot.forEach((it) => it.cotizaciones.forEach((c, ci) => {
+    const k = claveProveedorCot(c); if (!k) return;
+    const g = grupos[k] || (grupos[k] = { k, nombre: nombreProv(c), filas: [] });
+    if (!g.filas.some((f) => f.it.id === it.id)) g.filas.push({ it, ci, row: scoredPor[it.id][ci] });
+  }));
+  const valorFila = (f) => (sinIva ? (ocultarAiu ? f.row.subtotal : (f.row.totalConAiu ?? f.row.subtotal)) : f.row.total);
+  const lista = Object.values(grupos).map((g) => ({
+    ...g,
+    directo: g.filas.reduce((a, f) => a + (f.row.subtotal || 0), 0),
+    total: g.filas.reduce((a, f) => a + valorFila(f), 0),
+    score: g.filas.reduce((a, f) => a + f.row.score, 0) / g.filas.length,
+    cubreTodos: g.filas.length === items.length,
+    sinCotizar: items.filter((i) => !g.filas.some((f) => f.it.id === i.id)),
+    entrega: Math.max(...g.filas.map((f) => parseFloat(f.row.diasEntrega) || 0)),
+  }));
+  const candidatas = lista.filter((g) => g.cubreTodos);
+  const recomendada = (candidatas.length ? candidatas : lista).reduce((b, g) => (!b || g.score > b.score ? g : b), null);
+  const elegida = (g) => g.filas.length > 0 && g.filas.every((f) => f.it.cotizacionSeleccionada === f.ci);
+  const algunaElegida = lista.some(elegida);
+  const asignar = (g, texto) => onSeleccionarGeneral(g.filas.map((f) => ({ itemId: f.it.id, idx: f.ci })), texto);
+  const clickElegir = (g) => { if (soloLectura) return; if (recomendada && g.k === recomendada.k) { asignar(g, ""); setPendiente(null); return; } setPendiente(g.k); setObs(""); };
+  const gPend = pendiente ? lista.find((g) => g.k === pendiente) : null;
+  return (
+    <div className="border border-slate-200 rounded-lg overflow-hidden">
+      <div className="px-3 py-2 bg-slate-50 text-sm font-medium text-slate-700">Cuadro comparativo general — todos los ítems ({items.length})</div>
+      <table className="w-full text-xs">
+        <thead className="bg-white text-slate-500 border-b border-slate-100"><tr><th className="text-left px-3 py-2">Proveedor</th><th className="text-right px-3 py-2">Ítems que cotizó</th><th className="text-right px-3 py-2">{sinIva ? "Costo Directo" : "Subtotal"}</th><th className="text-right px-3 py-2">{sinIva && !ocultarAiu ? "Total c/AIU" : "Total"}</th><th className="text-right px-3 py-2">Entrega</th><th className="text-right px-3 py-2">Score</th><th className="px-3 py-2"></th></tr></thead>
+        <tbody>
+          {lista.map((g) => {
+            const sel = algunaElegida ? elegida(g) : (recomendada && g.k === recomendada.k);
+            return (
+              <tr key={g.k} className={`border-t border-slate-100 ${sel ? "bg-emerald-50/60" : ""}`}>
+                <td className="px-3 py-2 font-medium text-slate-700">{g.nombre}{recomendada && g.k === recomendada.k && <span className="ml-1.5 text-[10px] text-emerald-700">★ recomendada</span>}</td>
+                <td className="px-3 py-2 text-right">{g.filas.length} de {items.length}{g.sinCotizar.length > 0 && <div className="text-[10px] text-amber-600">sin cotizar: {g.sinCotizar.map((i) => items.findIndex((x) => x.id === i.id) + 1).join(", ")}</div>}</td>
+                <td className="px-3 py-2 text-right">{fmt(g.directo)}</td>
+                <td className="px-3 py-2 text-right font-medium">{fmt(g.total)}</td>
+                <td className="px-3 py-2 text-right">{g.entrega ? `${g.entrega} días` : "días"}</td>
+                <td className="px-3 py-2 text-right">{(g.score * 100).toFixed(0)}%</td>
+                <td className="px-3 py-2 text-right">{soloLectura ? (elegida(g) && <Badge tone="green">Seleccionada</Badge>) : (elegida(g) ? <Badge tone="green">Seleccionada</Badge> : <button type="button" onClick={() => clickElegir(g)} className="text-[11px] border border-slate-200 rounded-md px-2 py-1 hover:bg-slate-50">Elegir para todos</button>)}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      {gPend && (
+        <div className="px-3 py-2 border-t border-amber-200 bg-amber-50">
+          <div className="text-[11px] font-medium text-amber-700 mb-1">Elegiste a {gPend.nombre}, que no es la recomendada: explica por qué (una sola vez, vale para todos sus ítems)</div>
+          <textarea value={obs} onChange={(e) => setObs(e.target.value)} rows={2} className="w-full border border-amber-200 rounded-md px-2 py-1.5 text-xs resize-none bg-white" />
+          <div className="flex gap-2 mt-1.5">
+            <button type="button" disabled={!obs.trim()} onClick={() => { asignar(gPend, obs.trim()); setPendiente(null); }} className="text-xs bg-indigo-600 text-white px-3 py-1 rounded-md font-medium disabled:opacity-40">Confirmar selección</button>
+            <button type="button" onClick={() => setPendiente(null)} className="text-xs text-slate-500">Cancelar</button>
+          </div>
+        </div>
+      )}
+      <div className="px-3 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">El puntaje general es el promedio del puntaje de cada ítem. Para elegir proveedores distintos por ítem usa «Cuadro comparativo por ítems».</div>
+    </div>
+  );
+}
+
 function ComparativoTabla({ item, numero, proveedores, onSeleccionar, seleccionada, soloLectura, sinIva, tinte, ocultarAiu, abierto = true, onToggle }) {
   const scored = calcularScores(item.cotizaciones, item.cantidad, sinIva, item.aiu);
   const bestIdx = mejorCotizacionIdx(item.cotizaciones, item.cantidad, sinIva, item.aiu);
@@ -5944,11 +6018,13 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   };
   // al cambiar el proveedor de un ítem, su plan de pagos pasa a ser el que ese proveedor cotizó (pago único / por etapas / anticipo),
   // ajustado al nuevo total. Si el plan ya estaba confirmado, queda por confirmar de nuevo, porque era el de otro proveedor.
-  const seleccionarCotizacion = (itemId, idx, obs) => {
+  const seleccionarCotizaciones = (asignaciones, obs) => {
     const sinIvaSel = solicitud.tipo === "servicio";
     let planCambiado = false;
     const items = solicitud.items.map((i) => {
-      if (i.id !== itemId) return i;
+      const a = asignaciones.find((x) => x.itemId === i.id);
+      if (!a) return i;
+      const idx = a.idx;
       const nuevo = { ...i, cotizacionSeleccionada: idx, observacionSeleccion: obs };
       const cambioProveedor = idxCotizacionActiva(i, sinIvaSel) !== idx;
       const cot = i.cotizaciones?.[idx];
@@ -5962,8 +6038,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       return nuevo;
     });
     patch({ items });
-    if (planCambiado) mostrarToast("Cambió el proveedor: el plan de pagos del ítem se actualizó al de ese proveedor. Revísalo y confírmalo.");
+    if (planCambiado) mostrarToast("Cambió el proveedor: el plan de pagos se actualizó al de ese proveedor. Revísalo y confírmalo.");
   };
+  const seleccionarCotizacion = (itemId, idx, obs) => seleccionarCotizaciones([{ itemId, idx }], obs);
+  const [modoComp, setModoComp] = useState(null); // null = según el caso; "general" | "items"
   const guardarItemsRevision = (items) => patch({ items });
   const decidirRevisionCompras = (estado, obs) => {
     if (estado === "rechazada") { anunciar("Revisión rechazada — se devolvió al solicitante", [solicitante], `Tu solicitud ${solicitud.folio} fue rechazada por Compras.${obs ? ` Motivo: "${obs}"` : ""}`, "alerta"); patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: obs, fecha: hoy(), pasoOrigen: solicitud.status }, revisionCompras: { estado, observacion: obs, usuario: currentUser.nombre, fecha: hoy() }, notificaciones: notificar(`Correo simulado a ${solicitante?.nombre}: tu solicitud ${solicitud.folio} fue rechazada por Compras.`) }); return; }
@@ -6319,8 +6397,24 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {["aprobacion_jefe", "aprobacion_director", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status) && solicitud.items.some((i) => i.cotizaciones.length > 0) && (
         <SeccionColapsable icono={TrendingUp} titulo="Cuadro comparativo (sugerencia automática)" descripcion={["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) ? <>Cotizaciones que el solicitante adjuntó al crear la solicitud — Compras podrá completar y ajustar esto más adelante.</> : undefined} abierto={fases.abierto("comparativo")} onToggle={() => fases.alternar("comparativo")}>
-          <ControlExpandirTodo n={solicitud.items.filter((i) => i.cotizaciones.length > 0).length} onTodos={abComp.todos} />
-          {solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} abierto={abComp.abierto(it.id)} onToggle={() => abComp.alternar(it.id)} item={it} tinte={tinteItem(solicitud.items.findIndex((x) => x.id === it.id))} numero={solicitud.items.findIndex((x) => x.id === it.id) + 1} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} />)}
+          {(() => {
+            const puedeGeneral = solicitud.items.length > 1 && hayProveedorQueCubreTodos(solicitud.items);
+            const modo = puedeGeneral ? (modoComp || (solicitud.tipo === "servicio" ? "general" : "items")) : "items";
+            return (
+              <>
+                {puedeGeneral && (
+                  <div className="flex items-center gap-1.5 flex-wrap mb-2">
+                    <span className="text-[11px] text-slate-500 mr-1">Ver el cuadro comparativo:</span>
+                    <button type="button" onClick={() => setModoComp("general")} className={`px-2 py-1 rounded text-[11px] font-medium border ${modo === "general" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>General (todos los ítems)</button>
+                    <button type="button" onClick={() => setModoComp("items")} className={`px-2 py-1 rounded text-[11px] font-medium border ${modo === "items" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por ítems</button>
+                  </div>
+                )}
+                {modo === "general" && <ComparativoGeneral items={solicitud.items} proveedores={proveedores} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} onSeleccionarGeneral={seleccionarCotizaciones} />}
+                {modo !== "general" && <ControlExpandirTodo n={solicitud.items.filter((i) => i.cotizaciones.length > 0).length} onTodos={abComp.todos} />}
+                {modo !== "general" && solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} abierto={abComp.abierto(it.id)} onToggle={() => abComp.alternar(it.id)} item={it} tinte={tinteItem(solicitud.items.findIndex((x) => x.id === it.id))} numero={solicitud.items.findIndex((x) => x.id === it.id) + 1} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} />)}}
+              </>
+            );
+          })()}
         </SeccionColapsable>
       )}
 
