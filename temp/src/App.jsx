@@ -3979,7 +3979,7 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
 // local (para que el campo no "se coma" lo digitado mientras la solicitud se guarda) y se guarda solo, medio segundo
 // después de dejar de escribir, al salir del campo o al cerrar la pantalla. El total de la fila se recalcula al escribir.
 const CAMPOS_AIU = ["administracionPct", "utilidadPct", "imprevistosPct"];
-function AiuFilaProveedor({ nombre, subtotal, aiuGuardado, aiuItem, usaDelItem, aplicada, eligio, editable, onCommit }) {
+function AiuFilaProveedor({ nombre, subtotal, aiuGuardado, aiuItem, usaDelItem, aplicada, eligio, editable, onCommit, onReplicar }) {
   const g = aiuGuardado || {};
   const desdeGuardado = () => ({ administracionPct: g.administracionPct ?? "", utilidadPct: g.utilidadPct ?? "", imprevistosPct: g.imprevistosPct ?? "" });
   const [loc, setLoc] = useState(desdeGuardado);
@@ -4022,7 +4022,10 @@ function AiuFilaProveedor({ nombre, subtotal, aiuGuardado, aiuItem, usaDelItem, 
       {celda("administracionPct")}{celda("utilidadPct")}{celda("imprevistosPct")}
       <td className="py-1.5 px-2 text-right">{fmt(ivaUtil)}</td>
       <td className="py-1.5 px-2 text-right font-medium">{fmt(total)}</td>
-      <td className="py-1.5 px-2 text-right">{aplicada && <Badge tone="green">{eligio ? "Seleccionada" : "Recomendada"}</Badge>}</td>
+      <td className="py-1.5 px-2 text-right">
+        {aplicada && <Badge tone="green">{eligio ? "Seleccionada" : "Recomendada"}</Badge>}
+        {editable && onReplicar && aiuCompleto(loc) && <button type="button" onClick={() => { guardar(); onReplicar(loc); }} className="ml-1 text-[11px] text-indigo-600 hover:underline whitespace-nowrap">Usar en todos los ítems</button>}
+      </td>
     </tr>
   );
 }
@@ -4038,13 +4041,15 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [], abie
   const guardarRef = useRef(onGuardarItems); guardarRef.current = onGuardarItems;
   const nombreProv = (c) => proveedores.find((pv) => pv.id === c.proveedorId)?.nombre || c.proveedorNombre || "Proveedor";
   // guarda el AIU de UNA cotización de UN ítem, partiendo de lo último que hay guardado
-  // cotización GENERAL: el mismo proveedor y el mismo documento cubren varios ítems → el AIU se define una sola vez para todos
-  const claveGeneral = (c) => (c.archivoNombre ? `${c.proveedorId || (c.proveedorNombre || "").trim().toLowerCase()}|${c.archivoNombre}` : null);
+  // un proveedor que cotiza varios ítems (con una cotización general o ítem por ítem) → su AIU se define una sola vez para todos sus ítems
+  const claveGeneral = (c) => (c.proveedorId || (c.proveedorNombre || "").trim().toLowerCase() || null);
   const gruposGenerales = (() => {
     const m = {};
     solicitud.items.forEach((it) => (it.cotizaciones || []).forEach((c, ci) => { const k = claveGeneral(c); if (!k) return; (m[k] = m[k] || []).push({ it, c, ci }); }));
     return Object.entries(m).filter(([, l]) => new Set(l.map((x) => x.it.id)).size > 1).map(([k, l]) => ({ k, miembros: l }));
   })();
+  // copia el AIU de un proveedor a sus cotizaciones en todos los demás ítems (cuando cada ítem se cotizó por separado)
+  const replicarAiuProveedor = (cRef, aiu) => guardarRef.current?.(itemsRef.current.map((it) => ({ ...it, cotizaciones: (it.cotizaciones || []).map((c) => (mismoProveedor(c, cRef) && !esGeneral(c) ? { ...c, aiu } : c)) })));
   const esGeneral = (c) => gruposGenerales.some((g) => g.k === claveGeneral(c));
   const guardarAiuGeneral = (k, aiu) => guardarRef.current?.(itemsRef.current.map((it) => ({ ...it, cotizaciones: (it.cotizaciones || []).map((c) => (claveGeneral(c) === k ? { ...c, aiu } : c)) })));
   const guardarAiu = (itemId, cotIdx, aiu) => guardarRef.current?.(itemsRef.current.map((it) => (it.id === itemId ? { ...it, cotizaciones: it.cotizaciones.map((c, i) => (i === cotIdx ? { ...c, aiu } : c)) } : it)));
@@ -4061,7 +4066,7 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [], abie
           const itemsDelGrupo = [...new Set(g.miembros.map((x) => solicitud.items.findIndex((i) => i.id === x.it.id) + 1))].sort((a, b) => a - b);
           return (
             <div key={g.k} className="border border-indigo-200 bg-indigo-50/40 rounded-lg p-3">
-              <div className="text-xs font-medium text-indigo-700 mb-1">AIU general — cotización de {nombreProv(primera)} que cubre los ítems {itemsDelGrupo.join(", ")}</div>
+              <div className="text-xs font-medium text-indigo-700 mb-1">AIU general — {nombreProv(primera)}, cotiza los ítems {itemsDelGrupo.join(", ")}</div>
               <div className="text-[11px] text-slate-500 mb-2">Es un solo AIU para todos esos ítems: lo que escribas aquí se aplica a cada uno.</div>
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -4114,6 +4119,7 @@ function AiuEditor({ solicitud, onGuardarItems, editable, proveedores = [], abie
                           eligio={eligio}
                           editable={editable && !esGeneral(c)}
                           onCommit={(aiu) => guardarAiu(it.id, i, aiu)}
+                          onReplicar={solicitud.items.filter((x) => x.id !== it.id && (x.cotizaciones || []).some((o) => mismoProveedor(o, c))).length ? (aiu) => replicarAiuProveedor(c, aiu) : null}
                         />
                       ))}
                     </tbody>
