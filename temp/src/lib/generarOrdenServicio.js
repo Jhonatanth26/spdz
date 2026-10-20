@@ -58,7 +58,11 @@ export async function generarOrdenServicioPDF({
   }
   const caja = (x, yTop, w, h, o = {}) => pagina.drawRectangle({ x, y: yTop - h, width: w, height: h, borderColor: LINEA, borderWidth: o.grosor || 0.8, color: o.fondo })
   const linea = (x1, y1, x2, y2, grosor = 0.8) => pagina.drawLine({ start: { x: x1, y: y1 }, end: { x: x2, y: y2 }, thickness: grosor, color: LINEA })
-  const fmt = (v) => '$ ' + Math.round(parseFloat(v) || 0).toLocaleString('es-CO')
+  const fmt = (v) => {
+    const n = Math.round((parseFloat(v) || 0) * 100) / 100
+    const dec = Math.abs(n - Math.round(n)) > 0.001 ? 2 : 0
+    return '$ ' + n.toLocaleString('es-CO', { minimumFractionDigits: dec, maximumFractionDigits: dec })
+  }
   const dato = (v) => (v === undefined || v === null || String(v).trim() === '' ? '—' : String(v))
 
   // ---------- ENCABEZADO ----------
