@@ -5647,7 +5647,7 @@ function OrdenDocumento({ solicitud, empresa, area, departamento, solicitante, p
         <tbody>
           <tr>
             <td className="border border-slate-400 px-2 py-2 align-top w-1/2">
-              <div className="font-semibold mb-1">FORMA DE PAGO:</div>
+              <div className="font-semibold mb-1">FORMA / FECHA ESTIMADA DE PAGO:</div>
               <div className="text-slate-600">{(() => { const tr = tramosDePagoSolicitud(solicitud).filter((t) => parseFloat(t.valor) > 0); return tr.length ? tr.map((t) => `${t.tipo}${t.itemNombre ? ` (${t.itemNombre})` : ""}: ${fmt(t.valor)} — ${t.fecha || "sin fecha"}`).join(" · ") : "Sin definir"; })()}</div>
             </td>
             <td className="border border-slate-400 px-2 py-2 align-top w-1/2">
