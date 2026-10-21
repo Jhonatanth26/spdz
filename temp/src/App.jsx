@@ -6223,7 +6223,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       case "comparativo": return puedeGestionarCotizaciones(currentUser);
       case "aprobacion_financiera": return puedeAprobarFinanciera(currentUser);
       case "aprobacion_gerencia": return puedeAprobarGerencia(currentUser);
-      case "orden": case "oc_enviada": return puedeGestionarCotizaciones(currentUser) || currentUser.rol === "Solicitante";
+      case "orden": return puedeGestionarCotizaciones(currentUser); // enviar la orden al proveedor lo hace solo Compras
+      case "oc_enviada": return puedeGestionarCotizaciones(currentUser) || currentUser.rol === "Solicitante";
       case "recepcion": return puedeGestionarCotizaciones(currentUser); // el cierre final (marcar completada) lo hace Compras
       default: return true;
     }
