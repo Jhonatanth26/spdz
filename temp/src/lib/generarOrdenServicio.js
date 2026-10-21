@@ -184,7 +184,8 @@ export async function generarOrdenServicioPDF({
   // ---------- TOTALES ----------
   const hayAiu = (administracion + utilidad + imprevistos) > 0
   const filasTotales = [['SUBTOTAL (COSTO DIRECTO):', costoDirecto]]
-  if (hayAiu) filasTotales.push(['ADMINISTRACIÓN:', administracion], ['UTILIDAD:', utilidad], ['IMPREVISTOS:', imprevistos], ['IVA SOBRE LA UTILIDAD (19%):', ivaUtilidad])
+  if (hayAiu) filasTotales.push(['ADMINISTRACIÓN:', administracion], ['UTILIDAD:', utilidad], ['IMPREVISTOS:', imprevistos], [Math.abs(ivaUtilidad - utilidad * 0.19) < 1 ? 'IVA SOBRE LA UTILIDAD (19%):' : 'IVA (19%):', ivaUtilidad])
+  else if (ivaUtilidad > 0) filasTotales.push(['IVA (19%):', ivaUtilidad])
   hay(filasTotales.length * 13 + 30 + 40)
   const anchoTot = 250
   filasTotales.forEach(([et, v]) => { txt(et, M, y - 9, 9, { bold: true }); txtDer(fmt(v), M + anchoTot, y - 9, 9); y -= 13 })
