@@ -1117,7 +1117,7 @@ function FotosItem({ fotos = [], onChange, editable }) {
   );
 }
 
-function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar, plantilla, currentUser }) {
+function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar, plantilla, currentUser, onImportarVarios }) {
   const [editId, setEditId] = useState(null);
   const [form, setForm] = useState(plantilla);
   const [creando, setCreando] = useState(false);
@@ -1179,6 +1179,69 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
     URL.revokeObjectURL(url);
   };
 
+  // texto sin tildes ni mayúsculas para comparar encabezados ("CORRREO ELECTRONICO" ≈ "correo electrónico")
+  const normEnc = (t) => String(t ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+  // el encabezado puede ser el nombre técnico (empresaId), el título visible (Empresa) o un sinónimo de la columna
+  const valorDeFila = (fila, c) => {
+    const claves = [c.key, c.label, ...(c.alias || [])].map(normEnc);
+    for (const k of Object.keys(fila)) { if (claves.includes(normEnc(k))) return String(fila[k] ?? "").trim(); }
+    return "";
+  };
+  const procesarFilas = async (filasCrudas) => {
+          let importados = 0, duplicados = 0;
+          const lote = [];
+          const sinCoincidir = [];
+          // un registro idéntico a uno que ya existe (o repetido en el mismo archivo) no se vuelve a cargar
+          const firma = (o) => columnas.map((c) => String(o[c.key] ?? "").trim().toLowerCase()).join("|");
+          const existentes = new Set(datos.map(firma));
+          const nitsExistentes = new Set(datos.map((d) => String(d.nit ?? "").replace(/\D/g, "")).filter((n) => n.length > 4));
+          filasCrudas.forEach((fila) => {
+            const nueva = { id: nextId() };
+            columnas.forEach((c) => {
+              // el encabezado puede ser el nombre técnico (empresaId) o el título visible (Empresa)
+              const valorCrudo = valorDeFila(fila, c);
+              if (c.type === "select" && valorCrudo) {
+                // en un CSV es más práctico escribir el nombre (ej. "SP Dique") que el ID interno
+                const porNombre = c.options.find((o) => o.label.trim().toLowerCase() === valorCrudo.toLowerCase());
+                if (porNombre) nueva[c.key] = porNombre.value;
+                else if (c.options.some((o) => o.value === valorCrudo)) nueva[c.key] = valorCrudo;
+                else { nueva[c.key] = ""; sinCoincidir.push(`"${valorCrudo}" (${c.label})`); }
+              } else {
+                nueva[c.key] = valorCrudo;
+              }
+            });
+            if (!Object.values(nueva).some((v) => v && v !== nueva.id)) return;
+            const f = firma(nueva);
+            const nitNuevo = String(nueva.nit ?? "").replace(/\D/g, "");
+            if (existentes.has(f) || (nitNuevo.length > 4 && nitsExistentes.has(nitNuevo))) { duplicados++; return; }
+            if (nitNuevo.length > 4) nitsExistentes.add(nitNuevo);
+            existentes.add(f);
+            if (onImportarVarios) lote.push(nueva); else onGuardar(nueva);
+            importados++;
+          });
+          if (lote.length) await onImportarVarios(lote);
+          const avisoSinCoincidir = sinCoincidir.length ? ` ${sinCoincidir.length} valor(es) no coincidieron con ninguna opción y quedaron vacíos: ${[...new Set(sinCoincidir)].slice(0, 5).join(", ")}${sinCoincidir.length > 5 ? "..." : ""}.` : "";
+          const avisoDuplicados = duplicados ? ` ${duplicados} registro(s) repetido(s) se omitieron.` : "";
+          setMensajeImport(`${importados} registro(s) importado(s) correctamente.${avisoDuplicados}${avisoSinCoincidir}`);
+          setTimeout(() => setMensajeImport(""), 9000);
+  };
+
+  // Excel (.xlsx): la tabla puede empezar más abajo (título, logo…): se busca la fila de encabezados
+  const importarExcel = async (file) => {
+    try {
+      const libro = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const hoja = libro.Sheets[libro.SheetNames[0]];
+      const matriz = XLSX.utils.sheet_to_json(hoja, { header: 1, defval: "", raw: false });
+      const claves = columnas.flatMap((c) => [c.key, c.label, ...(c.alias || [])]).map(normEnc);
+      const idx = matriz.findIndex((f) => f.filter((v) => claves.includes(normEnc(v))).length >= 2);
+      if (idx < 0) { setMensajeImport("No encontré la fila de encabezados (PROVEEDOR, NIT, TELEFONO…)."); setTimeout(() => setMensajeImport(""), 6000); return; }
+      const enc = matriz[idx].map((h) => String(h ?? "").trim());
+      const filas = matriz.slice(idx + 1).map((f) => Object.fromEntries(enc.map((h, i) => [h || `col${i}`, f[i]]))).filter((o) => Object.values(o).some((v) => String(v ?? "").trim() !== ""));
+      await procesarFilas(filas);
+    } catch (e) { console.error(e); setMensajeImport("No se pudo leer el archivo Excel."); setTimeout(() => setMensajeImport(""), 4000); }
+  };
+  const importarArchivo = (file) => (/\.xlsx?$/i.test(file.name) ? importarExcel(file) : importarCSV(file));
+
   const importarCSV = (file) => {
     // el archivo se lee como bytes para decidir la codificación: los CSV guardados desde Excel en Windows
     // suelen venir en ANSI (Windows-1252) y, leídos como UTF-8, dañan las tildes y las Ñ ("NAVIDEÑOS" → "NAVIDE�OS")
@@ -1192,38 +1255,7 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
       texto = texto.replace(/^\uFEFF/, "");
       Papa.parse(texto, {
         header: true, skipEmptyLines: true, transformHeader: (h) => h.trim(),
-        complete: (res) => {
-          let importados = 0, duplicados = 0;
-          const sinCoincidir = [];
-          // un registro idéntico a uno que ya existe (o repetido en el mismo archivo) no se vuelve a cargar
-          const firma = (o) => columnas.map((c) => String(o[c.key] ?? "").trim().toLowerCase()).join("|");
-          const existentes = new Set(datos.map(firma));
-          res.data.forEach((fila) => {
-            const nueva = { id: nextId() };
-            columnas.forEach((c) => {
-              // el encabezado puede ser el nombre técnico (empresaId) o el título visible (Empresa)
-              const valorCrudo = (fila[c.key] ?? fila[c.label] ?? "").toString().trim();
-              if (c.type === "select" && valorCrudo) {
-                // en un CSV es más práctico escribir el nombre (ej. "SP Dique") que el ID interno
-                const porNombre = c.options.find((o) => o.label.trim().toLowerCase() === valorCrudo.toLowerCase());
-                if (porNombre) nueva[c.key] = porNombre.value;
-                else if (c.options.some((o) => o.value === valorCrudo)) nueva[c.key] = valorCrudo;
-                else { nueva[c.key] = ""; sinCoincidir.push(`"${valorCrudo}" (${c.label})`); }
-              } else {
-                nueva[c.key] = valorCrudo;
-              }
-            });
-            if (!Object.values(nueva).some((v) => v && v !== nueva.id)) return;
-            const f = firma(nueva);
-            if (existentes.has(f)) { duplicados++; return; }
-            existentes.add(f);
-            onGuardar(nueva); importados++;
-          });
-          const avisoSinCoincidir = sinCoincidir.length ? ` ${sinCoincidir.length} valor(es) no coincidieron con ninguna opción y quedaron vacíos: ${[...new Set(sinCoincidir)].slice(0, 5).join(", ")}${sinCoincidir.length > 5 ? "..." : ""}.` : "";
-          const avisoDuplicados = duplicados ? ` ${duplicados} registro(s) repetido(s) se omitieron.` : "";
-          setMensajeImport(`${importados} registro(s) importado(s) correctamente.${avisoDuplicados}${avisoSinCoincidir}`);
-          setTimeout(() => setMensajeImport(""), 9000);
-        },
+        complete: (res) => procesarFilas(res.data),
         error: () => { setMensajeImport("No se pudo leer el archivo CSV."); setTimeout(() => setMensajeImport(""), 4000); },
       });
     };
@@ -1239,8 +1271,8 @@ function CrudTable({ titulo, icon: Icon, columnas, datos, onGuardar, onEliminar,
             <button onClick={eliminarSeleccionados} className="text-xs text-rose-600 font-medium flex items-center gap-1 bg-rose-50 border border-rose-200 rounded-md px-2 py-1"><Trash2 size={12} /> Eliminar {seleccionados.length} seleccionado{seleccionados.length > 1 ? "s" : ""}</button>
           )}
           <button onClick={descargarPlantilla} className="text-xs text-slate-500 font-medium flex items-center gap-1"><FileText size={12} /> Plantilla CSV</button>
-          <label className="text-xs text-indigo-600 font-medium flex items-center gap-1 cursor-pointer"><UploadIcon size={12} /> Importar CSV
-            <input type="file" accept=".csv" className="hidden" onChange={(e) => e.target.files[0] && importarCSV(e.target.files[0])} />
+          <label className="text-xs text-indigo-600 font-medium flex items-center gap-1 cursor-pointer"><UploadIcon size={12} /> Importar Excel / CSV
+            <input type="file" accept=".csv,.xlsx,.xls" className="hidden" onChange={(e) => { if (e.target.files[0]) importarArchivo(e.target.files[0]); e.target.value = ""; }} />
           </label>
           {!creando && <button onClick={iniciarCreacion} className="text-xs text-indigo-600 font-medium flex items-center gap-1"><Plus size={13} /> Agregar</button>}
         </div>
@@ -2814,6 +2846,8 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   const [precios, setPrecios] = useState(() => Object.fromEntries(items.map((i) => [i.id, parseFloat(i.precioEstimado) > 0 ? String(i.precioEstimado) : ""])));
   const [aiuGen, setAiuGen] = useState({ administracionPct: "", utilidadPct: "", imprevistosPct: "" }); // OT/OS: un solo AIU para toda la cotización
   const [comentario, setComentario] = useState("");
+  const [descTipo, setDescTipo] = useState("porcentaje"); // descuento general de la cotización: en % o en $ (se reparte entre los ítems)
+  const [descValor, setDescValor] = useState("");
   const [pagosGen, setPagosGen] = useState(null); // plan de pagos general de esta cotización (se reparte entre los ítems)
   const [guardando, setGuardando] = useState(false);
 
@@ -2823,11 +2857,23 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
 
   // una cotización con datos lleva SIEMPRE su documento (PDF o foto)
   // si algún ítem seleccionado queda con esta como única cotización, hay que explicar por qué (igual que en la cotización por ítem)
-  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre;
+  // descuento general: en % es el mismo para todos los ítems; en $ se reparte proporcional al valor de cada ítem
+  const subtotalSinDesc = (it) => (parseFloat(precios[it.id]) || 0) * (parseFloat(it.cantidad) || 0);
+  const sumaSubtotales = items.filter((it) => seleccionados.includes(it.id)).reduce((a, it) => a + subtotalSinDesc(it), 0);
+  const descNum = parseFloat(descValor) || 0;
+  const descuentoDeItem = (it) => {
+    if (descNum <= 0) return { descuentoTipo: "porcentaje", descuentoValor: "" };
+    if (descTipo === "porcentaje") return { descuentoTipo: "porcentaje", descuentoValor: String(descNum) };
+    const cant = parseFloat(it.cantidad) || 0;
+    const parte = sumaSubtotales > 0 ? descNum * subtotalSinDesc(it) / sumaSubtotales : 0;
+    return { descuentoTipo: "valor", descuentoValor: cant > 0 ? String(Math.round((parte / cant) * 10000) / 10000) : "" };
+  };
+  const descuentoInvalido = descNum < 0 || (descTipo === "porcentaje" ? descNum >= 100 : descNum >= sumaSubtotales && sumaSubtotales > 0);
+  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre && !descuentoInvalido;
 
   // total de cada ítem con esta cotización (costo directo + IVA, o + AIU en OT/OS) y total de todos los seleccionados
   const totalDeItem = (it) => {
-    const c = { precioUnitario: parseFloat(precios[it.id]) || 0, moneda, tasaCambio, descuentoTipo: "porcentaje", descuentoValor: "", ivaPct: servicio ? 0 : 19, unidadCotizada: it.unidad, factorConversion: 1 };
+    const c = { precioUnitario: parseFloat(precios[it.id]) || 0, moneda, tasaCambio, ...descuentoDeItem(it), ivaPct: servicio ? 0 : 19, unidadCotizada: it.unidad, factorConversion: 1 };
     const d = desgloseCotizacion(c, it.cantidad);
     if (!servicio) return d.total;
     const pc = (v) => (parseFloat(v) || 0) / 100;
@@ -2871,7 +2917,9 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
       itemsSel.forEach((it) => { pagosPorItem[it.id] = repartirPlanEnItem(pagosGen, totalDeItem(it), totalGeneralCot); });
     }
     setGuardando(false);
-    onAplicar(preciosLimpios, base, pagosPorItem);
+    const descuentosPorItem = {};
+    itemsSel.forEach((it) => { descuentosPorItem[it.id] = descuentoDeItem(it); });
+    onAplicar(preciosLimpios, base, pagosPorItem, descuentosPorItem);
   };
 
   return (
@@ -2935,6 +2983,23 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
                 <span className="w-32 text-right text-xs font-medium text-slate-700 whitespace-nowrap">{parseFloat(precios[it.id]) > 0 ? fmt((parseFloat(it.cantidad) || 0) * parseFloat(precios[it.id])) : "—"}</span>
               </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {seleccionados.length > 0 && (
+        <div>
+          <label className="text-[11px] text-slate-500 block mb-1">Descuento general (opcional) — en % o en $; si es en $ se reparte entre los ítems según su valor</label>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select value={descTipo} onChange={(e) => { setDescTipo(e.target.value); setDescValor(""); }} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">
+              <option value="porcentaje">Desc. %</option>
+              <option value="valor">Desc. $</option>
+            </select>
+            {descTipo === "valor"
+              ? <InputMiles placeholder="Descuento en $" value={descValor} onChange={setDescValor} className="w-36 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
+              : <input type="number" min="0" max="99.99" step="any" placeholder="Descuento en %" value={descValor} onChange={(e) => setDescValor(e.target.value)} className="w-36 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />}
+            {descNum > 0 && !descuentoInvalido && sumaSubtotales > 0 && <span className="text-[11px] text-slate-500">Descuento total: <b>{fmt(descTipo === "porcentaje" ? sumaSubtotales * descNum / 100 : descNum)}</b></span>}
+            {descuentoInvalido && <span className="text-[11px] text-rose-600">El descuento no puede ser negativo ni igual o superior al valor de la cotización.</span>}
           </div>
         </div>
       )}
@@ -3056,11 +3121,11 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
   const seSalDelPresupuesto = areaSel?.presupuesto > 0 && totalGeneral.total > disponibleArea;
   // aplica una misma cotización (proveedor + archivo) a varios ítems seleccionados de una sola vez,
   // cada uno con su propio precio dentro del mismo documento
-  const aplicarCotizacionGeneral = (precios, cotizacionBase, pagosPorItem) => {
+  const aplicarCotizacionGeneral = (precios, cotizacionBase, pagosPorItem, descuentosPorItem) => {
     setItems((prev) => prev.map((i) => {
       if (!(i.id in precios)) return i;
       if (i.cotizaciones.length >= 3) return i;
-      return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), pagos: pagosPorItem?.[i.id] || null, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
+      return { ...i, cotizaciones: [...i.cotizaciones, { ...cotizacionBase, ...(descuentosPorItem?.[i.id] || {}), id: idCotizacion(), pagos: pagosPorItem?.[i.id] || null, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }] };
     }));
     setMostrarCotGeneral(false);
   };
@@ -6092,11 +6157,11 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   };
   const [mostrarCotGeneralCompras, setMostrarCotGeneralCompras] = useState(false);
   // aplica una misma cotización (proveedor + archivo) a varios ítems a la vez, cada uno con su propio precio
-  const aplicarCotizacionGeneralCompras = (precios, cotizacionBase, pagosPorItem) => {
+  const aplicarCotizacionGeneralCompras = (precios, cotizacionBase, pagosPorItem, descuentosPorItem) => {
     patch({
       items: solicitud.items.map((i) => {
         if (!(i.id in precios) || i.cotizaciones.length >= 3) return i;
-        const nuevas = [...i.cotizaciones, { ...cotizacionBase, id: idCotizacion(), pagos: pagosPorItem?.[i.id] || null, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }];
+        const nuevas = [...i.cotizaciones, { ...cotizacionBase, ...(descuentosPorItem?.[i.id] || {}), id: idCotizacion(), pagos: pagosPorItem?.[i.id] || null, precioUnitario: precios[i.id], unidadCotizada: i.unidad, factorConversion: 1 }];
         return { ...i, cotizaciones: nuevas, ...reconciliarSeleccion(i, nuevas, solicitud.tipo === "servicio") };
       }),
     });
@@ -7432,7 +7497,7 @@ function Catalogos({
   areas, guardarArea, eliminarArea, guardarAreasLote,
   departamentos, guardarDepartamento, eliminarDepartamento,
   proveedores, guardarProveedor, eliminarProveedor,
-  usuarios, guardarUsuario, eliminarUsuario, recargarUsuarios,
+  usuarios, guardarUsuario, eliminarUsuario, recargarUsuarios, importarProveedores,
   itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo,
   conceptosGasto, guardarConceptoGasto, eliminarConceptoGasto,
   permisos, togglePermiso, parametros = [], guardarParametro,
@@ -7498,19 +7563,20 @@ function Catalogos({
       )}
       {sub === "proveedores" && <CrudTable titulo="Proveedores" icon={Truck}
         columnas={[
-          { key: "nombre", label: "Razón social" },
+          { key: "nombre", label: "Razón social", alias: ["proveedor", "nombre proveedor", "razon social proveedor"] },
           { key: "tipoProveedor", label: "Tipo de proveedor", type: "select", options: [{ value: "compra", label: "Compra" }, { value: "servicio", label: "Servicio" }, { value: "trabajo", label: "Trabajo" }] },
           { key: "nit", label: "NIT" },
           { key: "ciudad", label: "Ciudad" },
           { key: "direccion", label: "Dirección" },
-          { key: "telefono", label: "Teléfono" },
+          { key: "telefono", label: "Teléfono", alias: ["telefono", "celular"] },
+          { key: "contacto", label: "Nombre de contacto", alias: ["contacto"] },
           { key: "representanteLegal", label: "Representante legal" },
-          { key: "email", label: "Correo (obligatorio)", requerido: true },
+          { key: "email", label: "Correo (obligatorio)", requerido: true, alias: ["correo electronico", "corrreo electronico", "correo", "e-mail", "email"] },
           { key: "email2", label: "Correo adicional (opcional)" },
           { key: "personaNatural", label: "Persona natural (recibe cuenta de cobro, no factura)", type: "select", options: [{ value: "no", label: "No — factura" }, { value: "si", label: "Sí — cuenta de cobro" }] },
         ]}
-        datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro}
-        plantilla={{ nombre: "", tipoProveedor: "", nit: "", ciudad: "", direccion: "", telefono: "", representanteLegal: "", email: "", email2: "", personaNatural: "no" }} />}
+        datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro} onImportarVarios={importarProveedores}
+        plantilla={{ nombre: "", tipoProveedor: "", nit: "", ciudad: "", direccion: "", telefono: "", contacto: "", representanteLegal: "", email: "", email2: "", personaNatural: "no" }} />}
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
@@ -8065,7 +8131,7 @@ export default function App() {
             areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea} guardarAreasLote={guardarAreasLote}
             departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
             proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
-            usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios}
+            usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios} importarProveedores={importarProveedores}
             itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
             permisos={permisos} togglePermiso={togglePermiso} parametros={parametros} guardarParametro={guardarParametro}
