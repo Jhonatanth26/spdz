@@ -3925,6 +3925,17 @@ function ComparativoGeneral({ items, proveedores, sinIva, ocultarAiu, soloLectur
           </div>
         </div>
       )}
+      {(() => {
+        const elegidoG = lista.find(elegida);
+        if (!elegidoG || !recomendada || elegidoG.k === recomendada.k || gPend) return null;
+        const obsG = elegidoG.filas.map((f) => f.it.observacionSeleccion).find((o) => String(o || "").trim());
+        return (
+          <div className="px-3 py-2 border-t border-amber-200 bg-amber-50 text-[11px] text-amber-700 flex items-center justify-between gap-2 flex-wrap">
+            <span>⚠ Se eligió a <b>{elegidoG.nombre}</b>, que <b>no es la recomendada por el sistema</b>. {obsG ? <>Justificación: <i>"{obsG}"</i></> : "No tiene justificación registrada."}</span>
+            {!soloLectura && !obsG && <button type="button" onClick={() => { setPendiente(elegidoG.k); setObs(""); }} className="text-indigo-600 font-medium underline">Escribir la justificación</button>}
+          </div>
+        );
+      })()}
       <div className="px-3 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">El puntaje general es el promedio del puntaje de cada ítem. Para elegir proveedores distintos por ítem usa «Cuadro comparativo por ítems».</div>
     </div>
   );
@@ -4020,6 +4031,12 @@ function ComparativoTabla({ item, numero, proveedores, onSeleccionar, selecciona
       )}
       {item.cotizaciones.length === 1 && item.cotizaciones[0].justificacionUnico && <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-slate-600 bg-slate-50">Cotización única — motivo: "{item.cotizaciones[0].justificacionUnico}"</div>}
       {item.observacionSeleccion && <div className="px-3 py-2 border-t border-slate-100 text-[11px] text-amber-700 italic bg-amber-50/50">Justificación de selección no sugerida: "{item.observacionSeleccion}"</div>}
+      {seleccionada !== null && seleccionada !== undefined && seleccionada !== bestIdx && !item.observacionSeleccion && pendienteIdx === null && (
+        <div className="px-3 py-2 border-t border-amber-200 bg-amber-50 text-[11px] text-amber-700 flex items-center justify-between gap-2 flex-wrap">
+          <span>⚠ Se eligió un proveedor que <b>no es el recomendado por el sistema</b> y no tiene justificación.</span>
+          {!soloLectura && <button type="button" onClick={() => { setPendienteIdx(seleccionada); setObsTemp(""); }} className="text-indigo-600 font-medium underline">Escribir la justificación</button>}
+        </div>
+      )}
       </div>
     </div>
   );
@@ -6025,6 +6042,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const areaPresup = areas.find((a) => a.id === solicitud.areaId);
   const comprometidoAreaDet = (solicitudes || []).filter((x) => x.areaId === solicitud.areaId && x.id !== solicitud.id && !ESTADOS_SIN_COMPROMISO.includes(x.status)).reduce((acc, x) => acc + totalSolicitud(x), 0);
   // en servicios cada cotización debe traer sus tres % de AIU: sin ellos el total (y el IVA sobre la Utilidad) quedaría mal
+  // una selección que no es la recomendada por el sistema necesita justificación (Compras la escribe al elegir)
+  const seleccionSinJustificar = solicitud.items.some((i) => (i.cotizaciones || []).length > 1 && i.cotizacionSeleccionada !== null && i.cotizacionSeleccionada !== undefined && i.cotizacionSeleccionada !== mejorCotizacionIdx(i.cotizaciones, i.cantidad, solicitud.tipo === "servicio", i.aiu) && !String(i.observacionSeleccion || "").trim());
   const aiuFaltante = solicitud.tipo === "servicio" && solicitud.items.some((i) => (i.cotizaciones || []).some((c) => !aiuCompleto(c.aiu) && !aiuCompleto(i.aiu)));
   const todasCotizadas = !aiuFaltante && solicitud.items.every((i) => i.cotizaciones.length > 0 && i.cotizaciones.every((c) => c.proveedorId || (c.proveedorNombre || "").trim()) && !cotizacionUnicaSinJustificar(i) && !itemConPrecioInvalido(i));
   const comparativoBloqueado = ["orden", "oc_enviada", "recepcion", "completada"].includes(solicitud.status);
@@ -6217,6 +6236,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     if (s === "aprobacion_director") { patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); anunciar(`✓ Solicitud ${solicitud.folio} aprobada como director de área — enviada a Compras para cotizar`, [...usuariosDeRol("Compras"), solicitante], `La solicitud ${solicitud.folio} ya está aprobada por ${currentUser.nombre} y lista para cotizar.`); }
     else if (s === "cotizando" && todasCotizadas) { patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") }); anunciar(`Cuadro comparativo de ${solicitud.folio} generado — pasa a aprobación`, [solicitante], `El cuadro comparativo de ${solicitud.folio} fue generado por ${currentUser.nombre}.`); }
     else if (s === "comparativo") {
+      if (seleccionSinJustificar) { mostrarToast("Falta la justificación de elegir un proveedor que no es el recomendado por el sistema (en el cuadro comparativo).", "alerta", { duracion: 7000 }); return; }
       const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
       patch({ status: next, historialEstados: empujarHistorial(next), notificaciones: notificar(`Correo simulado: solicitud ${solicitud.folio} avanza a ${PASOS.find((p) => p.key === next)?.label}.`) });
       if (next === "aprobacion_financiera") anunciar(`Solicitud ${solicitud.folio} enviada a Dirección Financiera para su aprobación`, usuariosDeRol("Dirección Financiera"), `La solicitud ${solicitud.folio} está pendiente de tu aprobación.`);
@@ -6684,7 +6704,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           <div className="flex gap-2 justify-end">
             <button onClick={() => setRechazando((v) => !v)} className="px-4 py-2 rounded-lg text-sm text-rose-600 border border-rose-200 flex items-center gap-1"><XCircle size={15} /> Rechazar</button>
             {solicitud.status === "cotizando" && aiuFaltante && <span className="text-[11px] text-amber-700 mr-2">Faltan los % de AIU (Admón., Utilidad, Imprevistos) de alguna cotización — digítalos en «Costos indirectos (AIU)». Si es 0, escribe 0.</span>}
-            <button id="boton-accion-principal" onClick={avanzar} disabled={guardandoSol || (solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !planesTodosConfirmados(solicitud)) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
+            <button id="boton-accion-principal" onClick={avanzar} disabled={guardandoSol || (solicitud.status === "cotizando" && !todasCotizadas) || (solicitud.status === "comparativo" && seleccionSinJustificar) || (solicitud.status === "aprobacion_financiera" && solicitud.tipo === "servicio" && !planesTodosConfirmados(solicitud)) || (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) || (solicitud.status === "recepcion" && (!solicitud.recepcion.recibidoSatisfaccion || !evaluacionCompleta(solicitud)))} className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white font-medium disabled:opacity-40 flex items-center gap-1">{accionLabel(solicitud, total)} <ChevronRight size={15} /></button>
           </div>
         </div>
       )}
