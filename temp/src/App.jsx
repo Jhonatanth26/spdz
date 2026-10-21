@@ -3525,7 +3525,7 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo, sinPagoU
     );
   }
   if (!abierto) {
-    return <button type="button" onClick={() => setAbierto(true)} className="text-[11px] text-indigo-600 underline">{etiqueta || "+ Definir plan de pagos propio de este proveedor (opcional)"}</button>;
+    return <button type="button" onClick={() => setAbierto(true)} className="text-sm font-medium text-indigo-600 underline">{etiqueta || "+ Definir plan de pagos propio de este proveedor (opcional)"}</button>;
   }
 
   return (
@@ -4483,6 +4483,22 @@ function PagosPorItem({ solicitud, currentUser, onGuardarItems, onTodosConfirmad
   const confirmarUnico = (plan) => guardarYAvisar(solicitud.items.map((it) => ({ ...it, pagos: repartirPlanEnItem(plan, totalItemConAiu(it, sinIva), totalGeneralPlan), pagosConfirmados: true, pagosConfirmadosPor: { nombre: currentUser.nombre, rol: currentUser.rol } })), "Plan de pagos confirmado para todos los ítems");
   const reabrirUnico = () => { onGuardarItems(solicitud.items.map((it) => ({ ...it, pagosConfirmados: false }))); mostrarToast("Plan de pagos reabierto para editarlo"); };
   const puedeTocarUnico = puedeEditarRol && (!ocYaEnviada || filas.some((f) => f.descuadrado) || puedeAjustarPostOrden);
+  // en plan único todos los ítems comparten las mismas fechas: si alguno quedó con el valor pero sin la fecha
+  // (p. ej. el plan se definió antes de poner la fecha), se completa con la de los demás para que ninguno quede sin fecha
+  const huboCompletarFechas = useRef("");
+  useEffect(() => {
+    if (modo !== "unico" || todosConf || !puedeTocarUnico) return;
+    const conValores = filas.filter((f) => planTieneValores(f.inicial));
+    const sinFecha = conValores.filter((f) => planFaltaFechaPlan(f.inicial));
+    const conFecha = conValores.find((f) => !planFaltaFechaPlan(f.inicial));
+    if (!sinFecha.length || !conFecha || conValores.length !== filas.length) return;
+    const clave = JSON.stringify(filas.map((f) => [f.it.id, f.inicial?.pagoUnico?.fecha, f.inicial?.anticipo?.fecha, f.inicial?.final?.fecha]));
+    if (huboCompletarFechas.current === clave) return;
+    huboCompletarFechas.current = clave;
+    const plan = repartirPlanEnItem(conFecha.inicial, totalGeneralPlan, conFecha.totalItem);
+    onGuardarItems(solicitud.items.map((it) => ({ ...it, pagos: repartirPlanEnItem(plan, totalItemConAiu(it, sinIva), totalGeneralPlan) })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  });
 
   const guardarItem = (itemId, pagos) => onGuardarItems(solicitud.items.map((it) => (it.id === itemId ? { ...it, pagos } : it)));
   // ¿con estos ítems quedarían confirmados todos los planes? (misma regla que el aviso "Todos los ítems confirmados")
@@ -7756,20 +7772,21 @@ export default function App() {
   const cargandoCatalogos = cargandoAreas || cargandoDepartamentos || cargandoEmpresas || cargandoProveedores || cargandoUsuarios || cargandoItems || cargandoConceptos;
 
   const [historico, setHistorico] = useState(HISTORICO_INIT);
-  const { solicitudes: solicitudesDB, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB } = useSolicitudes();
+  const { solicitudes: solicitudesDB, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB, recargar: recargarSolicitudes } = useSolicitudes();
   const solicitudes = useMemo(() => solicitudesDB.map(normalizarEstadoLegado), [solicitudesDB]);
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   // los proveedores los crean y editan varios usuarios: se vuelven a leer al abrir una solicitud, al volver a la pestaña y cada 30 s,
   // para que lo que guardó otro usuario (nombre, NIT…) aparezca sin tener que recargar la página
-  useEffect(() => { recargarProveedores(); }, [abierta, recargarProveedores]);
+  useEffect(() => { recargarProveedores(); recargarSolicitudes(); }, [abierta, recargarProveedores, recargarSolicitudes]);
   useEffect(() => {
-    const alVolver = () => { if (document.visibilityState === "visible") recargarProveedores(); };
+    // lo mismo con las solicitudes: cada usuario veía el paso en que estaba la solicitud al cargar la página, no el que le dejó otro usuario
+    const alVolver = () => { if (document.visibilityState === "visible") { recargarProveedores(); recargarSolicitudes(); } };
     document.addEventListener("visibilitychange", alVolver);
     window.addEventListener("focus", alVolver);
     const t = setInterval(alVolver, 30000);
     return () => { document.removeEventListener("visibilitychange", alVolver); window.removeEventListener("focus", alVolver); clearInterval(t); };
-  }, [recargarProveedores]);
+  }, [recargarProveedores, recargarSolicitudes]);
   const [creando, setCreando] = useState(false);
   const [duplicando, setDuplicando] = useState(null); // solicitud que se está duplicando (muestra la pregunta de precios)
   const [borrador, setBorrador] = useState(null); // datos de la copia que se está armando en «Nueva solicitud»
