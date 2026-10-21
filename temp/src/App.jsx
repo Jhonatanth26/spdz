@@ -2482,6 +2482,26 @@ function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
     proveedorMonto[prov] = (proveedorMonto[prov] || 0) + desgloseCotizacion(cot, it.cantidad).total;
   }));
   const porProveedor = Object.entries(proveedorMonto).map(([nombre, monto]) => ({ nombre, monto })).sort((a, b) => b.monto - a.monto);
+  // LEAD TIME (días): desde que se crea la solicitud hasta que se envía la orden al proveedor y hasta que se completa; separado por compras y servicios
+  const dif = (a, b) => Math.max(0, (new Date(b) - new Date(a)) / 86400000);
+  const entradaEstado = (s, key) => (s.historialEstados || []).find((h) => h.status === key)?.fecha;
+  const inicioSol = (s) => s.historialEstados?.[0]?.fecha || s.fechaCreacion;
+  const ETAPAS_LEAD = ["aprobacion_director", "cotizando", "comparativo", "aprobacion_financiera", "aprobacion_gerencia", "orden", "oc_enviada", "recepcion"];
+  const prom = (arr) => (arr.length ? arr.reduce((a, x) => a + x, 0) / arr.length : null);
+  const leadTime = (tipo) => {
+    const lista = base.filter((s) => s.tipo === tipo && inicioSol(s));
+    const totales = lista.filter((s) => s.status === "completada" && entradaEstado(s, "completada")).map((s) => dif(inicioSol(s), entradaEstado(s, "completada")));
+    const aEnvio = lista.filter((s) => entradaEstado(s, "oc_enviada")).map((s) => dif(inicioSol(s), entradaEstado(s, "oc_enviada")));
+    const porEtapa = {};
+    lista.forEach((s) => {
+      const h = s.historialEstados || [];
+      h.forEach((e, i) => { if (!h[i + 1] || !ETAPAS_LEAD.includes(e.status)) return; (porEtapa[e.status] = porEtapa[e.status] || {}); porEtapa[e.status][s.id] = (porEtapa[e.status][s.id] || 0) + dif(e.fecha, h[i + 1].fecha); });
+    });
+    const etapas = Object.fromEntries(ETAPAS_LEAD.map((k) => [k, prom(Object.values(porEtapa[k] || {}))]));
+    return { total: prom(totales), nTotal: totales.length, envio: prom(aEnvio), nEnvio: aEnvio.length, etapas };
+  };
+  const leadCompra = leadTime("compra"), leadServicio = leadTime("servicio");
+  const fd = (v) => (v === null || v === undefined ? "—" : `${(Math.round(v * 10) / 10).toLocaleString("es-CO")} días`);
   const totalGeneral = base.reduce((acc, s) => acc + totalSolicitud(s), 0);
   const ivaGeneral = base.reduce((acc, s) => acc + desgloseSolicitud(s).iva, 0);
 
@@ -2526,6 +2546,24 @@ function Estadisticas({ solicitudes, areas, empresas, proveedores }) {
         <div className="bg-white rounded-xl border border-slate-200 p-5"><div className="font-medium text-slate-700 mb-3 text-sm">Comparativo entre empresas (siempre totales)</div>
           <ResponsiveContainer width="100%" height={240}><PieChart><Pie data={porEmpresaComparativo} dataKey="monto" nameKey="nombre" cx="50%" cy="50%" outerRadius={80} label={(e) => e.nombre}>{porEmpresaComparativo.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip formatter={(v) => fmt(v)} /></PieChart></ResponsiveContainer>
         </div>
+      </div>
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="px-5 py-3 border-b border-slate-100">
+          <div className="font-medium text-slate-700 text-sm">Lead time (días promedio)</div>
+          <div className="text-[11px] text-slate-400">Desde que se crea la solicitud. «Hasta enviar al proveedor» cuenta las solicitudes cuya orden ya se envió; «Hasta completar», solo las completadas.</div>
+        </div>
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50 text-slate-500 text-xs"><tr><th className="text-left px-5 py-2">Indicador</th><th className="text-right px-5 py-2">Compras</th><th className="text-right px-5 py-2">Servicios</th></tr></thead>
+          <tbody>
+            <tr className="border-t border-slate-100"><td className="px-5 py-2 text-slate-700 font-medium">Lead time hasta enviar al proveedor</td><td className="px-5 py-2 text-right">{fd(leadCompra.envio)} <span className="text-[10px] text-slate-400">({leadCompra.nEnvio})</span></td><td className="px-5 py-2 text-right">{fd(leadServicio.envio)} <span className="text-[10px] text-slate-400">({leadServicio.nEnvio})</span></td></tr>
+            <tr className="border-t border-slate-100"><td className="px-5 py-2 text-slate-700 font-medium">Lead time total, hasta completar</td><td className="px-5 py-2 text-right">{fd(leadCompra.total)} <span className="text-[10px] text-slate-400">({leadCompra.nTotal})</span></td><td className="px-5 py-2 text-right">{fd(leadServicio.total)} <span className="text-[10px] text-slate-400">({leadServicio.nTotal})</span></td></tr>
+            <tr className="border-t border-slate-200 bg-slate-50"><td colSpan={3} className="px-5 py-1.5 text-[11px] text-slate-500 font-medium">Días promedio en cada etapa</td></tr>
+            {ETAPAS_LEAD.map((k) => (
+              <tr key={k} className="border-t border-slate-100"><td className="px-5 py-1.5 text-slate-600">{PASOS.find((p) => p.key === k)?.label}</td><td className="px-5 py-1.5 text-right text-slate-600">{fd(leadCompra.etapas[k])}</td><td className="px-5 py-1.5 text-right text-slate-600">{fd(leadServicio.etapas[k])}</td></tr>
+            ))}
+          </tbody>
+        </table>
+        <div className="px-5 py-1.5 text-[10px] text-slate-400 border-t border-slate-100">Entre paréntesis, cuántas solicitudes entran en el promedio. El filtro de empresa y fechas de arriba también aplica aquí.</div>
       </div>
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="px-5 py-3 border-b border-slate-100 font-medium text-slate-700 text-sm">Monto adjudicado por proveedor</div>
