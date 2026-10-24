@@ -93,23 +93,14 @@ const HISTORICO_INIT = [
 let UMBRAL_DIRECCION = 500000;
 let UMBRAL_GERENCIA = 100000000;
 const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "metro cuadrado", "metro cúbico", "caja", "paquete", "hora", "servicio"];
-// Lista de unidades disponible en toda la app: las base + las que ya se usaron en el catálogo y en solicitudes (históricas) + las que se creen en el momento
+// Lista de unidades disponible en toda la app: las del Catálogo → Unidades de medida (las crea Compras); si ese catálogo aún está vacío, las base
 const UnidadesContext = React.createContext({ lista: UNIDADES, agregar: () => {} });
 function SelectUnidad({ value, onChange, className }) {
-  const { lista, agregar } = React.useContext(UnidadesContext);
-  const opciones = value && !lista.includes(value) ? [...lista, value] : lista;
-  const alCambiar = (e) => {
-    if (e.target.value !== "__nueva__") { onChange(e.target.value); return; }
-    const nombre = (window.prompt("Nombre de la nueva unidad (ej. metro lineal, galón, rollo):") || "").trim().replace(/\s+/g, " ").toLowerCase();
-    if (!nombre) return;
-    const existente = lista.find((u) => u.toLowerCase() === nombre);
-    if (!existente) agregar(nombre);
-    onChange(existente || nombre);
-  };
+  const { lista } = React.useContext(UnidadesContext);
+  const opciones = value && !lista.includes(value) ? [...lista, value] : lista; // una unidad ya usada en la solicitud siempre se muestra, aunque ya no esté en el catálogo
   return (
-    <select value={value} onChange={alCambiar} className={className}>
+    <select value={value} onChange={(e) => onChange(e.target.value)} className={className}>
       {opciones.map((u) => <option key={u} value={u}>{u}</option>)}
-      <option value="__nueva__">➕ Crear unidad nueva…</option>
     </select>
   );
 }
@@ -7729,7 +7720,7 @@ function Catalogos({
   departamentos, guardarDepartamento, eliminarDepartamento,
   proveedores, guardarProveedor, eliminarProveedor,
   usuarios, guardarUsuario, eliminarUsuario, recargarUsuarios, importarProveedores,
-  itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo,
+  itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo, unidadesCat = [], guardarUnidad, eliminarUnidad,
   conceptosGasto, guardarConceptoGasto, eliminarConceptoGasto,
   permisos, togglePermiso, parametros = [], guardarParametro,
 }) {
@@ -7740,6 +7731,7 @@ function Catalogos({
   const tabs = [
     { key: "empresas", label: "Empresas", icon: Building2 }, { key: "areas", label: "Áreas", icon: Layers }, { key: "departamentos", label: "Departamentos", icon: Layers }, { key: "proveedores", label: "Proveedores", icon: Truck },
     { key: "usuarios", label: "Usuarios y roles", icon: Users }, { key: "items", label: "Ítems", icon: Boxes },
+    ...(["Compras", "Administrador"].includes(currentUser?.rol) ? [{ key: "unidades", label: "Unidades de medida", icon: Boxes }] : []),
     { key: "conceptos", label: "Conceptos de gasto", icon: ClipboardList },
     { key: "motivos", label: "Motivos de rechazo", icon: XCircle },
     ...(currentUser?.rol === "Administrador" ? [{ key: "permisos", label: "Permisos", icon: Lock }, { key: "parametros", label: "Parámetros", icon: Settings }] : []),
@@ -7752,6 +7744,12 @@ function Catalogos({
     eliminarProveedor(id);
   };
   const itemEnUso = (id) => solicitudes.some((s) => s.items.some((it) => it.itemCatalogoId === id));
+  const eliminarUnidadSegura = (id) => {
+    const u = unidadesCat.find((x) => x.id === id)?.nombre;
+    const enUso = u && (itemsCatalogo.some((i) => i.unidadDefault === u) || solicitudes.some((s) => s.items.some((it) => it.unidad === u || (it.cotizaciones || []).some((c) => c.unidadCotizada === u))));
+    if (enUso) { alert(`La unidad «${u}» está en uso en el catálogo de ítems o en solicitudes y no se puede eliminar.`); return; }
+    eliminarUnidad(id);
+  };
   const eliminarItemCatalogoSeguro = (id) => {
     if (itemEnUso(id)) { alert("Este ítem está siendo usado en solicitudes existentes y no se puede eliminar."); return; }
     eliminarItemCatalogo(id);
@@ -7829,6 +7827,7 @@ function Catalogos({
         </>
       )}
       {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: unidadesLista.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
+      {sub === "unidades" && <CrudTable titulo="Unidades de medida" icon={Boxes} columnas={[{ key: "nombre", label: "Unidad (ej. metro cuadrado, galón, rollo)" }]} datos={unidadesCat} onGuardar={guardarUnidad} onEliminar={eliminarUnidadSegura} plantilla={{ nombre: "" }} />}
       {sub === "motivos" && <CrudTable titulo="Motivos de rechazo" icon={XCircle} columnas={[{ key: "nombre", label: "Motivo" }]} datos={motivosRechazoCat} onGuardar={guardarMotivoCat} onEliminar={eliminarMotivoCat} plantilla={{ nombre: "" }} />}
       {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }, { key: "centroCosto", label: "Centro de costo" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ empresaId: "", grupo: "", codigo: "", nombre: "", centroCosto: "" }} />}
       {sub === "parametros" && currentUser?.rol === "Administrador" && <ParametrosPanel parametros={parametros} guardarParametro={guardarParametro} />}
@@ -8009,17 +8008,10 @@ export default function App() {
   const [historico, setHistorico] = useState(HISTORICO_INIT);
   const { solicitudes: solicitudesDB, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB, recargar: recargarSolicitudes } = useSolicitudes();
   const solicitudes = useMemo(() => solicitudesDB.map(normalizarEstadoLegado), [solicitudesDB]);
-  // unidades: las base + las ya usadas en el catálogo y en solicitudes históricas + las creadas en esta sesión
-  const [unidadesNuevas, setUnidadesNuevas] = useState([]);
-  const unidadesLista = useMemo(() => {
-    const usadas = new Set();
-    itemsCatalogo.forEach((i) => i.unidadDefault && usadas.add(String(i.unidadDefault).trim()));
-    solicitudes.forEach((s) => (s.items || []).forEach((it) => { if (it.unidad) usadas.add(String(it.unidad).trim()); (it.cotizaciones || []).forEach((c) => c.unidadCotizada && usadas.add(String(c.unidadCotizada).trim())); }));
-    unidadesNuevas.forEach((u) => usadas.add(u));
-    const extra = [...usadas].filter((u) => u && !UNIDADES.some((b) => b.toLowerCase() === u.toLowerCase())).sort((a, b) => a.localeCompare(b, "es"));
-    return [...UNIDADES, ...extra];
-  }, [itemsCatalogo, solicitudes, unidadesNuevas]);
-  const valorUnidades = useMemo(() => ({ lista: unidadesLista, agregar: (u) => setUnidadesNuevas((p) => (p.includes(u) ? p : [...p, u])) }), [unidadesLista]);
+  // unidades de medida: las crea Compras en Catálogo → Unidades de medida. Mientras ese catálogo esté vacío (o la tabla aún no exista) se usan las base.
+  const { datos: unidadesCat, guardar: guardarUnidad, eliminar: eliminarUnidad } = useSupabaseTable('unidades_medida', { orderBy: 'nombre' });
+  const unidadesLista = useMemo(() => (unidadesCat.length ? unidadesCat.map((u) => u.nombre) : UNIDADES), [unidadesCat]);
+  const valorUnidades = useMemo(() => ({ lista: unidadesLista }), [unidadesLista]);
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   // los proveedores los crean y editan varios usuarios: se vuelven a leer al abrir una solicitud, al volver a la pestaña y cada 30 s,
@@ -8376,7 +8368,7 @@ export default function App() {
             areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea} guardarAreasLote={guardarAreasLote}
             departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
             proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
-            usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios} importarProveedores={importarProveedores}
+            usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios} importarProveedores={importarProveedores} unidadesCat={unidadesCat} guardarUnidad={guardarUnidad} eliminarUnidad={eliminarUnidad}
             itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
             conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
             permisos={permisos} togglePermiso={togglePermiso} parametros={parametros} guardarParametro={guardarParametro}
