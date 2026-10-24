@@ -92,7 +92,27 @@ const HISTORICO_INIT = [
 // los umbrales se editan en Catálogo → Parámetros (tabla "parametros"); estos son los valores por defecto si la tabla aún no existe
 let UMBRAL_DIRECCION = 500000;
 let UMBRAL_GERENCIA = 100000000;
-const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "caja", "paquete", "hora", "servicio"];
+const UNIDADES = ["unidad", "libra", "kilo", "gramo", "litro", "mililitro", "metro", "metro cuadrado", "metro cúbico", "caja", "paquete", "hora", "servicio"];
+// Lista de unidades disponible en toda la app: las base + las que ya se usaron en el catálogo y en solicitudes (históricas) + las que se creen en el momento
+const UnidadesContext = React.createContext({ lista: UNIDADES, agregar: () => {} });
+function SelectUnidad({ value, onChange, className }) {
+  const { lista, agregar } = React.useContext(UnidadesContext);
+  const opciones = value && !lista.includes(value) ? [...lista, value] : lista;
+  const alCambiar = (e) => {
+    if (e.target.value !== "__nueva__") { onChange(e.target.value); return; }
+    const nombre = (window.prompt("Nombre de la nueva unidad (ej. metro lineal, galón, rollo):") || "").trim().replace(/\s+/g, " ").toLowerCase();
+    if (!nombre) return;
+    const existente = lista.find((u) => u.toLowerCase() === nombre);
+    if (!existente) agregar(nombre);
+    onChange(existente || nombre);
+  };
+  return (
+    <select value={value} onChange={alCambiar} className={className}>
+      {opciones.map((u) => <option key={u} value={u}>{u}</option>)}
+      <option value="__nueva__">➕ Crear unidad nueva…</option>
+    </select>
+  );
+}
 const IVA_OPCIONES = [0, 5, 19];
 const MONEDAS = ["COP", "USD", "EUR", "MXN"];
 // el primero es el color de acento: sigue la paleta de cada usuario (el resto son colores de estado y no cambian)
@@ -714,7 +734,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v29";
+const VERSION_APP = "novedades v30";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -726,6 +746,14 @@ const areaHaciaDb = (r) => ({ id: r.id, nombre: r.nombre, presupuesto_mensual: N
 const puedeGestionarCotizaciones = (u) => tienePermiso(u.rol, "gestionar_cotizaciones");
 const puedeAprobarFinanciera = (u) => tienePermiso(u.rol, "aprobar_financiera");
 const puedeAprobarGerencia = (u) => tienePermiso(u.rol, "aprobar_gerencia");
+// ¿el rechazo lo hizo Dirección Financiera o Gerencia? Esos rechazos los ve y los reabre solo Compras
+function rechazoDeFinanzas(solicitud) {
+  if (solicitud.firmas?.gerencia?.aprobado === false || solicitud.firmas?.financiera?.aprobado === false) return true;
+  const origen = solicitud.ultimoRechazo?.pasoOrigen;
+  if (origen) return ["aprobacion_financiera", "aprobacion_gerencia"].includes(origen);
+  const h = (solicitud.historialEstados || []).map((x) => x.status); const i = h.lastIndexOf("rechazada");
+  return i > 0 && ["aprobacion_financiera", "aprobacion_gerencia"].includes(h[i - 1]);
+}
 const puedeReabrir = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "reabrir_solicitudes");
 // determina en qué paso quedó marcada como rechazada, para poder reabrirla justo ahí
 function pasoDelRechazo(solicitud) {
@@ -736,8 +764,10 @@ function pasoDelRechazo(solicitud) {
   if (!origen) { const i = hist.map((h) => h.status).lastIndexOf("rechazada"); if (i > 0) origen = hist[i - 1].status; }
   if (origen === "aprobacion_jefe") origen = "aprobacion_director"; // el paso del jefe de área ya no existe
   // una firma marcada "no aprobado" dice quién rechazó: ese paso se reabre y esa firma se reinicia
-  if (solicitud.firmas?.gerencia?.aprobado === false) return { status: "aprobacion_gerencia", campo: "gerencia" };
-  if (solicitud.firmas?.financiera?.aprobado === false) return { status: "aprobacion_financiera", campo: "financiera" };
+  // rechazo de Dirección Financiera o Gerencia: lo corrige Compras, así que la solicitud vuelve a «Revisión y cotizaciones»
+  // (ahí puede agregar ítems, cargar cotizaciones —también la general— y volver a generar el cuadro comparativo)
+  if (solicitud.firmas?.gerencia?.aprobado === false) return { status: "cotizando", campo: "gerencia" };
+  if (solicitud.firmas?.financiera?.aprobado === false) return { status: "cotizando", campo: "financiera" };
   if (solicitud.firmas?.director?.aprobado === false) return { status: "aprobacion_director", campo: "director" };
   if (solicitud.firmas?.jefe?.aprobado === false) return { status: "aprobacion_director", campo: "jefe" }; // rechazo hecho en el flujo anterior
   // rechazó Compras (en su revisión, o en cotización / comparativo): vuelve a Compras. Las aprobaciones que ya tenía NO se repiten.
@@ -801,20 +831,67 @@ function evaluacionProveedorVacia() {
   };
 }
 
-// puntaje 0-1 (suma de calificación/10 × peso de cada criterio con valor)
+// ---- Criterios de reevaluación (documento «Criterios de evaluación SST · SGC · SGA»): 7 criterios, cada uno Cumple (100%) / Parcial (50%) / No cumple (0%) ----
+const CRITERIOS_EVAL_V2 = [
+  { key: "C1", sistema: "Calidad", texto: "Conformidad con lo pedido", peso: 0.15,
+    cumple: "Cantidad, especificaciones y calidad coinciden con la orden de compra. Sin devoluciones ni reprocesos.",
+    parcial: "Diferencia menor (cantidad, referencia o acabado) que el proveedor corrigió sin afectar la operación.",
+    noCumple: "No corresponde a lo pedido: hubo rechazo, devolución o el servicio tuvo que repetirse." },
+  { key: "C2", sistema: "Calidad", texto: "Oportunidad de la entrega o ejecución", peso: 0.15,
+    cumple: "Entregado o ejecutado en la fecha acordada o antes.",
+    parcial: "Retraso de hasta 2 días hábiles que no afectó la operación.",
+    noCumple: "Retraso mayor a 2 días hábiles o que afectó la operación." },
+  { key: "C3", sistema: "Calidad", texto: "Documentación y respuesta ante novedades", peso: 0.10,
+    cumple: "Documentos completos y correctos (remisión, factura, certificados o fichas que apliquen) y respuesta oportuna a cualquier novedad.",
+    parcial: "Faltó o falló un documento, o la respuesta fue tardía, pero se subsanó.",
+    noCumple: "Documentos faltantes sin subsanar o sin respuesta a la novedad." },
+  { key: "S1", sistema: "SST", texto: "Cumplimiento de requisitos documentales de SST", peso: 0.15,
+    cumple: "Entrega completos y vigentes los documentos de SST exigidos (planilla de seguridad social, aptitud médica, certificados de competencia y permisos o análisis de riesgos cuando aplican).",
+    parcial: "Falta o está vencido un documento de SST que se completó antes de iniciar la entrega o ejecución.",
+    noCumple: "No presentó los documentos de SST exigidos o están vencidos, y aun así ingresó o ejecutó la labor." },
+  { key: "S2", sistema: "SST", texto: "Cumplimiento de requisitos legales en SST", peso: 0.15,
+    cumple: "Cumple la normatividad de SST aplicable a la actividad (por ejemplo, Decreto 1072 de 2015 y Resolución 0312 de 2019): personal afiliado a EPS, ARL y pensión, y requisitos de seguridad legalmente exigidos.",
+    parcial: "Incumplimiento legal menor que se corrigió en el momento y sin consecuencias.",
+    noCumple: "Incumple un requisito legal de SST: personal sin afiliación vigente, sin requisitos exigidos para la labor, o accidente o incidente no reportado." },
+  { key: "A1", sistema: "Ambiental", texto: "Cumplimiento de requisitos ambientales", peso: 0.15,
+    cumple: "Permisos, fichas técnicas o de datos de seguridad entregados, y residuos y empaques gestionados según los lineamientos de la empresa.",
+    parcial: "Un requisito ambiental incompleto o tardío que se corrigió.",
+    noCumple: "No entregó permisos o fichas exigidos, o dejó residuos o empaques sin gestionar." },
+  { key: "A2", sistema: "Ambiental", texto: "Prevención de impactos ambientales", peso: 0.15,
+    cumple: "Sin derrames, fugas, vertimientos ni ruido excesivo; deja el área limpia y ordenada.",
+    parcial: "Impacto menor (por ejemplo, un derrame pequeño) controlado de inmediato.",
+    noCumple: "Impacto ambiental no controlado o residuos abandonados." },
+];
+const PESO_SISTEMA_EVAL = { Calidad: 0.40, SST: 0.30, Ambiental: 0.30 };
+const FACTOR_CALIFICACION_V2 = { cumple: 1, parcial: 0.5, no_cumple: 0 };
+const ETIQUETA_CALIFICACION_V2 = { cumple: "Cumple (100%)", parcial: "Parcial (50%)", no_cumple: "No cumple (0%)" };
+// una evaluación es del formato nuevo si tiene calificaciones de los criterios nuevos; las anteriores (14 criterios, 1-10) se siguen leyendo igual
+const esEvaluacionV2 = (criterios) => !criterios || !Object.keys(criterios).some((k) => CRITERIOS_EVALUACION.some((c) => c.key === k));
+
+// puntaje 0-1: formato nuevo = suma de (100% / 50% / 0%) × peso de cada criterio; formato anterior = suma de calificación/10 × peso
 function puntajeEvaluacion(criterios) {
   let total = 0;
+  if (esEvaluacionV2(criterios)) {
+    CRITERIOS_EVAL_V2.forEach((c) => { total += (FACTOR_CALIFICACION_V2[criterios?.[c.key]] ?? 0) * c.peso; });
+    return total;
+  }
   CRITERIOS_EVALUACION.forEach((c) => { const v = parseFloat(criterios?.[c.key]); if (v > 0) total += (v / 10) * c.peso; });
   return total;
 }
+const ESCALA_CONFIABILIDAD = {
+  "Confiable": { rango: "≥ 80%", accion: "Mantener como proveedor aprobado.", seguimiento: "Reevaluar después de la próxima compra. Si algún criterio quedó en «No cumple», informarlo al proveedor y registrar la novedad." },
+  "Medio Confiable": { rango: "51% a 79%", accion: "Mantener con seguimiento: comunicar al proveedor los criterios deficientes y pedir un compromiso de mejora.", seguimiento: "Verificar la mejora en la próxima compra. Si repite «Medio confiable» en dos compras seguidas, abrir acción en el formato FR-PR-GS-06-02." },
+  "Poco Confiable": { rango: "≤ 50%", accion: "Suspender nuevas compras hasta que el proveedor presente un plan de corrección. Abrir acción correctiva (FR-PR-GS-06-02) e informar a Compras y al líder del proceso.", seguimiento: "Reaprobar solo con evidencia de la corrección y una nueva evaluación en «Medio confiable» o «Confiable». Si es proveedor crítico, informar a la Gerencia." },
+};
 function clasificacionConfianza(pct) {
   if (pct >= 80) return { texto: "Confiable", tone: "green" };
-  if (pct >= 51) return { texto: "Medio Confiable", tone: "amber" };
+  if (pct > 50) return { texto: "Medio Confiable", tone: "amber" };
   return { texto: "Poco Confiable", tone: "red" };
 }
-// true si se calificaron los 14 criterios (obligatorio para poder completar la solicitud)
+// true si se calificaron todos los criterios (obligatorio para poder completar la solicitud)
 function evaluacionProveedorCompleta(ev) {
   if (!ev) return false;
+  if (esEvaluacionV2(ev.criterios)) return CRITERIOS_EVAL_V2.every((c) => FACTOR_CALIFICACION_V2[ev.criterios?.[c.key]] !== undefined);
   return CRITERIOS_EVALUACION.every((c) => parseFloat(ev.criterios?.[c.key]) > 0);
 }
 
@@ -1630,10 +1707,18 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
     : null;
   const clas = promedioPct !== null ? clasificacionConfianza(promedioPct) : null;
 
-  const promediosPorCriterio = CRITERIOS_EVALUACION.map((c) => {
-    const valores = evaluaciones.map((s) => parseFloat(s.evaluacionProveedor.criterios?.[c.key])).filter((v) => v > 0);
-    return { ...c, promedio: valores.length ? valores.reduce((a, b) => a + b, 0) / valores.length : null };
-  });
+  // promedio por criterio: con el formato nuevo (Cumple/Parcial/No cumple) se promedia el % de cumplimiento (0-100); las evaluaciones del formato anterior (1-10) se promedian aparte
+  const evaluacionesV2 = evaluaciones.filter((s) => esEvaluacionV2(s.evaluacionProveedor.criterios));
+  const usaV2 = evaluacionesV2.length > 0;
+  const promediosPorCriterio = usaV2
+    ? CRITERIOS_EVAL_V2.map((c) => {
+        const valores = evaluacionesV2.map((s) => FACTOR_CALIFICACION_V2[s.evaluacionProveedor.criterios?.[c.key]]).filter((v) => v !== undefined).map((v) => v * 100);
+        return { ...c, texto: `${c.key} · ${c.texto}`, promedio: valores.length ? valores.reduce((a, b) => a + b, 0) / valores.length : null };
+      })
+    : CRITERIOS_EVALUACION.map((c) => {
+        const valores = evaluaciones.map((s) => parseFloat(s.evaluacionProveedor.criterios?.[c.key])).filter((v) => v > 0);
+        return { ...c, promedio: valores.length ? valores.reduce((a, b) => a + b, 0) / valores.length : null };
+      });
 
   const descargarReporte = () => {
     const filas = [];
@@ -1645,7 +1730,7 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
     filas.push(["Resultado promedio (%):", promedioPct !== null ? promedioPct.toFixed(1) : "—"]);
     filas.push(["Clasificación:", clas ? clas.texto : "—"]);
     filas.push([]);
-    filas.push(["CRITERIO", "PROMEDIO (1-10)"]);
+    filas.push(["CRITERIO", usaV2 ? "CUMPLIMIENTO PROMEDIO (%)" : "PROMEDIO (1-10)"]);
     promediosPorCriterio.forEach((c) => filas.push([c.texto, c.promedio !== null ? c.promedio.toFixed(1) : "—"]));
     filas.push([]);
     filas.push(["DETALLE POR SOLICITUD"]);
@@ -1767,11 +1852,11 @@ function ReporteEvaluacionesProveedores({ solicitudes, proveedores, onAbrir }) {
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-5">
-            <div className="font-medium text-slate-700 mb-3">Promedio por criterio</div>
+            <div className="font-medium text-slate-700 mb-3">Promedio por criterio{usaV2 ? " (% de cumplimiento)" : ""}</div>
             <ResponsiveContainer width="100%" height={420}>
               <BarChart data={promediosPorCriterio.map((c) => ({ nombre: c.texto.length > 42 ? c.texto.slice(0, 40) + "…" : c.texto, textoCompleto: c.texto, valor: c.promedio || 0 }))} layout="vertical" margin={{ left: 10, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                <XAxis type="number" domain={[0, 10]} />
+                <XAxis type="number" domain={usaV2 ? [0, 100] : [0, 10]} />
                 <YAxis type="category" dataKey="nombre" width={260} tick={{ fontSize: 10 }} />
                 <Tooltip formatter={(v) => v.toFixed(1)} labelFormatter={(_, p) => p?.[0]?.payload?.textoCompleto || ""} />
                 <Bar dataKey="valor" fill="var(--color-indigo-600)" radius={[0, 4, 4, 0]} />
@@ -3309,7 +3394,7 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
             </div>
             <div className="flex gap-2 items-start flex-wrap">
               <input type="number" min="0" step="any" placeholder="Cant." value={it.cantidad} onChange={(e) => updateItem(it.id, "cantidad", e.target.value)} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
-              <select value={it.unidad} onChange={(e) => updateItem(it.id, "unidad", e.target.value)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+              <SelectUnidad value={it.unidad} onChange={(v) => updateItem(it.id, "unidad", v)} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <InputMiles placeholder="Precio est." value={it.precioEstimado} onChange={(v) => updateItem(it.id, "precioEstimado", v)} className="w-28 border border-slate-200 rounded-md px-2 py-1.5 text-sm" />
               <select value={it.moneda} onChange={(e) => cambiarMonedaItem(it.id, e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{MONEDAS.map((m) => <option key={m} value={m}>{m}</option>)}</select>
               {it.moneda !== "COP" && (
@@ -3320,6 +3405,10 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
               )}
               {tipo !== "servicio" && <select value={it.ivaEstimado} onChange={(e) => updateItem(it.id, "ivaEstimado", e.target.value)} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
               {items.length > 1 && <button onClick={() => removeItem(it.id)} className="text-slate-400 hover:text-rose-500 p-1.5"><Trash2 size={15} /></button>}
+            </div>
+            <div className="pl-7">
+              <label className="text-[11px] text-slate-500 block mb-0.5">Detalles adicionales de la solicitud <span className="text-slate-400">(calidad requerida, marcas recomendadas, experiencias previas…)</span></label>
+              <textarea rows={2} value={it.detalles || ""} onChange={(e) => updateItem(it.id, "detalles", e.target.value)} placeholder="Ej. Acero inoxidable 304; marcas recomendadas: X o Y; ya se compró antes a Z con buen resultado" className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs resize-none" />
             </div>
             <div className="pl-7"><FotosItem editable fotos={it.fotos || []} onChange={(f) => updateItem(it.id, "fotos", f)} /></div>
             {parseFloat(it.precioEstimado) > 0 && (() => {
@@ -3722,7 +3811,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Unidad cotizada</label>
-                <select value={c.unidadCotizada} onChange={(e) => update(i, "unidadCotizada", e.target.value)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+                <SelectUnidad value={c.unidadCotizada} onChange={(v) => update(i, "unidadCotizada", v)} className="border border-slate-200 rounded-md px-1 py-1.5 text-xs" />
               </div>
               <div className="flex flex-col gap-0.5">
                 <label className="text-[10px] text-slate-400">Unidad equivalente: 1 {c.unidadCotizada} equivale a</label>
@@ -5090,17 +5179,30 @@ function descargarExcelEvaluacion(ev, solicitud) {
     filas.push([d.label, v === "si" ? "X" : "", v === "no" ? "X" : "", v === "no_aplica" ? "X" : ""]);
   });
   filas.push([]);
+  if (esEvaluacionV2(ev.criterios)) {
+    filas.push(["N.º", "SISTEMA", "CRITERIO", "CALIFICACIÓN", "PESO", "%"]);
+    CRITERIOS_EVAL_V2.forEach((c) => {
+      const v = ev.criterios?.[c.key];
+      filas.push([c.key, c.sistema, c.texto, ETIQUETA_CALIFICACION_V2[v] || "", c.peso, (FACTOR_CALIFICACION_V2[v] ?? 0) * c.peso]);
+    });
+    filas.push(["", "Peso del sistema: Calidad 40% · SST 30% · Ambiental 30%"]);
+  } else {
   filas.push(["COMPONENTE", "SUBCOMPONENTE", "CRITERIO", "CALIFICACIÓN (1-10)", "PONDERACIÓN", "%"]);
   CRITERIOS_EVALUACION.forEach((c) => {
     const cal = parseFloat(ev.criterios?.[c.key]) || 0;
     filas.push([c.componente, c.subcomponente, c.texto, cal, c.peso, cal ? ((cal / 10) * c.peso) : 0]);
   });
+  }
   const pct = puntajeEvaluacion(ev.criterios) * 100;
   const clas = clasificacionConfianza(pct);
   filas.push([]);
   filas.push(["RESULTADO (%)", pct.toFixed(1)]);
   filas.push(["CLASIFICACIÓN", clas.texto]);
   filas.push(["Rangos:", "Poco Confiable ≤ 50%", "Medio Confiable 51%-79%", "Confiable ≥ 80%"]);
+  if (esEvaluacionV2(ev.criterios)) {
+    filas.push(["Acción:", ESCALA_CONFIABILIDAD[clas.texto].accion]);
+    filas.push(["Seguimiento:", ESCALA_CONFIABILIDAD[clas.texto].seguimiento]);
+  }
   filas.push([]);
   filas.push(["OBSERVACIONES:", ev.observaciones || ""]);
   filas.push([]);
@@ -5260,8 +5362,50 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
       </div>
 
       {/* CRITERIOS PONDERADOS */}
+      {esEvaluacionV2(ev.criterios) ? (
       <div className="border border-slate-200 rounded-lg p-3 space-y-3">
-        <div className="text-sm font-medium text-slate-700">Criterios de selección y evaluación (1-10)</div>
+        <div>
+          <div className="text-sm font-medium text-slate-700">Criterios de reevaluación (Calidad · SST · Ambiental)</div>
+          <div className="text-[11px] text-slate-400">Elige para cada criterio si el proveedor Cumple (100%), cumple Parcialmente (50%) o No cumple (0%). Cada opción dice qué significa.</div>
+        </div>
+        {["Calidad", "SST", "Ambiental"].map((sis) => (
+          <div key={sis} className="space-y-2">
+            <div className="text-[11px] font-semibold text-slate-600 uppercase tracking-wide">{sis} <span className="font-normal text-slate-400 normal-case">— peso del sistema {(PESO_SISTEMA_EVAL[sis] * 100).toFixed(0)}%</span></div>
+            {CRITERIOS_EVAL_V2.filter((c) => c.sistema === sis).map((c) => (
+              <div key={c.key} className="border border-slate-200 rounded-md p-2.5 bg-white">
+                <div className="text-xs font-medium text-slate-700 mb-1.5"><span className="text-slate-400 mr-1">{c.key}</span>{c.texto} <span className="text-slate-400 font-normal">(peso {(c.peso * 100).toFixed(0)}%)</span></div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-1.5">
+                  {[["cumple", c.cumple, "emerald"], ["parcial", c.parcial, "amber"], ["no_cumple", c.noCumple, "rose"]].map(([val, desc, tono]) => {
+                    const sel = ev.criterios?.[c.key] === val;
+                    const clasesSel = { emerald: "border-emerald-400 bg-emerald-50", amber: "border-amber-400 bg-amber-50", rose: "border-rose-400 bg-rose-50" }[tono];
+                    return (
+                      <button key={val} type="button" disabled={disabled} onClick={() => setCriterio(c.key, val)} className={`text-left rounded-md border px-2 py-1.5 text-[11px] leading-snug disabled:cursor-default ${sel ? clasesSel : "border-slate-200 hover:bg-slate-50"}`}>
+                        <div className={`font-semibold mb-0.5 ${sel ? "text-slate-800" : "text-slate-500"}`}>{sel ? "● " : "○ "}{ETIQUETA_CALIFICACION_V2[val]}</div>
+                        <div className="text-slate-500">{desc}</div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        ))}
+        <div className="border-t border-slate-200 pt-2 flex items-center justify-between">
+          <div className="text-sm text-slate-600">Resultado: <b className="text-slate-800">{pct.toFixed(1)}%</b></div>
+          <Badge tone={clas.tone}>{clas.texto}</Badge>
+        </div>
+        {evaluacionProveedorCompleta(ev) && (
+          <div className="text-[11px] bg-slate-50 border border-slate-200 rounded-md p-2 space-y-0.5">
+            <div><b>Acción:</b> {ESCALA_CONFIABILIDAD[clas.texto].accion}</div>
+            <div><b>Seguimiento:</b> {ESCALA_CONFIABILIDAD[clas.texto].seguimiento}</div>
+            {CRITERIOS_EVAL_V2.some((c) => ev.criterios?.[c.key] === "no_cumple") && <div className="text-rose-600">Hay criterios en «No cumple»: infórmalo al proveedor y registra la novedad en las observaciones.</div>}
+          </div>
+        )}
+        <div className="text-[10px] text-slate-400">Poco Confiable ≤ 50% · Medio Confiable 51%-79% · Confiable ≥ 80%</div>
+      </div>
+      ) : (
+      <div className="border border-slate-200 rounded-lg p-3 space-y-3">
+        <div className="text-sm font-medium text-slate-700">Criterios de selección y evaluación (1-10) <span className="text-[11px] text-slate-400 font-normal">— evaluación en el formato anterior</span></div>
         {grupos.map((g, gi) => (
           <div key={gi}>
             <div className="text-[11px] font-medium text-slate-500 mb-1">{g.componente} — {g.subcomponente}</div>
@@ -5281,6 +5425,7 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
         </div>
         <div className="text-[10px] text-slate-400">Poco Confiable ≤ 50% · Medio Confiable 51%-79% · Confiable ≥ 80%</div>
       </div>
+      )}
 
       <div>
         <label className="text-xs text-slate-500 block mb-1">Observaciones (opcional)</label>
@@ -5298,7 +5443,7 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
         {!disabled && <div className="text-[10px] text-slate-400 mt-1">Se registra automáticamente con tu nombre, cargo y firma guardada en "Mi perfil" al guardar.</div>}
       </div>
 
-      {!disabled && !evaluacionProveedorCompleta(ev) && <div className="text-[11px] text-amber-600">Falta calificar todos los criterios (14) para poder {yaFinalizada ? "guardar" : "completar la solicitud"}.</div>}
+      {!disabled && !evaluacionProveedorCompleta(ev) && <div className="text-[11px] text-amber-600">Falta calificar todos los criterios para poder {yaFinalizada ? "guardar" : "completar la solicitud"}.</div>}
       {!disabled && evaluacionProveedorCompleta(ev) && (
         <div className="flex items-center gap-2">
           <button onClick={guardarEvaluacion} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium">Guardar evaluación</button>
@@ -5875,13 +6020,13 @@ function accionLabel(solicitud, total) {
 
 // formulario corto para agregar un ítem que faltaba a una solicitud ya creada (al corregirla o mientras está en aprobación)
 function AgregarItemForm({ tipo, itemsCatalogo, onAgregar }) {
-  const vacio = { itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: tipo === "servicio" ? 0 : 19 };
+  const vacio = { itemCatalogoId: "", nombre: "", cantidad: 1, unidad: "unidad", precioEstimado: "", ivaEstimado: tipo === "servicio" ? 0 : 19, detalles: "" };
   const [abierto, setAbierto] = useState(false);
   const [f, setF] = useState(vacio);
   const guardar = () => {
     if (!f.nombre.trim()) { alert("Escribe o elige el nombre del ítem."); return; }
     if (!(parseFloat(f.cantidad) > 0)) { alert("La cantidad debe ser mayor que cero."); return; }
-    onAgregar({ id: nextId(), itemCatalogoId: f.itemCatalogoId, nombre: f.nombre.trim(), cantidad: parseFloat(f.cantidad), unidad: f.unidad, precioEstimado: f.precioEstimado, moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: f.ivaEstimado, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [], cotizacionSeleccionada: null, observacionSeleccion: "" });
+    onAgregar({ id: nextId(), itemCatalogoId: f.itemCatalogoId, nombre: f.nombre.trim(), detalles: f.detalles.trim(), cantidad: parseFloat(f.cantidad), unidad: f.unidad, precioEstimado: f.precioEstimado, moneda: "COP", tasaCambio: 1, descuentoTipo: "porcentaje", descuentoValor: "", ivaEstimado: f.ivaEstimado, aiu: { administracionPct: "", utilidadPct: "", imprevistosPct: "" }, cotizaciones: [], cotizacionSeleccionada: null, observacionSeleccion: "" });
     setF(vacio); setAbierto(false);
   };
   if (!abierto) return <button type="button" onClick={() => setAbierto(true)} className="text-xs text-indigo-600 font-medium flex items-center gap-1 border border-dashed border-indigo-300 rounded-md px-3 py-1.5 hover:bg-indigo-50"><Plus size={13} /> Agregar un ítem que faltaba</button>;
@@ -5893,10 +6038,11 @@ function AgregarItemForm({ tipo, itemsCatalogo, onAgregar }) {
         onEscribir={(texto) => setF((x) => ({ ...x, itemCatalogoId: "", nombre: texto }))} />
       <div className="flex gap-2 items-center flex-wrap">
         <input type="number" min="0" step="any" placeholder="Cant." value={f.cantidad} onChange={(e) => setF({ ...f, cantidad: e.target.value })} className="w-16 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white" />
-        <select value={f.unidad} onChange={(e) => setF({ ...f, unidad: e.target.value })} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white">{UNIDADES.map((u) => <option key={u} value={u}>{u}</option>)}</select>
+        <SelectUnidad value={f.unidad} onChange={(v) => setF({ ...f, unidad: v })} className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white" />
         <InputMiles placeholder="Precio est." value={f.precioEstimado} onChange={(v) => setF({ ...f, precioEstimado: v })} className="w-28 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white" />
         {tipo !== "servicio" && <select value={f.ivaEstimado} onChange={(e) => setF({ ...f, ivaEstimado: e.target.value })} className="w-20 border border-slate-200 rounded-md px-2 py-1.5 text-sm bg-white">{IVA_OPCIONES.map((v) => <option key={v} value={v}>IVA {v}%</option>)}</select>}
       </div>
+      <textarea rows={2} value={f.detalles} onChange={(e) => setF({ ...f, detalles: e.target.value })} placeholder="Detalles adicionales (calidad requerida, marcas recomendadas, experiencias previas…)" className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs resize-none bg-white" />
       <div className="flex gap-2">
         <button type="button" onClick={guardar} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium">Agregar ítem</button>
         <button type="button" onClick={() => { setF(vacio); setAbierto(false); }} className="text-xs text-slate-500 px-2">Cancelar</button>
@@ -5914,7 +6060,9 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const enCambioDeOrden = ["cotizando", "comparativo"].includes(solicitud.status) && (solicitud.ocEnviada?.historialOrdenes || []).some((o) => o.estadoOrden === "cambiada");
   const puedeAjustarCantidades = enCambioDeOrden && puedeGestionarCotizaciones(currentUser);
   // el solicitante (o quien puede reabrir) puede agregar o quitar ítems mientras la solicitud está en aprobación / corrección
-  const puedeAgregarItems = (currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status);
+  // Compras también puede agregar o quitar ítems cuando una solicitud rechazada por Finanzas/Gerencia volvió a cotización
+  const enCorreccionCompras = ["cotizando", "comparativo"].includes(solicitud.status) && puedeGestionarCotizaciones(currentUser) && (solicitud.historialEstados || []).some((h) => h.status === "rechazada");
+  const puedeAgregarItems = ((currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)) || enCorreccionCompras;
   const agregarItemSol = (nuevo) => { patch({ items: [...solicitud.items, nuevo] }); mostrarToast(`Ítem agregado: ${nuevo.nombre}`); };
   const quitarItemSol = (it) => {
     if (solicitud.items.length <= 1) { alert("La solicitud necesita al menos un ítem."); return; }
@@ -6352,18 +6500,30 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     setObservacion("");
   };
   const rechazar = () => {
-    if (!motivoCompleto) { alert("Elige el motivo del rechazo — es lo que verá el solicitante para poder corregir la solicitud."); return; }
+    if (!motivoCompleto) { alert(["aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status) ? "Elige el motivo del rechazo — es lo que verá Compras para poder corregir la solicitud." : "Elige el motivo del rechazo — es lo que verá el solicitante para poder corregir la solicitud."); return; }
     if (motivoSel === "__nuevo__" && motivoNuevo.trim() && !(motivosRechazo || []).some((m) => m.nombre.toLowerCase() === motivoNuevo.trim().toLowerCase())) guardarMotivoRechazo({ id: "mot_" + Date.now(), nombre: motivoNuevo.trim() });
     const campo = solicitud.status === "aprobacion_jefe" ? "jefe" : solicitud.status === "aprobacion_director" ? "director" : solicitud.status === "aprobacion_financiera" ? "financiera" : solicitud.status === "aprobacion_gerencia" ? "gerencia" : null;
     patch({ status: "rechazada", ultimoRechazo: { nombre: currentUser.nombre, rol: currentUser.rol, observacion: motivoCompleto, fecha: hoy(), pasoOrigen: solicitud.status }, firmas: campo ? { ...solicitud.firmas, [campo]: { aprobado: false, nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), observacion: motivoCompleto, fotoUrl: currentUser.firmaFotoUrl || null } } : solicitud.firmas, historialEstados: empujarHistorial("rechazada"), notificaciones: notificar(`Correo enviado a ${solicitante?.nombre} (${solicitante?.email || "sin correo"}): tu solicitud ${solicitud.folio} fue rechazada.`) });
-    if (solicitante?.email) {
-      enviarCorreo(
-        solicitante.email,
-        `Tu solicitud ${solicitud.folio} fue rechazada`,
-        `<p>Hola ${solicitante.nombre},</p><p>Tu solicitud <b>${solicitud.folio}</b> fue rechazada por ${currentUser.nombre} (${currentUser.rol}).</p>${motivoCompleto ? `<p><b>Motivo:</b> ${motivoCompleto}</p>` : ""}`
-      );
+    const rechazaFinanzas = ["aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status);
+    if (rechazaFinanzas) {
+      // rechazo de Dirección Financiera / Gerencia: lo corrige Compras, no el solicitante
+      const compras = usuariosDeRol("Compras");
+      compras.filter((u) => u.email).forEach((u) => enviarCorreo(
+        u.email,
+        `La solicitud ${solicitud.folio} fue rechazada`,
+        `<p>Hola ${u.nombre},</p><p>La solicitud <b>${solicitud.folio}</b> fue rechazada por ${currentUser.nombre} (${currentUser.rol}). Compras debe reabrirla y corregirla.</p>${motivoCompleto ? `<p><b>Motivo:</b> ${motivoCompleto}</p>` : ""}`
+      ));
+      anunciar(`Solicitud ${solicitud.folio} rechazada — Compras verá el motivo para corregirla`, compras, `La solicitud ${solicitud.folio} fue rechazada por ${currentUser.nombre}.${motivoCompleto ? ` Motivo: "${motivoCompleto}"` : ""} Reábrela para corregirla.`, "alerta");
+    } else {
+      if (solicitante?.email) {
+        enviarCorreo(
+          solicitante.email,
+          `Tu solicitud ${solicitud.folio} fue rechazada`,
+          `<p>Hola ${solicitante.nombre},</p><p>Tu solicitud <b>${solicitud.folio}</b> fue rechazada por ${currentUser.nombre} (${currentUser.rol}).</p>${motivoCompleto ? `<p><b>Motivo:</b> ${motivoCompleto}</p>` : ""}`
+        );
+      }
+      anunciar(`Solicitud ${solicitud.folio} rechazada — el solicitante verá el motivo para corregirla`, [solicitante], `Tu solicitud ${solicitud.folio} fue rechazada por ${currentUser.nombre}.${motivoCompleto ? ` Motivo: "${motivoCompleto}"` : ""}`, "alerta");
     }
-    anunciar(`Solicitud ${solicitud.folio} rechazada — el solicitante verá el motivo para corregirla`, [solicitante], `Tu solicitud ${solicitud.folio} fue rechazada por ${currentUser.nombre}.${motivoCompleto ? ` Motivo: "${motivoCompleto}"` : ""}`, "alerta");
     setMotivoRechazo(""); setRechazando(false);
   };
 
@@ -6435,18 +6595,22 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         const campoRechazo = ["gerencia", "financiera", "director", "jefe"].find((c) => solicitud.firmas?.[c]?.aprobado === false);
         const firmaRechazo = campoRechazo ? solicitud.firmas[campoRechazo] : (solicitud.ultimoRechazo || null);
         const enCorreccion = solicitud.status !== "rechazada" && solicitud.historialEstados?.some((h) => h.status === "rechazada");
-        if (solicitud.status === "rechazada" && (puedeReabrir(currentUser) || currentUser.id === solicitud.solicitanteId)) {
+        const deFinanzas = rechazoDeFinanzas(solicitud);
+        const puedeReabrirEste = deFinanzas ? (puedeGestionarCotizaciones(currentUser) || currentUser.rol === "Administrador") : (puedeReabrir(currentUser) || currentUser.id === solicitud.solicitanteId);
+        if (solicitud.status === "rechazada" && deFinanzas && !puedeReabrirEste) return null;
+        if (solicitud.status === "rechazada" && puedeReabrirEste) {
           return (
             <div className="bg-rose-50 border border-rose-200 rounded-xl p-4 flex items-center justify-between gap-3 flex-wrap">
               <div className="text-sm text-rose-700">
                 Esta solicitud fue rechazada por {firmaRechazo?.nombre || "—"}.
                 {firmaRechazo?.observacion && <div className="mt-1 italic">"{firmaRechazo.observacion}"</div>}
-                {" "}Si el motivo fue un error que ya se corrigió (ej. en los precios estimados o en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada.
+                {" "}{deFinanzas ? "Compras puede reabrirla para corregirla: volverá a «Revisión y cotizaciones» para ajustar ítems y cotizaciones y volver a enviarla." : "Si el motivo fue un error que ya se corrigió (ej. en los precios estimados o en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada."}
               </div>
               <button onClick={reabrirSolicitud} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium shrink-0">Reabrir solicitud</button>
             </div>
           );
         }
+        if (enCorreccion && deFinanzas && currentUser.id === solicitud.solicitanteId && !puedeGestionarCotizaciones(currentUser)) return null;
         if (enCorreccion && (firmaRechazo || solicitud.ultimoRechazo)) {
           const motivo = firmaRechazo || solicitud.ultimoRechazo;
           return (
@@ -6506,6 +6670,14 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
                     <div className="text-[10px] text-slate-400 mt-0.5">Compras: corrige el nombre si hace falta — se guarda en el catálogo.</div>
                   </>
                 ) : it.nombre}
+                {puedeEditarFotos ? (
+                  <div className="mt-1.5">
+                    <div className="text-[10px] text-slate-400">Detalles adicionales (calidad requerida, marcas recomendadas, experiencias previas)</div>
+                    <textarea key={it.detalles || ""} defaultValue={it.detalles || ""} rows={2} onBlur={(e) => { if ((e.target.value || "") !== (it.detalles || "")) patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, detalles: e.target.value } : x)) }); }} className="w-full border border-slate-200 rounded-md px-2 py-1 text-xs resize-none bg-white" />
+                  </div>
+                ) : it.detalles ? (
+                  <div className="mt-1.5 text-[11px] text-slate-600 bg-white/70 border border-slate-200 rounded-md px-2 py-1 whitespace-pre-wrap"><span className="font-medium text-slate-500">Detalles adicionales: </span>{it.detalles}</div>
+                ) : null}
                 {(it.fotos?.length > 0 || puedeEditarFotos) && <div className="mt-1.5"><FotosItem editable={puedeEditarFotos} fotos={it.fotos || []} onChange={(f) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, fotos: f } : x)) })} /></div>}
               </td>
               <td className="py-2 px-2 text-right whitespace-nowrap">
@@ -6562,7 +6734,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       </SeccionColapsable>
 
       {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
-        <SeccionColapsable titulo="Adjuntar cotizaciones (opcional)" descripcion={<>Si ya tienes una cotización de algún proveedor para un ítem, puedes adjuntarla aquí — le ahorra trabajo a Compras más adelante.</>} abierto={fases.abierto("adjuntar")} onToggle={() => fases.alternar("adjuntar")}>
+        <SeccionColapsable titulo="Adjuntar cotizaciones (opcional)" descripcion={<>Si ya tienes una cotización de algún proveedor para un ítem, puedes adjuntarla aquí — le ahorra trabajo a Compras más adelante.</>} acciones={solicitud.items.length > 1 && <button onClick={() => setMostrarCotGeneralCompras(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>} abierto={fases.abierto("adjuntar")} onToggle={() => fases.alternar("adjuntar")}>
+          {mostrarCotGeneralCompras && (
+            <CotizacionGeneralForm servicio={solicitud.tipo === "servicio"} items={solicitud.items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneralCompras} onCerrar={() => setMostrarCotGeneralCompras(false)} />
+          )}
           <ControlExpandirTodo n={solicitud.items.length} onTodos={abAdj.todos} />
           {solicitud.items.map((it, idx) => (
             <ItemColapsable key={it.id} abierto={abAdj.abierto(it.id)} onToggle={() => abAdj.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)} resumen={<span>{(it.cotizaciones || []).length} cotización(es)</span>}>
@@ -6714,7 +6889,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             if (solicitud.status === "orden" && !todasOrdenesFirmadas(solicitud, proveedores)) motivos.push("Falta que Dirección Financiera firme la orden de uno o más proveedores.");
             if (solicitud.status === "recepcion") {
               if (!solicitud.recepcion.recibidoSatisfaccion) motivos.push("Falta marcar cómo se recibió (a satisfacción o con observaciones) en el panel de Recepción.");
-              if (!evaluacionCompleta(solicitud)) motivos.push("Falta completar la evaluación del proveedor (14 criterios).");
+              if (!evaluacionCompleta(solicitud)) motivos.push("Falta completar la evaluación del proveedor (todos los criterios).");
             }
             return motivos.length > 0 && (
               <div className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 space-y-0.5">
@@ -6726,7 +6901,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           {rechazando && (
             <div className="bg-rose-50 border border-rose-200 rounded-lg p-3 space-y-2">
               <label className="text-xs font-medium text-rose-700">Motivo del rechazo (obligatorio)</label>
-              <div className="text-[11px] text-rose-600">La solicitud se devuelve como <b>rechazada</b>. El solicitante verá este motivo para poder corregirla y volver a enviarla.</div>
+              <div className="text-[11px] text-rose-600">La solicitud se devuelve como <b>rechazada</b>. {["aprobacion_financiera", "aprobacion_gerencia"].includes(solicitud.status) ? "Compras verá este motivo para poder corregirla y volver a enviarla." : "El solicitante verá este motivo para poder corregirla y volver a enviarla."}</div>
               <select value={motivoSel} onChange={(e) => setMotivoSel(e.target.value)} className="w-full border border-rose-200 rounded-lg px-3 py-2 text-sm bg-white">
                 <option value="">Selecciona un motivo...</option>
                 {(motivosRechazo || []).map((m) => <option key={m.id} value={m.nombre}>{m.nombre}</option>)}
@@ -7559,6 +7734,7 @@ function Catalogos({
   permisos, togglePermiso, parametros = [], guardarParametro,
 }) {
   const [sub, setSub] = useState("empresas");
+  const { lista: unidadesLista } = React.useContext(UnidadesContext);
   const { datos: motivosRechazoCat, guardar: guardarMotivoCatBase, eliminar: eliminarMotivoCat } = useSupabaseTable('motivos_rechazo', { orderBy: 'nombre' });
   const guardarMotivoCat = (m) => guardarMotivoCatBase((motivosRechazoCat || []).some((x) => x.id === m.id) ? m : { ...m, id: "mot_" + Date.now() });
   const tabs = [
@@ -7652,7 +7828,7 @@ function Catalogos({
             datos={usuarios} onGuardar={guardarUsuario} onEliminar={eliminarUsuario} plantilla={{ nombre: "", email: "", cargo: "", areaId: "", areasAdicionales: [], rol: "Solicitante" }} />
         </>
       )}
-      {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: UNIDADES.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
+      {sub === "items" && <CrudTable titulo="Catálogo de ítems" icon={Boxes} columnas={[{ key: "nombre", label: "Nombre" }, { key: "unidadDefault", label: "Unidad", type: "select", options: unidadesLista.map((u) => ({ value: u, label: u })) }, { key: "categoria", label: "Categoría" }]} datos={itemsCatalogo} onGuardar={guardarItemCatalogo} onEliminar={eliminarItemCatalogoSeguro} plantilla={{ nombre: "", unidadDefault: "unidad", categoria: "" }} />}
       {sub === "motivos" && <CrudTable titulo="Motivos de rechazo" icon={XCircle} columnas={[{ key: "nombre", label: "Motivo" }]} datos={motivosRechazoCat} onGuardar={guardarMotivoCat} onEliminar={eliminarMotivoCat} plantilla={{ nombre: "" }} />}
       {sub === "conceptos" && <CrudTable titulo="Conceptos de gasto (plan de cuentas)" icon={ClipboardList} columnas={[{ key: "empresaId", label: "Empresa", type: "select", options: empresas.map((e) => ({ value: e.id, label: e.nombre })), requerido: true }, { key: "grupo", label: "Grupo" }, { key: "codigo", label: "Código" }, { key: "nombre", label: "Cuenta" }, { key: "centroCosto", label: "Centro de costo" }]} datos={conceptosGasto} onGuardar={guardarConceptoGasto} onEliminar={eliminarConceptoGasto} plantilla={{ empresaId: "", grupo: "", codigo: "", nombre: "", centroCosto: "" }} />}
       {sub === "parametros" && currentUser?.rol === "Administrador" && <ParametrosPanel parametros={parametros} guardarParametro={guardarParametro} />}
@@ -7833,6 +8009,17 @@ export default function App() {
   const [historico, setHistorico] = useState(HISTORICO_INIT);
   const { solicitudes: solicitudesDB, cargando: cargandoSolicitudes, crear: crearSolicitudDB, actualizar: actualizarSolicitudDB, eliminar: eliminarSolicitudDB, recargar: recargarSolicitudes } = useSolicitudes();
   const solicitudes = useMemo(() => solicitudesDB.map(normalizarEstadoLegado), [solicitudesDB]);
+  // unidades: las base + las ya usadas en el catálogo y en solicitudes históricas + las creadas en esta sesión
+  const [unidadesNuevas, setUnidadesNuevas] = useState([]);
+  const unidadesLista = useMemo(() => {
+    const usadas = new Set();
+    itemsCatalogo.forEach((i) => i.unidadDefault && usadas.add(String(i.unidadDefault).trim()));
+    solicitudes.forEach((s) => (s.items || []).forEach((it) => { if (it.unidad) usadas.add(String(it.unidad).trim()); (it.cotizaciones || []).forEach((c) => c.unidadCotizada && usadas.add(String(c.unidadCotizada).trim())); }));
+    unidadesNuevas.forEach((u) => usadas.add(u));
+    const extra = [...usadas].filter((u) => u && !UNIDADES.some((b) => b.toLowerCase() === u.toLowerCase())).sort((a, b) => a.localeCompare(b, "es"));
+    return [...UNIDADES, ...extra];
+  }, [itemsCatalogo, solicitudes, unidadesNuevas]);
+  const valorUnidades = useMemo(() => ({ lista: unidadesLista, agregar: (u) => setUnidadesNuevas((p) => (p.includes(u) ? p : [...p, u])) }), [unidadesLista]);
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
   // los proveedores los crean y editan varios usuarios: se vuelven a leer al abrir una solicitud, al volver a la pestaña y cada 30 s,
@@ -8042,6 +8229,7 @@ export default function App() {
 
   return (
     <ToastContext.Provider value={{ mostrar: mostrarToast }}>
+    <UnidadesContext.Provider value={valorUnidades}>
     <div className="min-h-screen bg-slate-50 flex text-slate-800" style={{ fontFamily: "Inter, system-ui, sans-serif" }}>
       <aside className={`${menuExpandido ? "w-56" : "w-16"} bg-white border-r border-slate-200 p-3 flex flex-col gap-1 shrink-0 transition-all duration-200`}>
         <div className={`flex items-center gap-2 mb-4 ${menuExpandido ? "px-1 justify-between" : "justify-center"}`}>
@@ -8215,6 +8403,7 @@ export default function App() {
     </div>
     {duplicando && <DuplicarModal solicitud={duplicando} onCancelar={() => setDuplicando(null)} onConfirmar={confirmarDuplicado} />}
     <ToastHost toasts={toasts} onCerrar={cerrarToast} />
+    </UnidadesContext.Provider>
     </ToastContext.Provider>
   );
 }
