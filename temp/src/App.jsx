@@ -725,7 +725,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v30";
+const VERSION_APP = "novedades v30d";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -2807,7 +2807,7 @@ function InputMiles({ value, onChange, className, placeholder, disabled }) {
 // cada palabra escrita debe aparecer en la opción, en cualquier orden). Pensada para catálogos largos,
 // como el plan de cuentas (Grupo – Código – Cuenta – Centro de costo).
 const normalizarBusqueda = (t) => (t || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-function SelectorBuscable({ opciones, value, onChange, placeholder, maxVisibles = 80, disabled }) {
+function SelectorBuscable({ opciones, value, onChange, placeholder, maxVisibles = 80, disabled, onCrear, etiquetaCrear = "Agregar" }) {
   const [abierto, setAbierto] = useState(false);
   const [texto, setTexto] = useState("");
   const [activo, setActivo] = useState(0);
@@ -2831,6 +2831,11 @@ function SelectorBuscable({ opciones, value, onChange, placeholder, maxVisibles 
   useEffect(() => { if (abierto) listaRef.current?.children[activo]?.scrollIntoView?.({ block: "nearest" }); }, [activo, abierto]);
 
   const elegir = (o) => { onChange(o ? o.value : ""); setAbierto(false); setTexto(""); };
+  // si lo que se escribió no existe, se ofrece agregarlo ahí mismo (onCrear lo guarda y lo deja seleccionado)
+  const textoNuevo = texto.trim();
+  const puedeCrear = !!onCrear && textoNuevo.length > 1 && !opciones.some((o) => normalizarBusqueda(o.label) === normalizarBusqueda(textoNuevo));
+  const [creando, setCreando] = useState(false);
+  const crear = async () => { setCreando(true); await onCrear(textoNuevo); setCreando(false); setAbierto(false); setTexto(""); };
   const teclado = (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); setAbierto(true); setActivo((i) => Math.min(visibles.length - 1, i + 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setActivo((i) => Math.max(0, i - 1)); }
@@ -2864,6 +2869,11 @@ function SelectorBuscable({ opciones, value, onChange, placeholder, maxVisibles 
               <div key={o.value} onMouseDown={(e) => { e.preventDefault(); elegir(o); }} onMouseEnter={() => setActivo(i)} className={`px-3 py-2 text-sm cursor-pointer ${i === activo ? "bg-indigo-50 text-indigo-700" : "text-slate-700"} ${o.value === value ? "font-medium" : ""}`}>{o.label}</div>
             ))}
           </div>
+          {puedeCrear && (
+            <div onMouseDown={(e) => { e.preventDefault(); if (!creando) crear(); }} className="px-3 py-2 text-sm cursor-pointer border-t border-slate-100 text-indigo-700 bg-indigo-50/60 hover:bg-indigo-100 rounded-b-lg font-medium">
+              {creando ? "Guardando…" : <>➕ {etiquetaCrear} «{textoNuevo}»</>}
+            </div>
+          )}
           {filtradas.length > visibles.length && <div className="px-3 py-1.5 text-[11px] text-slate-400 border-t border-slate-100 bg-slate-50 rounded-b-lg">Mostrando {visibles.length} de {filtradas.length} — sigue escribiendo para filtrar.</div>}
         </div>
       )}
@@ -3151,7 +3161,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   );
 }
 
-function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, conceptosGasto, usuarios, currentUser, solicitudes, onCrear, onCancel, borrador }) {
+function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, conceptosGasto, guardarConceptoGasto, usuarios, currentUser, solicitudes, onCrear, onCancel, borrador }) {
   const [tipo, setTipo] = useState(borrador?.tipo || "compra");
   const [empresaId, setEmpresaId] = useState(borrador?.empresaId || empresas[0]?.id || "");
   const [areaId, setAreaId] = useState(borrador?.areaId || currentUser.areaId || areas[0].id);
@@ -3161,6 +3171,12 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
     .filter((c) => !c.empresaId || c.empresaId === empresaId)
     .sort((a, b) => ((a.grupo || a.codigo) ? 0 : 1) - ((b.grupo || b.codigo) ? 0 : 1) || (a.grupo || "").localeCompare(b.grupo || "") || (a.codigo || "").localeCompare(b.codigo || ""))
     .map((c) => ({ value: c.id, label: labelConcepto(c) })), [conceptosGasto, empresaId]);
+  // concepto de gasto nuevo: se escribe en el mismo buscador y, si no existe, aparece la opción de agregarlo (queda guardado en el catálogo)
+  const crearConceptoRapido = async (nombre) => {
+    const res = await guardarConceptoGasto({ id: "nuevo", empresaId: empresaId || "", grupo: "", codigo: "", nombre, centroCosto: "" });
+    if (res instanceof Error || res?.message) { alert(`No se pudo guardar el concepto: ${res.message}`); return; }
+    if (res?.id) setConceptoGastoId(res.id);
+  };
   const [fechaEstimada, setFechaEstimada] = useState("");
   const [objetivo, setObjetivo] = useState(borrador?.objetivo || "");
   const [justificacion, setJustificacion] = useState(borrador?.justificacion || "");
@@ -3348,7 +3364,8 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
         <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Empresa</label><select value={empresaId} onChange={(e) => { setEmpresaId(e.target.value); setConceptoGastoId(""); }} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
         <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Área solicitante</label><select value={areaId} onChange={(e) => setAreaId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm">{areas.map((a) => <option key={a.id} value={a.id}>{a.nombre}</option>)}</select></div>
         <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">Dirección a cargo</label><select value={departamentoId} onChange={(e) => setDepartamentoId(e.target.value)} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm"><option value="">— Sin especificar —</option>{departamentos.map((d) => <option key={d.id} value={d.id}>{d.nombre}</option>)}</select></div>
-        <div className="md:col-span-2 xl:col-span-8"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><SelectorBuscable opciones={opcionesConcepto} value={conceptoGastoId} onChange={setConceptoGastoId} placeholder="Buscar por grupo, código, cuenta o centro de costo…" /></div>
+        <div className="md:col-span-2 xl:col-span-8"><label className="text-xs font-medium text-slate-500">Concepto de gasto <span className="text-slate-400 font-normal">(Grupo – Código – Cuenta – Centro de costo)</span></label><SelectorBuscable opciones={opcionesConcepto} value={conceptoGastoId} onChange={setConceptoGastoId} placeholder="Buscar o escribir el concepto de gasto…" onCrear={guardarConceptoGasto ? crearConceptoRapido : undefined} etiquetaCrear="Agregar concepto nuevo:" />
+        </div>
         <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">{tipo === "compra" ? "Fecha estimada de entrega" : "Fecha estimada de terminación"}</label><InputFecha value={fechaEstimada} onChange={setFechaEstimada} className="w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm" /></div>
         <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><Target size={12} /> Objetivo</label><textarea ref={(el) => { if (el) autoResize({ target: el }); }} value={objetivo} onChange={(e) => { setObjetivo(e.target.value); autoResize(e); }} rows={2} placeholder="¿Qué se busca lograr con esta solicitud?" className="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
         <div className="md:col-span-2 xl:col-span-6"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Justificación</label><textarea ref={(el) => { if (el) autoResize({ target: el }); }} value={justificacion} onChange={(e) => { setJustificacion(e.target.value); autoResize(e); }} rows={2} placeholder="¿Por qué es necesaria?" className="w-full mt-1 border border-slate-300 rounded-lg px-3 py-2 text-sm resize-none overflow-hidden" /></div>
@@ -8321,7 +8338,7 @@ export default function App() {
           </div>
         )}
         {creando ? (
-          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => { setCreando(false); setBorrador(null); }} borrador={borrador} key={borrador?.clave || "nueva"} />
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => { setCreando(false); setBorrador(null); }} borrador={borrador} key={borrador?.clave || "nueva"} />
         ) : perfil ? (
           <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} onCambiarContrasena={cambiarContrasena} tema={temaActual} onElegirTema={elegirTema} />
         ) : solicitudAbierta ? (
