@@ -240,7 +240,7 @@ export async function generarOrdenServicioPDF({
   // firmas: en AUTORIZA se estampa la firma digital de Dirección Financiera (queda anotada su posición en el PDF)
   const wFirma = (ANCHO - 10) / 2
   const yLineaFirma = y - 66
-  ;[['AUTORIZA', M], ['ACEPTADO', M + wFirma + 10]].forEach(([et, x]) => {
+  ;[['AUTORIZA', M], ['ACEPTADA POR EL PROVEEDOR O CONTRATISTA', M + wFirma + 10]].forEach(([et, x]) => {
     caja(x, y, wFirma, altoFirmas)
     linea(x + 22, yLineaFirma, x + wFirma - 22, yLineaFirma, 0.8)
     txtCentro(et, x + wFirma / 2, yLineaFirma - 12, 9, { bold: true })
