@@ -9,6 +9,7 @@ import { subirArchivo, obtenerUrlFirmada, archivoDentroDelLimite, TAMANO_MAXIMO_
 import { obtenerTasaCambioCOP } from "./lib/tasaCambio";
 import { firmarPDF } from "./lib/firmarPdf";
 import { generarOrdenServicioPDF } from "./lib/generarOrdenServicio";
+import { generarEvaluacionPDF } from "./lib/generarEvaluacionPDF";
 import { unificarArchivosPDF, generarResumenSolicitudPDF } from "./lib/unificarArchivos";
 import { COLUMNAS_EMPLEADOS, validarEmpleados, importarEmpleadosEnLotes } from "./lib/importarEmpleados";
 import { PALETAS, TEMA_ORIGINAL, aplicarTema, sanitizarTema, soportaTema, leerOriginal, estiloDocumento, generarEscala, parametrosDe } from "./lib/tema";
@@ -344,10 +345,10 @@ function desgloseCotizacion(cot, cantidadSolicitada) {
   return { subtotal, iva, total: subtotal + iva };
 }
 // un ítem con UNA sola cotización necesita el comentario de por qué solo se cotizó con un proveedor
-// una cotización GENERAL (un mismo proveedor y documento para varios ítems) no necesita explicar por qué es la única: ya cubre toda la solicitud
+// una cotización GENERAL que sea la única de un ítem también necesita el comentario
 function esCotizacionGeneral(c) { return !!c?.general || /cotizaciones-generales/.test(c?.archivoNombre || ""); }
 function cotizacionUnicaSinJustificar(item) {
-  return (item.cotizaciones || []).length === 1 && !esCotizacionGeneral(item.cotizaciones[0]) && !((item.cotizaciones[0].justificacionUnico || "").trim());
+  return (item.cotizaciones || []).length === 1 && !((item.cotizaciones[0].justificacionUnico || "").trim());
 }
 // Reglas de precio de una cotización (dos topes):
 //  1) el precio inicial cotizado no puede superar el precio estimado que puso el solicitante;
@@ -692,6 +693,7 @@ const PERMISOS_DISPONIBLES = [
   { key: "ver_calendario_pagos", label: "Ver el Calendario de pagos" },
   { key: "ver_ordenes_enviadas", label: "Ver el reporte de Órdenes enviadas a proveedores" },
   { key: "ver_plan_inversion", label: "Ver el Cronograma de pagos" },
+  { key: "crear_plan_inversion", label: "Crear nuevos cronogramas de pago (botón \"Nuevo plan\")" },
   { key: "editar_plan_inversion", label: "Editar el Cronograma de pagos (fechas y montos)" },
   { key: "editar_pagos_finales", label: "Modificar fechas y montos finales de pago después de emitida la orden (Dirección Financiera / Contabilidad)" },
   { key: "ver_evaluaciones_proveedores", label: "Ver el reporte de Evaluación de proveedores" },
@@ -725,7 +727,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v30d";
+const VERSION_APP = "novedades v31c";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -762,11 +764,11 @@ function pasoDelRechazo(solicitud) {
   if (solicitud.firmas?.director?.aprobado === false) return { status: "aprobacion_director", campo: "director" };
   if (solicitud.firmas?.jefe?.aprobado === false) return { status: "aprobacion_director", campo: "jefe" }; // rechazo hecho en el flujo anterior
   // rechazó Compras (en su revisión, o en cotización / comparativo): vuelve a Compras. Las aprobaciones que ya tenía NO se repiten.
-  if (solicitud.revisionCompras?.estado === "rechazada" || origen === "cotizando" || origen === "comparativo") return { status: "cotizando", campo: null, revision: true };
+  if (solicitud.revisionCompras?.estado === "rechazada" || origen === "cotizando" || origen === "comparativo") return { status: "aprobacion_director", campo: null, revision: true, reiniciaDirector: true };
   // rechazada en otro paso conocido (orden, enviada, recepción...): se reabre en ese mismo paso
   if (origen && PASOS.some((p) => p.key === origen) && !["solicitud", "rechazada", "completada"].includes(origen)) return { status: origen, campo: null };
   // sin datos de dónde se rechazó: si ya había pasado la aprobación del director, vuelve a Compras; si no, al director
-  if (solicitud.firmas?.director?.aprobado === true || solicitud.revisionCompras?.estado === "aprobada") return { status: "cotizando", campo: null, revision: true };
+  if (solicitud.firmas?.director?.aprobado === true || solicitud.revisionCompras?.estado === "aprobada") return { status: "aprobacion_director", campo: null, revision: true, reiniciaDirector: true };
   return { status: "aprobacion_director", campo: null };
 }
 const puedeVerCatalogos = (u) => tienePermiso(u.rol, "ver_catalogos");
@@ -776,6 +778,7 @@ const puedeVerMisPendientes = (u) => u.rol === "Administrador" || tienePermiso(u
 const puedeVerCalendarioPagos = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_calendario_pagos");
 const puedeVerOrdenesEnviadas = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_ordenes_enviadas");
 const puedeVerPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_plan_inversion");
+const puedeCrearPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "crear_plan_inversion");
 const puedeEditarPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "editar_plan_inversion");
 const puedeEditarPagosFinales = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "editar_pagos_finales");
 const puedeVerEvaluaciones = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_evaluaciones_proveedores");
@@ -798,13 +801,6 @@ const CRITERIOS_EVALUACION = [
   { key: "licenciaAmbiental", componente: "HSE", subcomponente: "Gestión ambiental", texto: "Dispone de una Licencia Ambiental (si aplica)", peso: 0.09 },
   { key: "programaPostconsumo", componente: "HSE", subcomponente: "Gestión ambiental", texto: "Cuenta y brinda un programa de postconsumo (tóners, cartuchos, baterías, aceite usado, llantas, pilas, residuos electrónicos, residuos de iluminación)", peso: 0.08 },
   { key: "programaResiduos", componente: "HSE", subcomponente: "Gestión ambiental", texto: "Dispone de un programa de disposición de residuos (si aplica)", peso: 0.09 },
-];
-const DOCUMENTOS_EVALUACION = [
-  { key: "rut", label: "RUT de la empresa" },
-  { key: "camaraComercio", label: "Certificado de Cámara de Comercio" },
-  { key: "cedulaRL", label: "Fotocopia de la cédula del representante legal" },
-  { key: "referenciasComerciales", label: "Referencias comerciales (2)" },
-  { key: "certificadosHSEQ", label: "Certificados de calidad, seguridad y salud en el trabajo y medio ambiente" },
 ];
 
 function evaluacionProveedorVacia() {
@@ -1962,7 +1958,17 @@ function puedeBorrarSolicitud(s, user) {
   if (user.rol === "Administrador") return true;
   return s.solicitanteId === user.id && s.firmas?.director?.aprobado !== true;
 }
-function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir }) {
+function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir, currentUser, onActualizar }) {
+  const { mostrar: mostrarToast } = useToast();
+  // la OC/OS/OT firmada por el proveedor (aceptada) la suben Compras y el solicitante de esa solicitud
+  const puedeSubirAceptada = (f) => !!currentUser && (puedeGestionarCotizaciones(currentUser) || currentUser.rol === "Administrador" || currentUser.id === f.solicitanteId);
+  const guardarAceptada = async (f, url) => {
+    const sol = solicitudes.find((x) => x.id === f.solicitudId);
+    if (!sol || !onActualizar) return;
+    const nuevas = (sol.ocEnviada?.ordenesProveedor || []).map((o) => ((o.proveedorId || o.proveedorNombre) === f.provKey ? { ...o, archivoAceptadoUrl: url, aceptadaPor: currentUser.nombre, aceptadaFecha: hoy() } : o));
+    const error = await onActualizar({ ...sol, ocEnviada: { ...sol.ocEnviada, ordenesProveedor: nuevas } });
+    if (!error) mostrarToast(`Documento firmado por el proveedor guardado en ${f.folio}`);
+  };
   const ESTADO_ETIQUETA = { cancelada: "Cancelada", cambiada: "Cambiada" };
   const [fEmpresa, setFEmpresa] = useState("");
   const [fTipo, setFTipo] = useState("");
@@ -1986,10 +1992,12 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
       const actasFila = (s.recepcion?.actas || []).filter((a) => !itemIdActa(a) || idsOrden.includes(itemIdActa(a)));
       const tieneComprobanteRecepcion = (s.recepcion?.archivos?.length > 0) || actasFila.length > 0;
       const notas = itemsDeOrden.map((it) => (s.recepcion?.itemsRecibidos?.[it.id]?.nota || "").trim()).filter(Boolean);
-      const comFacturas = facturas.map((f) => (f.comentario || "").trim()).filter(Boolean);
+      const etiquetaFac = prov?.personaNatural === "si" ? "Cuenta de cobro" : "Factura";
+      const comFacturas = facturas.map((f, i) => ({ t: (f.comentario || "").trim(), i })).filter((x) => x.t).map((x) => (facturas.length > 1 ? `${etiquetaFac} ${x.i + 1}: ${x.t}` : x.t));
       // las variaciones son de toda la solicitud: solo se muestran en la fila cuando hay una única orden (si no, se repetirían)
       const variaciones = ordenesFirmadas.length === 1 ? comentariosDeOrden(s) : "";
-      const comentarios = [...notas, ...comFacturas, variaciones].filter(Boolean).join(" · ");
+      const listaComentarios = [...notas, ...comFacturas, variaciones].filter(Boolean);
+      const comentarios = listaComentarios.join(" · ");
       const cotsAnticipo = s.items.flatMap((it) => (it.cotizaciones || []).filter((c) => c.anticipoObligatorio && mismoProveedor({ proveedorId: c.proveedorId, proveedorNombre: c.proveedorNombre }, o)));
       const itemsDelProveedor = cotsAnticipo;
       filasTodas.push({
@@ -2008,6 +2016,12 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
         notaEstadoOrden: o.notaEstadoOrden || "",
         tieneFactura: facturas.length > 0,
         urlsFactura: facturas.map((f) => f.url).filter(Boolean),
+        facturasInfo: facturas.filter((f) => f.url).map((f) => ({ url: f.url, vencimiento: f.vencimiento || "" })),
+        listaComentarios,
+        provKey: o.proveedorId || o.proveedorNombre,
+        solicitanteId: s.solicitanteId,
+        archivoAceptado: o.archivoAceptadoUrl || "",
+        aceptadaPor: o.aceptadaPor || "", aceptadaFecha: o.aceptadaFecha || "",
         actas: actasFila.map(urlActa).filter(Boolean),
         comentarios,
         etiquetaFactura: prov?.personaNatural === "si" ? "Cuenta de cobro" : "Factura",
@@ -2023,11 +2037,11 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
   const hayFiltro = fEmpresa || fTipo || fDesde || fHasta || fTexto.trim();
 
   const descargar = () => {
-    const encabezado = ["Fecha envío", "Consecutivo", "Tipo", "Empresa", "Proveedor", "Total solicitud", "Estado de la orden", "Factura / cuenta de cobro", "Acta de Recibo", "Pago anticipado obligatorio", "Comentarios"];
+    const encabezado = ["Fecha envío", "Consecutivo", "Tipo", "Empresa", "Proveedor", "Total solicitud", "Estado de la orden", "Factura / cuenta de cobro", "Vencimiento factura", "Acta de Recibo", "Pago anticipado obligatorio", "Comentarios", "OC/OS/OT aceptada por el proveedor"];
     const siNo = (b) => (b ? "Sí" : "Falta");
-    const cuerpo = filas.map((f) => [f.fecha, f.folio, f.tipo, f.empresa, f.proveedor, f.total, ESTADO_ETIQUETA[f.estadoOrden] || "Enviada", siNo(f.tieneFactura), siNo(f.tieneComprobanteRecepcion), f.anticipoObligatorio ? "Sí" : "", f.comentarios]);
+    const cuerpo = filas.map((f) => [f.fecha, f.folio, f.tipo, f.empresa, f.proveedor, f.total, ESTADO_ETIQUETA[f.estadoOrden] || "Enviada", siNo(f.tieneFactura), f.facturasInfo.map((x, k) => (x.vencimiento ? `${f.facturasInfo.length > 1 ? `${k + 1}: ` : ""}${x.vencimiento}` : "")).filter(Boolean).join(" · "), siNo(f.tieneComprobanteRecepcion), f.anticipoObligatorio ? "Sí" : "", f.comentarios, f.archivoAceptado ? "Sí" : "Pendiente"]);
     const hoja = XLSX.utils.aoa_to_sheet([encabezado, ...cuerpo]);
-    hoja["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 20 }, { wch: 20 }, { wch: 18 }];
+    hoja["!cols"] = [{ wch: 14 }, { wch: 14 }, { wch: 22 }, { wch: 18 }, { wch: 30 }, { wch: 16 }, { wch: 16 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 18 }, { wch: 60 }, { wch: 24 }];
     const libro = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(libro, hoja, "Órdenes enviadas");
     XLSX.writeFile(libro, `Ordenes_enviadas_${hoy()}.xlsx`);
@@ -2068,6 +2082,7 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
               <th className="text-left px-4 py-2 font-medium">Comentarios</th>
               <th className="text-center px-4 py-2 font-medium">Acta de Recibo</th>
               <th className="text-center px-4 py-2 font-medium">OC/OS/OT</th>
+              <th className="text-center px-4 py-2 font-medium">Aceptada por el proveedor</th>
             </tr></thead>
             <tbody>{filas.map((f) => (
               <tr key={f.id} className="border-t border-slate-100">
@@ -2078,10 +2093,11 @@ function ReporteOrdenesEnviadas({ solicitudes, proveedores, empresas, onAbrir })
                 <td className="px-4 py-2 text-slate-600">{f.proveedor} {f.anticipoObligatorio && <span title="Pago anticipado obligatorio: se paga el valor final negociado antes de despachar" className="text-amber-600 inline-block align-middle"><Timer size={12} /></span>}</td>
                 <td className="px-4 py-2 text-right font-medium">{fmt(f.total)}</td>
                 <td className="px-4 py-2">{f.estadoOrden === "enviada" ? <Badge tone="green">Enviada</Badge> : <span title={f.notaEstadoOrden}><Badge tone={f.estadoOrden === "cancelada" ? "red" : "amber"}>{ESTADO_ETIQUETA[f.estadoOrden]}</Badge></span>}</td>
-                <td className="px-4 py-2 text-center">{f.tieneFactura ? <div className="flex flex-col items-center gap-0.5">{f.urlsFactura.map((u, k) => <EnlacePrivado key={k} path={u} className="text-indigo-600 underline text-xs">{f.etiquetaFactura}{f.urlsFactura.length > 1 ? ` ${k + 1}` : ""}</EnlacePrivado>)}</div> : <Badge tone="red">Falta</Badge>}</td>
-                <td className="px-4 py-2 text-slate-600 max-w-[220px] truncate" title={f.comentarios}>{f.comentarios || <span className="text-slate-300 text-xs">—</span>}</td>
+                <td className="px-4 py-2 text-center">{f.tieneFactura ? <div className="flex flex-col items-center gap-0.5">{f.facturasInfo.map((x, k) => <div key={k} className="leading-tight"><EnlacePrivado path={x.url} className="text-indigo-600 underline text-xs">{f.etiquetaFactura}{f.facturasInfo.length > 1 ? ` ${k + 1}` : ""}</EnlacePrivado>{x.vencimiento && <div className="text-[10px] text-slate-500" title="Fecha de vencimiento de la factura">vence {x.vencimiento}</div>}</div>)}</div> : <Badge tone="red">Falta</Badge>}</td>
+                <td className="px-4 py-2 text-slate-600 min-w-[200px] max-w-[300px]">{f.listaComentarios.length ? <div className="space-y-1">{f.listaComentarios.map((c, k) => <div key={k} className="text-xs whitespace-normal break-words">{c}</div>)}</div> : <span className="text-slate-300 text-xs">—</span>}</td>
                 <td className="px-4 py-2 text-center">{f.tieneComprobanteRecepcion ? (f.actas.length ? <div className="flex flex-col items-center gap-0.5">{f.actas.map((u, k) => <EnlacePrivado key={k} path={u} className="text-indigo-600 underline text-xs">Acta de recibo{f.actas.length > 1 ? ` ${k + 1}` : ""}</EnlacePrivado>)}</div> : <Badge tone="green">Sí</Badge>) : <Badge tone="red">Falta</Badge>}</td>
                 <td className="px-4 py-2 text-center"><EnlacePrivado path={f.archivo} className="text-indigo-600 underline text-xs">Descargar</EnlacePrivado></td>
+                <td className="px-4 py-2 text-center">{f.archivoAceptado ? <div className="flex flex-col items-center gap-0.5"><EnlacePrivado path={f.archivoAceptado} className="text-emerald-700 underline text-xs">Ver aceptada</EnlacePrivado>{f.aceptadaFecha && <div className="text-[10px] text-slate-500">{f.aceptadaFecha}</div>}</div> : puedeSubirAceptada(f) ? <AdjuntarArchivo small nombre={null} label="Subir" carpeta="ordenes-aceptadas" onSeleccionar={(url) => guardarAceptada(f, url)} /> : <Badge tone="amber">Pendiente</Badge>}</td>
               </tr>
             ))}</tbody>
           </table>
@@ -2254,6 +2270,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
 
   const plan = planLocal && planesVisibles.some((p) => p.id === planLocal.id) ? planLocal : null;
   const puedeEditar = puedeEditarPlanInversion(currentUser);
+  const puedeCrear = puedeCrearPlanInversion(currentUser);
 
   // filtro por fechas (desde / hasta): deja visibles solo los periodos (columnas) que caen dentro del rango, y las
   // órdenes que tienen valor en esos periodos. Los totales se calculan solo con lo visible. No modifica lo guardado.
@@ -2403,7 +2420,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
               {planesVisibles.map((p) => <option key={p.id} value={p.id}>{tituloCronograma(p.titulo)} — {empresas.find((e) => e.id === p.empresaId)?.nombre || "Sin empresa"} ({p.anio})</option>)}
             </select>
           )}
-          {puedeEditar && <button onClick={crearPlan} className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Plus size={13} /> Nuevo plan</button>}
+          {puedeCrear && <button onClick={crearPlan} className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Plus size={13} /> Nuevo plan</button>}
           {plan && puedeEditar && <button onClick={generarDesdeSolicitudes} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><TrendingUp size={13} /> Generar desde solicitudes</button>}
           {plan && puedeEditar && seleccionados.length > 0 && <button onClick={borrarSeleccionados} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Trash2 size={13} /> Borrar seleccionadas ({seleccionados.length})</button>}
           {plan && <button onClick={descargarExcel} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Excel</button>}
@@ -2413,8 +2430,8 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
 
       {!plan ? (
         <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">
-          {fEmpresaPlan && planes.length > 0 ? (puedeEditar ? <>Esta empresa no tiene cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear uno</button></> : "Esta empresa no tiene cronograma de pagos todavía.")
-            : puedeEditar ? <>No hay ningún cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear el primero</button></> : "No hay ningún cronograma de pagos todavía."}
+          {fEmpresaPlan && planes.length > 0 ? (puedeCrear ? <>Esta empresa no tiene cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear uno</button></> : "Esta empresa no tiene cronograma de pagos todavía.")
+            : puedeCrear ? <>No hay ningún cronograma de pagos todavía. <button onClick={crearPlan} className="text-indigo-600 underline">Crear el primero</button></> : "No hay ningún cronograma de pagos todavía."}
         </div>
       ) : (
         <>
@@ -2987,7 +3004,9 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
     return { descuentoTipo: "valor", descuentoValor: cant > 0 ? String(Math.round((parte / cant) * 10000) / 10000) : "" };
   };
   const descuentoInvalido = descNum < 0 || (descTipo === "porcentaje" ? descNum >= 100 : descNum >= sumaSubtotales && sumaSubtotales > 0);
-  const listo = seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre && !descuentoInvalido;
+  const serianUnica = seleccionados.some((id) => ((items.find((i) => i.id === id)?.cotizaciones) || []).length === 0);
+  const faltaComentario = serianUnica && !comentario.trim();
+  const listo = !faltaComentario && seleccionados.length > 0 && (proveedorId || proveedorNombre.trim()) && seleccionados.every((id) => parseFloat(precios[id]) > 0) && !!archivoNombre && !descuentoInvalido;
 
   // total de cada ítem con esta cotización (costo directo + IVA, o + AIU en OT/OS) y total de todos los seleccionados
   // en el formulario, un AIU vacío significa «esta cotización no toma AIU» (se guarda como 0 y el IVA va sobre todo el Costo Directo)
@@ -3141,7 +3160,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
       )}
 
       <div>
-        <label className="text-[11px] font-medium block text-slate-500">Comentario de la cotización (opcional — una cotización general no necesita explicar por qué es la única)</label>
+        <label className="text-[11px] font-medium block text-slate-500">Comentario de la cotización {serianUnica ? "(obligatorio — es la única cotización: explica por qué solo se cotizó con este proveedor)" : "(opcional)"}</label>
         <textarea value={comentario} onChange={(e) => setComentario(e.target.value)} rows={2} placeholder="Ej. proveedor único en la zona, marca exclusiva, urgencia..." className="w-full mt-1 border border-slate-200 rounded-md px-2 py-1.5 text-xs resize-none bg-white" />
       </div>
 
@@ -3154,6 +3173,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
             !(proveedorId || proveedorNombre.trim()) && "el proveedor",
             seleccionados.some((id) => !(parseFloat(precios[id]) > 0)) && "el precio de uno o más ítems seleccionados",
             !archivoNombre && "el archivo de la cotización (PDF o foto) — es obligatorio",
+            faltaComentario && "el comentario (es la única cotización)",
           ].filter(Boolean).join(", ")}.
         </div>
       )}
@@ -3759,7 +3779,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
       return;
     }
     const validasPrevias = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
-    if (validasPrevias.length === 1 && !esCotizacionGeneral(validasPrevias[0]) && !(validasPrevias[0].justificacionUnico || "").trim()) { alert("Solo hay una cotización para este ítem: escribe el comentario de por qué solo se cotizó con un proveedor."); return; }
+    if (validasPrevias.length === 1 && !(validasPrevias[0].justificacionUnico || "").trim()) { alert("Solo hay una cotización para este ítem: escribe el comentario de por qué solo se cotizó con un proveedor."); return; }
     let listaCots = [...cots];
     // los proveedores escritos a mano (sin elegirlos del catálogo) también quedan guardados ahí,
     // y la cotización queda vinculada a su ID real (no solo al nombre) para que el envío de correo no falle
@@ -5164,6 +5184,35 @@ function CalificacionSelect({ value, onChange, disabled }) {
   );
 }
 
+
+// filas de la matriz de resultados de una evaluación (formato nuevo o anterior), para el PDF y el correo
+function filasMatrizEvaluacion(ev) {
+  if (esEvaluacionV2(ev.criterios)) {
+    return CRITERIOS_EVAL_V2.map((c) => {
+      const v = ev.criterios?.[c.key];
+      return { grupo: c.sistema, criterio: `${c.key} - ${c.texto}`, calificacion: ETIQUETA_CALIFICACION_V2[v] || "", peso: `${Math.round(c.peso * 100)}%`, aporte: `${((FACTOR_CALIFICACION_V2[v] ?? 0) * c.peso * 100).toFixed(1)}%` };
+    });
+  }
+  return CRITERIOS_EVALUACION.map((c) => {
+    const cal = parseFloat(ev.criterios?.[c.key]) || 0;
+    return { grupo: c.componente, criterio: c.texto, calificacion: cal ? `${cal} / 10` : "", peso: `${Math.round(c.peso * 100)}%`, aporte: `${cal ? ((cal / 10) * c.peso * 100).toFixed(1) : "0.0"}%` };
+  });
+}
+const escHtml = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function htmlResultadoEvaluacion({ ev, solicitud, empresa, evaluador, pct, clas, urlPdf }) {
+  const filas = filasMatrizEvaluacion(ev);
+  const colorRes = clas.tone === "green" ? "#0f7a3d" : clas.tone === "amber" ? "#b7740a" : "#bf2626";
+  const celda = "border:1px solid #d4d4d8;padding:6px 8px;font-size:13px;";
+  const tabla = `<table style="border-collapse:collapse;width:100%;margin:12px 0"><tr style="background:#f4f4f5"><th style="${celda}text-align:left">Grupo</th><th style="${celda}text-align:left">Criterio</th><th style="${celda}text-align:left">Calificación</th><th style="${celda}">Peso</th><th style="${celda}">Aporte</th></tr>${filas.map((f) => `<tr><td style="${celda}">${escHtml(f.grupo)}</td><td style="${celda}">${escHtml(f.criterio)}</td><td style="${celda}">${escHtml(f.calificacion)}</td><td style="${celda}text-align:center">${f.peso}</td><td style="${celda}text-align:center">${f.aporte}</td></tr>`).join("")}</table>`;
+  return `<p>Cordial saludo,</p><p>Se completó la evaluación de <b>${escHtml(ev.proveedorNombre)}</b> correspondiente a la solicitud <b>${escHtml(solicitud.folio)}</b> de ${escHtml(empresa?.nombre || "")}.</p>`
+    + `<p style="font-size:16px"><b>Resultado final: <span style="color:${colorRes}">${pct.toFixed(1)}% — ${escHtml(clas.texto)}</span></b></p>`
+    + tabla
+    + (ESCALA_CONFIABILIDAD[clas.texto] ? `<p><b>Acción:</b> ${escHtml(ESCALA_CONFIABILIDAD[clas.texto].accion)}</p>` : "")
+    + (ev.observaciones ? `<p><b>Observaciones:</b> ${escHtml(ev.observaciones)}</p>` : "")
+    + (urlPdf ? `<p><a href="${urlPdf}">Descargar el resultado en PDF</a> (el enlace estará disponible por 7 días)</p>` : "")
+    + `<p>Evaluación realizada por ${escHtml(evaluador)}.</p>`;
+}
+
 // genera y descarga el Excel del "Registro Selección y Evaluación de Proveedores" con los datos ya diligenciados
 function descargarExcelEvaluacion(ev, solicitud) {
   const filas = [];
@@ -5181,11 +5230,6 @@ function descargarExcelEvaluacion(ev, solicitud) {
   filas.push(["DESCRIPCIÓN", ev.descripcion]);
   filas.push(["MARCA", ev.marca]);
   filas.push([]);
-  filas.push(["FAVOR ANEXAR LOS SIGUIENTES DOCUMENTOS", "SI", "NO", "NO APLICA"]);
-  DOCUMENTOS_EVALUACION.forEach((d) => {
-    const v = ev.documentos?.[d.key];
-    filas.push([d.label, v === "si" ? "X" : "", v === "no" ? "X" : "", v === "no_aplica" ? "X" : ""]);
-  });
   filas.push([]);
   if (esEvaluacionV2(ev.criterios)) {
     filas.push(["N.º", "SISTEMA", "CRITERIO", "CALIFICACIÓN", "PESO", "%"]);
@@ -5230,7 +5274,7 @@ function descargarExcelEvaluacion(ev, solicitud) {
 
 // permite corregir/agregar el plan de pagos sugerido después de reabrir una solicitud rechazada
 // (el mismo Sí/No y campos que existen al crearla, pero editable desde el detalle)
-function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuardar, abierto, onToggle }) {
+function EvaluacionPanel({ solicitud, empresa, proveedores, usuarios = [], currentUser, onGuardar, abierto, onToggle }) {
   const { mostrar: mostrarToast } = useToast();
   const [reevaluando, setReevaluando] = useState(false);
   const [ev, setEv] = useState({ ...evaluacionProveedorVacia(), ...solicitud.evaluacionProveedor });
@@ -5244,7 +5288,6 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
   const proveedorSugerido = proveedores.find((p) => p.id === ev.proveedorId) || proveedores.find((p) => proveedoresAdjudicadosDetalle(solicitud, proveedores).some((n) => mismoProveedor({ proveedorId: p.id }, n)));
   // escribe local al instante (fluido) y guarda en segundo plano, sin bloquear la escritura
   const set = (campo, val) => { const copy = { ...ev, [campo]: val }; setEv(copy); onGuardar(copy); };
-  const setDoc = (key, val) => { const copy = { ...ev, documentos: { ...ev.documentos, [key]: val } }; setEv(copy); onGuardar(copy); };
   const setCriterio = (key, val) => { const copy = { ...ev, criterios: { ...ev.criterios, [key]: val } }; setEv(copy); onGuardar(copy); };
 
   // rellena todos los campos con los datos de un proveedor del catálogo — se usa tanto en la
@@ -5285,16 +5328,37 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
   const disabled = !esCompras || (yaFinalizada && !reevaluando);
   const esRegistroViejoVacio = yaFinalizada && !ev.completada; // solicitudes completadas antes de este formato, sin diligenciar
 
-  const guardarEvaluacion = () => {
-    onGuardar({
-      ...ev,
-      completada: true,
-      fechaCompletado: hoy(),
-      fechaEvaluacion: ev.fechaEvaluacion || hoy(),
-      firmaRealizada: { nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), fotoUrl: currentUser.firmaFotoUrl || null },
-    });
+  const guardarEvaluacion = async () => {
+    const firma = { nombre: currentUser.nombre, cargo: currentUser.cargo || "", empresa: empresa?.nombre || "", fecha: hoy(), fotoUrl: currentUser.firmaFotoUrl || null };
+    const evFinal = { ...ev, completada: true, fechaCompletado: hoy(), fechaEvaluacion: ev.fechaEvaluacion || hoy(), firmaRealizada: firma };
+    const pctF = puntajeEvaluacion(evFinal.criterios) * 100;
+    const clasF = clasificacionConfianza(pctF);
+    // PDF con la matriz de resultados y el resultado final: se guarda en la solicitud y se envía por correo
+    let rutaPdf = "";
+    try {
+      let logoBytes = null;
+      if (empresa?.logoUrl) { try { const rl = await fetch(empresa.logoUrl); if (rl.ok) logoBytes = new Uint8Array(await rl.arrayBuffer()); } catch { /* sin logo */ } }
+      const bytes = await generarEvaluacionPDF({
+        empresa: empresa?.nombre, proveedor: evFinal.proveedorNombre, nit: evFinal.nit, folio: solicitud.folio,
+        tipo: evFinal.tipoProveedor === "compra" ? "Compra" : evFinal.tipoProveedor === "servicio" ? "Servicio" : "Trabajo",
+        fechaEvaluacion: evFinal.fechaEvaluacion, evaluador: currentUser.nombre, cargoEvaluador: currentUser.cargo || "",
+        filas: filasMatrizEvaluacion(evFinal), resultado: `${pctF.toFixed(1)}%`, clasificacion: clasF.texto,
+        accion: ESCALA_CONFIABILIDAD[clasF.texto]?.accion || "", seguimiento: ESCALA_CONFIABILIDAD[clasF.texto]?.seguimiento || "", observaciones: evFinal.observaciones, logoBytes,
+      });
+      rutaPdf = (await subirBytes(bytes, `Evaluacion_${(evFinal.proveedorNombre || "Proveedor").replace(/[^a-zA-Z0-9]/g, "_")}_${solicitud.folio}.pdf`, "evaluaciones")) || "";
+    } catch (e) { console.error("Error generando el PDF de la evaluación:", e); }
+    onGuardar(rutaPdf ? { ...evFinal, pdfResultadoUrl: rutaPdf } : evFinal);
     setReevaluando(false);
-    mostrarToast("Evaluación del proveedor guardada");
+    // correo automático con la matriz y el resultado final (PDF por enlace): al proveedor, con copia al solicitante y a quien evaluó
+    const prov = proveedores.find((p) => p.id === evFinal.proveedorId);
+    const correosProv = correosDe(prov).length ? correosDe(prov) : [(evFinal.email || "").trim()].filter(Boolean);
+    const copias = [usuarios.find((u) => u.id === solicitud.solicitanteId)?.email, currentUser.email].map((e) => (e || "").trim()).filter(Boolean);
+    const destinatarios = [...new Set([...correosProv, ...copias])];
+    if (destinatarios.length) {
+      const urlPdf = rutaPdf ? await obtenerUrlFirmada(rutaPdf, 604800) : null;
+      enviarCorreo(destinatarios, `Resultado de la evaluación de proveedor — ${evFinal.proveedorNombre} (${solicitud.folio})`, htmlResultadoEvaluacion({ ev: evFinal, solicitud, empresa, evaluador: currentUser.nombre, pct: pctF, clas: clasF, urlPdf }));
+    }
+    mostrarToast(correosProv.length ? `Evaluación guardada y resultado enviado por correo a ${correosProv.join(", ")}` : "Evaluación guardada. El proveedor no tiene correo registrado: el resultado solo se envió al solicitante y a ti.", correosProv.length ? "ok" : "alerta", correosProv.length ? undefined : { duracion: 9000 });
   };
 
   const grupos = [];
@@ -5342,31 +5406,6 @@ function EvaluacionPanel({ solicitud, empresa, proveedores, currentUser, onGuard
           <div><label className="text-slate-500 block mb-0.5">Email</label><input disabled={disabled} value={ev.email} onChange={(e) => set("email", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
           <div className="col-span-2 md:col-span-3"><label className="text-slate-500 block mb-0.5">Servicios que presta / descripción</label><input disabled={disabled} value={ev.serviciosPresta} onChange={(e) => set("serviciosPresta", e.target.value)} className="w-full border border-slate-200 rounded-md px-2 py-1 disabled:bg-slate-50" /></div>
         </div>
-      </div>
-
-      {/* DOCUMENTOS */}
-      <div className="border border-slate-200 rounded-lg p-3 space-y-2">
-        <div className="text-sm font-medium text-slate-700 mb-1">Documentos anexos</div>
-        {DOCUMENTOS_EVALUACION.map((d) => (
-          <div key={d.key} className="flex items-center justify-between text-xs gap-2 flex-wrap">
-            <span className="text-slate-600 flex-1">{d.label}</span>
-            <div className="flex gap-1.5 shrink-0">
-              {[{ v: "si", l: "Sí" }, { v: "no", l: "No" }, { v: "no_aplica", l: "No aplica" }].map((op) => (
-                <button
-                  key={op.v}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => setDoc(d.key, ev.documentos?.[d.key] === op.v ? "" : op.v)}
-                  className={`px-2 py-1 rounded-md text-[11px] font-medium border disabled:opacity-40 disabled:cursor-not-allowed ${
-                    ev.documentos?.[d.key] === op.v ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200 hover:border-indigo-300"
-                  }`}
-                >
-                  {op.l}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
       </div>
 
       {/* CRITERIOS PONDERADOS */}
@@ -5490,10 +5529,13 @@ function RecepcionPanel({ solicitud, currentUser, usuarios, proveedores = [], on
   const quitarFactura = (id) => set({ facturas: r.facturas.filter((f) => f.id !== id) });
   const editarNumeroFactura = (id, numero) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, numero } : f)) });
   const editarComentarioFactura = (id, comentario) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, comentario } : f)) });
+  // fecha de vencimiento de la factura: Contabilidad la usa para programar el pago
+  const editarVencimientoFactura = (id, vencimiento) => set({ facturas: r.facturas.map((f) => (f.id === id ? { ...f, vencimiento } : f)) });
   const filaFactura = (f) => (
     <div key={f.id} className="flex items-center gap-1.5">
       <input value={f.numero} onChange={(e) => editarNumeroFactura(f.id, e.target.value)} placeholder="N.° (opcional)" className="w-24 border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
       <AdjuntarArchivo nombre={f.url} onSeleccionar={() => {}} />
+      <span className="flex items-center gap-1 text-[11px] text-slate-500 shrink-0" title="Fecha de vencimiento: Contabilidad la tiene en cuenta para programar el pago">Vence <InputFecha value={f.vencimiento || ""} onChange={(v) => editarVencimientoFactura(f.id, v)} className="w-32 border border-slate-200 rounded-md px-2 py-1.5 text-xs" /></span>
       <input defaultValue={f.comentario || ""} onBlur={(e) => { if (e.target.value !== (f.comentario || "")) editarComentarioFactura(f.id, e.target.value); }} placeholder="Comentario de la factura" className="flex-1 min-w-[120px] border border-slate-200 rounded-md px-2 py-1.5 text-xs" />
       <button onClick={() => quitarFactura(f.id)} className="text-slate-400 hover:text-rose-500"><Trash2 size={13} /></button>
     </div>
@@ -6068,9 +6110,15 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const enCambioDeOrden = ["cotizando", "comparativo"].includes(solicitud.status) && (solicitud.ocEnviada?.historialOrdenes || []).some((o) => o.estadoOrden === "cambiada");
   const puedeAjustarCantidades = enCambioDeOrden && puedeGestionarCotizaciones(currentUser);
   // el solicitante (o quien puede reabrir) puede agregar o quitar ítems mientras la solicitud está en aprobación / corrección
-  // Compras también puede agregar o quitar ítems cuando una solicitud rechazada por Finanzas/Gerencia volvió a cotización
-  const enCorreccionCompras = ["cotizando", "comparativo"].includes(solicitud.status) && puedeGestionarCotizaciones(currentUser) && (solicitud.historialEstados || []).some((h) => h.status === "rechazada");
-  const puedeAgregarItems = ((currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)) || enCorreccionCompras;
+  // solo el solicitante de ESA solicitud agrega o quita ítems (Compras, Finanzas, Administrador no): si falta alguno, se rechaza y el solicitante lo agrega
+  const puedeAgregarItems = currentUser.id === solicitud.solicitanteId && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status);
+  // OC/OS/OT firmada por el proveedor (aceptada): la suben Compras y el solicitante; queda como resguardo de la aceptación
+  const puedeSubirAceptada = puedeGestionarCotizaciones(currentUser) || currentUser.rol === "Administrador" || currentUser.id === solicitud.solicitanteId;
+  const guardarAceptada = (orden, url) => {
+    const nuevas = (solicitud.ocEnviada.ordenesProveedor || []).map((o) => (o === orden ? { ...o, archivoAceptadoUrl: url, aceptadaPor: url ? currentUser.nombre : "", aceptadaFecha: url ? hoy() : "" } : o));
+    patch({ ocEnviada: { ...solicitud.ocEnviada, ordenesProveedor: nuevas } });
+    if (url) anunciar(`Documento firmado por el proveedor guardado — ${orden.proveedorNombre}`, [solicitante, ...usuariosDeRol("Compras")].filter(Boolean), `${currentUser.nombre} subió la orden firmada por el proveedor (${orden.proveedorNombre}) en ${solicitud.folio}.`);
+  };
   const agregarItemSol = (nuevo) => { patch({ items: [...solicitud.items, nuevo] }); mostrarToast(`Ítem agregado: ${nuevo.nombre}`); };
   const quitarItemSol = (it) => {
     if (solicitud.items.length <= 1) { alert("La solicitud necesita al menos un ítem."); return; }
@@ -6195,6 +6243,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       const estado = o.estadoOrden && o.estadoOrden !== "enviada" ? ` — ${o.estadoOrden === "cambiada" ? "reemplazada por cambio" : "cancelada"}` : "";
       if (o.archivoOriginalUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (documento generado)${estado}`, path: o.archivoOriginalUrl });
       if (o.archivoFirmadoUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (firmada)${estado}`, path: o.archivoFirmadoUrl });
+      if (o.archivoAceptadoUrl) items.push({ titulo: `Orden — ${o.proveedorNombre} (aceptada por el proveedor)${estado}`, path: o.archivoAceptadoUrl });
     });
     (solicitud.recepcion?.archivos || []).forEach((path, i) => items.push({ titulo: `Recepción — soporte ${i + 1}`, path }));
     (solicitud.recepcion?.facturas || (solicitud.recepcion?.facturaUrl ? [{ numero: "", url: solicitud.recepcion.facturaUrl }] : [])).forEach((f, i) => items.push({ titulo: `Factura del proveedor${f.numero ? ` N.° ${f.numero}` : ` ${i + 1}`}`, path: f.url }));
@@ -6250,7 +6299,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   };
 
   const reabrirSolicitud = () => {
-    const { status: destino, campo, revision } = pasoDelRechazo(solicitud);
+    const { status: destino, campo, revision, reiniciaDirector } = pasoDelRechazo(solicitud);
     const cambios = {
       status: destino,
       historialEstados: empujarHistorial(destino),
@@ -6262,6 +6311,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       cambios.ultimoRechazo = { nombre: solicitud.firmas[campo].nombre, observacion: solicitud.firmas[campo].observacion, fecha: solicitud.firmas[campo].fecha };
     }
     if (campo) cambios.firmas = { ...solicitud.firmas, [campo]: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null } };
+    // rechazo de Compras: lo corrige el solicitante (agrega ítems, ajusta datos) y el director vuelve a aprobar
+    if (reiniciaDirector) cambios.firmas = { ...(cambios.firmas || solicitud.firmas), director: { aprobado: null, nombre: null, fecha: null, observacion: "", fotoUrl: null } };
     if (revision) cambios.revisionCompras = { estado: "pendiente", observacion: "", usuario: "", fecha: "" };
     patch(cambios);
     mostrarToast("Solicitud reabierta para corregir");
@@ -6612,7 +6663,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
               <div className="text-sm text-rose-700">
                 Esta solicitud fue rechazada por {firmaRechazo?.nombre || "—"}.
                 {firmaRechazo?.observacion && <div className="mt-1 italic">"{firmaRechazo.observacion}"</div>}
-                {" "}{deFinanzas ? "Compras puede reabrirla para corregirla: volverá a «Revisión y cotizaciones» para ajustar ítems y cotizaciones y volver a enviarla." : "Si el motivo fue un error que ya se corrigió (ej. en los precios estimados o en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada."}
+                {" "}{deFinanzas ? "Compras puede reabrirla para corregirla: volverá a «Revisión y cotizaciones» para ajustar las cotizaciones. Si falta algún ítem, Compras la rechaza y el solicitante lo agrega." : "Si el motivo fue un error que ya se corrigió (ej. en los precios estimados o en el plan de pagos), puedes reabrirla — volverá al paso donde fue rechazada."}
               </div>
               <button onClick={reabrirSolicitud} className="text-xs bg-rose-600 text-white px-3 py-1.5 rounded-md font-medium shrink-0">Reabrir solicitud</button>
             </div>
@@ -6741,8 +6792,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
         {puedeAgregarItems && <div className="mt-2"><AgregarItemForm tipo={solicitud.tipo} itemsCatalogo={itemsCatalogo} onAgregar={agregarItemSol} /></div>}
       </SeccionColapsable>
 
-      {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
-        <SeccionColapsable titulo="Adjuntar cotizaciones (opcional)" descripcion={<>Si ya tienes una cotización de algún proveedor para un ítem, puedes adjuntarla aquí — le ahorra trabajo a Compras más adelante.</>} acciones={solicitud.items.length > 1 && <button onClick={() => setMostrarCotGeneralCompras(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>} abierto={fases.abierto("adjuntar")} onToggle={() => fases.alternar("adjuntar")}>
+      {(currentUser.id === solicitud.solicitanteId || puedeReabrir(currentUser) || puedeGestionarCotizaciones(currentUser)) && ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status) && (
+        <SeccionColapsable titulo="Adjuntar cotizaciones (opcional)" descripcion={<>Si ya tienes una cotización de algún proveedor para un ítem, puedes adjuntarla aquí — le ahorra trabajo a Compras más adelante.</>} acciones={<button onClick={() => setMostrarCotGeneralCompras(true)} className="text-xs text-slate-600 font-medium flex items-center gap-1 border border-slate-200 rounded-md px-2 py-1"><FileText size={13} /> Cotización general</button>} abierto={fases.abierto("adjuntar")} onToggle={() => fases.alternar("adjuntar")}>
           {mostrarCotGeneralCompras && (
             <CotizacionGeneralForm servicio={solicitud.tipo === "servicio"} items={solicitud.items} proveedores={proveedores} guardarProveedor={guardarProveedor} onAplicar={aplicarCotizacionGeneralCompras} onCerrar={() => setMostrarCotGeneralCompras(false)} />
           )}
@@ -6823,10 +6874,25 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
       {(solicitud.ocEnviada?.ordenesProveedor || []).some((o) => o.archivoFirmadoUrl) && (
         <SeccionColapsable icono={FileText} titulo="Copia de la orden enviada al proveedor" abierto={fases.abierto("copia")} onToggle={() => fases.alternar("copia")}>
           {(solicitud.ocEnviada.ordenesProveedor || []).filter((o) => o.archivoFirmadoUrl).map((o, i) => (
-            <div key={i} className="text-sm text-slate-600 flex items-center gap-2">
-              <Truck size={13} className="text-slate-400" /> {o.proveedorNombre} — <EnlacePrivado path={o.archivoFirmadoUrl} className="text-indigo-600 underline">Ver / descargar PDF firmado</EnlacePrivado>
+            <div key={i} className="text-sm text-slate-600 space-y-1.5">
+              <div className="flex items-center gap-2 flex-wrap">
+                <Truck size={13} className="text-slate-400" /> {o.proveedorNombre} — <EnlacePrivado path={o.archivoFirmadoUrl} className="text-indigo-600 underline">Ver / descargar PDF firmado</EnlacePrivado>
+              </div>
+              <div className="pl-5 flex items-center gap-2 flex-wrap text-xs">
+                <span className="text-slate-500">Aceptada por el Proveedor o Contratista:</span>
+                {o.archivoAceptadoUrl ? (
+                  <>
+                    <EnlacePrivado path={o.archivoAceptadoUrl} className="text-emerald-700 underline">Ver documento firmado por el proveedor</EnlacePrivado>
+                    <span className="text-slate-400">{o.aceptadaPor ? `subido por ${o.aceptadaPor}` : ""}{o.aceptadaFecha ? ` el ${o.aceptadaFecha}` : ""}</span>
+                    {puedeSubirAceptada && <button onClick={() => guardarAceptada(o, "")} className="text-slate-400 hover:text-rose-500 underline">Quitar</button>}
+                  </>
+                ) : puedeSubirAceptada ? (
+                  <AdjuntarArchivo small nombre={null} label="Subir la orden firmada por el proveedor" carpeta="ordenes-aceptadas" onSeleccionar={(url) => guardarAceptada(o, url)} />
+                ) : <span className="text-amber-600">Pendiente: la sube Compras o el solicitante.</span>}
+              </div>
             </div>
           ))}
+          <div className="text-[11px] text-slate-400">El proveedor firma en el recuadro «Aceptada por el Proveedor o Contratista» y el documento firmado queda guardado aquí como resguardo de su aceptación; también se consulta en la Gestión integral de OC/OS/OT.</div>
         </SeccionColapsable>
       )}
 
@@ -6842,6 +6908,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           solicitud={solicitud}
           empresa={empresa}
           proveedores={proveedores}
+          usuarios={usuarios}
           currentUser={currentUser}
           onGuardar={(ev) => patch({ evaluacionProveedor: ev })}
         />
@@ -8374,7 +8441,7 @@ export default function App() {
         ) : tab === "evalProveedores" && puedeVerEvaluaciones(currentUser) ? (
           <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
-          <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} />
+          <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} currentUser={currentUser} onActualizar={actualizarSolicitud} />
         ) : tab === "planInversion" && puedeVerPlanInversion(currentUser) ? (
           <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} onActualizarSolicitud={actualizarSolicitudDB} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
