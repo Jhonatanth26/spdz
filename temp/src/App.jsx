@@ -727,7 +727,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v31d";
+const VERSION_APP = "novedades v32b";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -3706,7 +3706,7 @@ function PlanPagoCotizacion({ pagos, total, onChange, etiqueta, titulo, sinPagoU
   );
 }
 
-function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo, sinIva, tinte }) {
+function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compacto, opcionalTitulo, sinIva, tinte, registro }) {
   // en una solicitud duplicada, las cotizaciones copiadas se muestran abiertas para que se vean (y se pueda agregar un proveedor nuevo)
   const [abierto, setAbierto] = useState(!compacto || (item.cotizaciones || []).some((c) => c.copiadaDe));
   // el "precio final negociado" ya no se digita (se confundía con el descuento): si una cotización antigua lo traía, se convierte en descuento en $
@@ -3755,25 +3755,38 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
 
   // guarda automáticamente lo que ya se alcanzó a escribir (incluido el archivo adjunto), sin depender
   // de que se le dé clic al botón — así nada se pierde si alguien solo adjunta el archivo y no le da "Guardar"
+  const omitirAuto = useRef(false);
+  // ids de cotizaciones que este formulario ya conoce (las que tiene o tuvo). Una cotización que aparece en la solicitud y NO está aquí
+  // (la agregó «Cotización general» mientras este formulario estaba abierto) no se puede perder al guardar lo que escribió el usuario
+  const conocidas = useRef(new Set((item.cotizaciones || []).map((c) => c.id).filter(Boolean)));
+  const conExternas = (lista) => {
+    const externas = (item.cotizaciones || []).filter((c) => c.id && !conocidas.current.has(c.id) && !lista.some((x) => x.id === c.id));
+    return externas.length ? [...lista, ...externas].slice(0, 3) : lista;
+  };
   useEffect(() => {
-    const validas = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
+    cots.forEach((c) => { if (c.id) conocidas.current.add(c.id); });
+    if (omitirAuto.current) { omitirAuto.current = false; return; }
+    const validas = conExternas(cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario));
     onGuardar(item.id, validas);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cots]);
 
-  const guardar = async () => {
-    if (cots.some((c) => c.precioUnitario && !(c.proveedorId || (c.proveedorNombre || "").trim()))) { alert("Toda cotización debe tener el nombre del proveedor. Escríbelo o elimina esa fila."); return; }
+  // con "registro", un único botón de la sección guarda todos los ítems de una vez: cada formulario valida lo suyo y devuelve
+  // sus cotizaciones (sin guardarlas por separado, para que un ítem no pise lo del otro)
+  const guardar = async (opciones) => {
+    const retornar = !!opciones?.retornar;
+    if (cots.some((c) => c.precioUnitario && !(c.proveedorId || (c.proveedorNombre || "").trim()))) { alert(`${item.nombre}: toda cotización debe tener el nombre del proveedor. Escríbelo o elimina esa fila.`); return retornar ? null : undefined; }
     const conPrecioInvalido = cots.find((c) => c.precioUnitario && erroresPrecioCotizacion(item, c).length > 0);
-    if (conPrecioInvalido) { alert(erroresPrecioCotizacion(item, conPrecioInvalido)[0].texto + " Corrígelo antes de guardar."); return; }
+    if (conPrecioInvalido) { alert(`${item.nombre}: ${erroresPrecioCotizacion(item, conPrecioInvalido)[0].texto} Corrígelo antes de guardar.`); return retornar ? null : undefined; }
     // una cotización con datos (proveedor y precio) debe llevar su documento; sin datos no hace falta (se puede crear una solicitud sin cotizaciones)
     const sinArchivo = cots.find((c) => (c.proveedorId || (c.proveedorNombre || "").trim()) && c.precioUnitario && !c.archivoNombre);
     if (sinArchivo) {
       const nombreProv = sinArchivo.proveedorId ? (proveedores.find((p) => p.id === sinArchivo.proveedorId)?.nombre || "el proveedor") : sinArchivo.proveedorNombre.trim();
-      alert(`Falta adjuntar el archivo de la cotización de «${nombreProv}». Para guardar una cotización hay que subir su documento (PDF o foto). Si todavía no la tienes, deja esa fila vacía o elimínala.`);
-      return;
+      alert(`${item.nombre}: falta adjuntar el archivo de la cotización de «${nombreProv}». Para guardar una cotización hay que subir su documento (PDF o foto). Si todavía no la tienes, deja esa fila vacía o elimínala.`);
+      return retornar ? null : undefined;
     }
-    const validasPrevias = cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
-    if (validasPrevias.length === 1 && !(validasPrevias[0].justificacionUnico || "").trim()) { alert("Solo hay una cotización para este ítem: escribe el comentario de por qué solo se cotizó con un proveedor."); return; }
+    const validasPrevias = conExternas(cots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario));
+    if (validasPrevias.length === 1 && !(validasPrevias[0].justificacionUnico || "").trim()) { alert(`${item.nombre}: solo hay una cotización para este ítem. Escribe el comentario de por qué solo se cotizó con un proveedor.`); return retornar ? null : undefined; }
     let listaCots = [...cots];
     // los proveedores escritos a mano (sin elegirlos del catálogo) también quedan guardados ahí,
     // y la cotización queda vinculada a su ID real (no solo al nombre) para que el envío de correo no falle
@@ -3795,11 +3808,21 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
         }
       }
     }
+    if (retornar) omitirAuto.current = true;
     setCots(listaCots);
-    const validas = listaCots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario);
+    const validas = conExternas(listaCots.filter((c) => (c.proveedorId || c.proveedorNombre) && c.precioUnitario));
+    if (retornar) return validas;
     onGuardar(item.id, validas);
     setGuardadoMsg(true); setTimeout(() => setGuardadoMsg(false), 2500);
   };
+  const guardarRef = useRef(guardar);
+  guardarRef.current = guardar;
+  useEffect(() => {
+    if (!registro) return undefined;
+    registro.current[item.id] = (o) => guardarRef.current(o);
+    return () => { delete registro.current[item.id]; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registro, item.id]);
 
   if (compacto && !abierto) return <button onClick={() => setAbierto(true)} className="text-[11px] text-indigo-600 font-medium flex items-center gap-1"><Paperclip size={11} /> {opcionalTitulo || "Adjuntar cotizaciones"}</button>;
 
@@ -3997,10 +4020,21 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
         );
       })()}
       <div className="text-[11px] text-slate-400 mt-1">Factor = a cuántas {item.unidad} equivale 1 unidad cotizada por el proveedor. El total se calcula con el valor después de descuento.</div>
-      <div className="flex items-center gap-2 mt-2">
-        <button onClick={guardar} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium">Guardar cotizaciones</button>
-        {guardadoMsg && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Cotizaciones guardadas correctamente</span>}
-      </div>
+      {!registro ? (
+        <div className="flex items-center gap-2 mt-2">
+          <button onClick={() => guardar()} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium">Guardar cotizaciones</button>
+          {guardadoMsg && <span className="text-[11px] text-emerald-600 flex items-center gap-1"><CheckCircle2 size={12} /> Cotizaciones guardadas correctamente</span>}
+        </div>
+      ) : <div className="text-[11px] text-slate-400 mt-2">Lo que escribes se va guardando solo. El botón «Guardar cotizaciones» de abajo revisa que todo esté completo.</div>}
+    </div>
+  );
+}
+
+function BotonGuardarCotizaciones({ onClick, ocupado }) {
+  return (
+    <div className="flex items-center gap-3 pt-1">
+      <button onClick={onClick} disabled={ocupado} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium disabled:opacity-50">{ocupado ? "Guardando..." : "Guardar cotizaciones"}</button>
+      <span className="text-[11px] text-slate-400">Guarda y revisa todos los ítems a la vez.</span>
     </div>
   );
 }
@@ -6388,27 +6422,48 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   const anunciar = (texto, para = [], mensajePara, tipo = "ok", opciones) => anunciarCambio({ mostrar: mostrarToast, crearNotificacion, currentUser, solicitud, texto, tipo, opciones, para, mensajePara });
   const usuariosDeRol = (...roles) => usuarios.filter((u) => roles.includes(u.rol));
 
-  const guardarCotizaciones = (itemId, cots) => {
+  const registroCots = useRef({});
+  const [guardandoCots, setGuardandoCots] = useState(false);
+  // botón único de la sección: cada ítem valida y devuelve sus cotizaciones; todo se guarda en un solo cambio
+  const guardarTodasLasCotizaciones = async (aplicar) => {
+    setGuardandoCots(true);
+    try {
+      const mapa = {};
+      for (const [itemId, fn] of Object.entries(registroCots.current)) {
+        const r = await fn({ retornar: true });
+        if (r === null) return;
+        if (r) mapa[itemId] = r;
+      }
+      aplicar(mapa);
+      mostrarToast("Cotizaciones guardadas correctamente", "ok");
+    } finally { setGuardandoCots(false); }
+  };
+  const guardarCotizaciones = (itemId, cots) => guardarCotizacionesLote({ [itemId]: cots });
+  const guardarCotizacionesLote = (mapa) => {
     // el AIU se edita en el panel de costos indirectos: el formulario de cotización guarda todo lo demás pero conserva
     // el AIU que ya esté guardado (si no, cualquier cambio en el formulario borraría lo que se puso en el panel)
-    const previas = solicitud.items.find((i) => i.id === itemId)?.cotizaciones || [];
-    const fusionadas = cots.map((c) => {
-      const previa = (c.id && previas.find((x) => x.id === c.id)) || previas.find((x) => !x.id && x.proveedorId === c.proveedorId && x.precioUnitario === c.precioUnitario);
-      return previa && previa.aiu ? { ...c, aiu: previa.aiu } : c;
-    });
     const cambios = [];
-    if (enCambioDeOrden) {
-      const numItem = solicitud.items.findIndex((i) => i.id === itemId) + 1;
-      const nombreItem = solicitud.items.find((i) => i.id === itemId)?.nombre || "";
-      fusionadas.forEach((c) => {
-        const previa = (c.id && previas.find((x) => x.id === c.id)) || previas.find((x) => x.proveedorId === c.proveedorId);
-        const antes = previa ? precioFinalEfectivo(previa) : 0; const despues = precioFinalEfectivo(c);
-        if (previa && Math.round(antes) !== Math.round(despues)) cambios.push(`Ítem ${numItem} «${nombreItem}», cotización de ${c.proveedorNombre || "proveedor"}: precio ${fmt(antes)} → ${fmt(despues)}`);
-        else if (!previa) cambios.push(`Ítem ${numItem} «${nombreItem}»: nueva cotización de ${c.proveedorNombre || "proveedor"} por ${fmt(despues)}`);
+    const fusionadasPorItem = {};
+    Object.entries(mapa).forEach(([itemId, cots]) => {
+      const previas = solicitud.items.find((i) => i.id === itemId)?.cotizaciones || [];
+      const fusionadas = cots.map((c) => {
+        const previa = (c.id && previas.find((x) => x.id === c.id)) || previas.find((x) => !x.id && x.proveedorId === c.proveedorId && x.precioUnitario === c.precioUnitario);
+        return previa && previa.aiu ? { ...c, aiu: previa.aiu } : c;
       });
-    }
+      fusionadasPorItem[itemId] = fusionadas;
+      if (enCambioDeOrden) {
+        const numItem = solicitud.items.findIndex((i) => i.id === itemId) + 1;
+        const nombreItem = solicitud.items.find((i) => i.id === itemId)?.nombre || "";
+        fusionadas.forEach((c) => {
+          const previa = (c.id && previas.find((x) => x.id === c.id)) || previas.find((x) => x.proveedorId === c.proveedorId);
+          const antes = previa ? precioFinalEfectivo(previa) : 0; const despues = precioFinalEfectivo(c);
+          if (previa && Math.round(antes) !== Math.round(despues)) cambios.push(`Ítem ${numItem} «${nombreItem}», cotización de ${c.proveedorNombre || "proveedor"}: precio ${fmt(antes)} → ${fmt(despues)}`);
+          else if (!previa) cambios.push(`Ítem ${numItem} «${nombreItem}»: nueva cotización de ${c.proveedorNombre || "proveedor"} por ${fmt(despues)}`);
+        });
+      }
+    });
     const extra = cambios.length ? { ocEnviada: { ...solicitud.ocEnviada, cambiosLog: [...(solicitud.ocEnviada?.cambiosLog || []), ...cambios.map((texto) => ({ id: nextId(), tipo: "precio", fecha: ahoraISO(), usuario: currentUser.nombre, texto }))] } } : {};
-    patch({ items: solicitud.items.map((i) => (i.id === itemId ? { ...i, cotizaciones: fusionadas, ...reconciliarSeleccion(i, fusionadas, solicitud.tipo === "servicio") } : i)), ...extra });
+    patch({ items: solicitud.items.map((i) => (i.id in fusionadasPorItem ? { ...i, cotizaciones: fusionadasPorItem[i.id], ...reconciliarSeleccion(i, fusionadasPorItem[i.id], solicitud.tipo === "servicio") } : i)), ...extra });
   };
   const [mostrarCotGeneralCompras, setMostrarCotGeneralCompras] = useState(false);
   // aplica una misma cotización (proveedor + archivo) a varios ítems a la vez, cada uno con su propio precio
@@ -6474,7 +6529,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
     const s = solicitud.status;
     // notifica a TODOS los usuarios de un rol (para Dirección Financiera/Gerencia, que suelen ser varios)
     if (s === "aprobacion_director") { patch({ status: "cotizando", prioridad: prioridadSel, firmas: { ...solicitud.firmas, director: firmar() }, historialEstados: empujarHistorial("cotizando"), notificaciones: notificar(`Correo simulado a Compras: solicitud ${solicitud.folio} aprobada, lista para cotizar.`) }); anunciar(`✓ Solicitud ${solicitud.folio} aprobada como director de área — enviada a Compras para cotizar`, [...usuariosDeRol("Compras"), solicitante], `La solicitud ${solicitud.folio} ya está aprobada por ${currentUser.nombre} y lista para cotizar.`); }
-    else if (s === "cotizando" && todasCotizadas) { patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") }); anunciar(`Cuadro comparativo de ${solicitud.folio} generado — pasa a aprobación`, [solicitante], `El cuadro comparativo de ${solicitud.folio} fue generado por ${currentUser.nombre}.`); }
+    else if (s === "cotizando" && todasCotizadas) { patch({ status: "comparativo", historialEstados: empujarHistorial("comparativo") }); anunciar(`Cuadro comparativo de ${solicitud.folio} generado. Falta un último paso: revísalo y pulsa el botón del final para enviarla a aprobación.`, [], "", "alerta", { duracion: 9000, onClick: () => setTimeout(irAlBotonPrincipal, 50) }); setTimeout(irAlBotonPrincipal, 400); }
     else if (s === "comparativo") {
       if (seleccionSinJustificar) { mostrarToast("Falta la justificación de elegir un proveedor que no es el recomendado por el sistema (en el cuadro comparativo).", "alerta", { duracion: 7000 }); return; }
       const next = requiereDireccion(total) ? "aprobacion_financiera" : requiereGerencia(total) ? "aprobacion_gerencia" : "orden";
@@ -6794,9 +6849,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
           <ControlExpandirTodo n={solicitud.items.length} onTodos={abAdj.todos} />
           {solicitud.items.map((it, idx) => (
             <ItemColapsable key={it.id} abierto={abAdj.abierto(it.id)} onToggle={() => abAdj.alternar(it.id)} numero={idx + 1} titulo={it.nombre} tinte={tinteItem(idx)} resumen={<span>{(it.cotizaciones || []).length} cotización(es)</span>}>
-              <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, cotizaciones: cots } : x)) })} compacto sinIva={solicitud.tipo === "servicio"} />
+              <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={(_, cots) => patch({ items: solicitud.items.map((x) => (x.id === it.id ? { ...x, cotizaciones: cots } : x)) })} compacto sinIva={solicitud.tipo === "servicio"} registro={registroCots} />
             </ItemColapsable>
           ))}
+          <BotonGuardarCotizaciones ocupado={guardandoCots} onClick={() => guardarTodasLasCotizaciones((mapa) => patch({ items: solicitud.items.map((x) => (x.id in mapa ? { ...x, cotizaciones: mapa[x.id] } : x)) }))} />
         </SeccionColapsable>
       )}
 
@@ -6824,9 +6880,10 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
             <ItemColapsable key={it.id} abierto={abCot.abierto(it.id)} onToggle={() => abCot.alternar(it.id)} numero={idxIt + 1} titulo={it.nombre} tinte={tinteItem(idxIt)}
               resumen={<span>{(it.cotizaciones || []).length} cotización(es)</span>}
               insignia={itemConPrecioInvalido(it) ? <Badge tone="red">Revisar precio</Badge> : cotizacionUnicaSinJustificar(it) ? <Badge tone="amber">Falta comentario</Badge> : null}>
-              <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} sinIva={solicitud.tipo === "servicio"} />
+              <CotizacionForm item={it} proveedores={proveedores} guardarProveedor={guardarProveedor} onGuardar={guardarCotizaciones} sinIva={solicitud.tipo === "servicio"} registro={registroCots} />
             </ItemColapsable>
           ))}
+          <BotonGuardarCotizaciones ocupado={guardandoCots} onClick={() => guardarTodasLasCotizaciones(guardarCotizacionesLote)} />
         </SeccionColapsable>
       )}
 
@@ -6937,6 +6994,7 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
 
       {solicitud.status !== "completada" && solicitud.status !== "rechazada" && autorizado && (
         <div id="zona-accion-principal" className={`space-y-2 rounded-xl p-2 -m-2 transition-shadow ${resaltarAccion ? "ring-4 ring-indigo-300 bg-indigo-50/60" : ""}`}>
+          {solicitud.status === "comparativo" && <div className="text-xs text-amber-800 bg-amber-50 border border-amber-300 rounded-lg px-3 py-2">Último paso: revisa el cuadro comparativo y pulsa <b>«{accionLabel(solicitud, total)}»</b> para enviarla a quien debe aprobarla. Mientras no lo hagas, la solicitud sigue aquí y a nadie más le aparece para aprobar.</div>}
           {solicitud.status === "aprobacion_financiera" && planesTodosConfirmados(solicitud) && <div className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2 flex items-center gap-1.5"><CheckCircle2 size={14} /> Los planes de pago de todos los ítems están confirmados: ya puedes continuar.</div>}
           {solicitud.status === "aprobacion_director" && (
             <div>
