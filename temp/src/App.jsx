@@ -8429,4 +8429,166 @@ export default function App() {
         </div>
 
         {menuExpandido ? (
-          <button onClick={() => toggleGrupo("misSolicitudes")} className="flex items-center justify-between px-2 mt-1 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slat
+          <button onClick={() => toggleGrupo("misSolicitudes")} className="flex items-center justify-between px-2 mt-1 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
+            <span>Solicitudes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misSolicitudes ? "rotate-90" : ""}`} />
+          </button>
+        ) : <div className="mt-1" />}
+        {(gruposAbiertos.misSolicitudes || !menuExpandido) && (
+          <>
+            <button title="Nueva solicitud" onClick={() => { setBorrador(null); setCreando(true); setAbierta(null); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left mb-1 ${!menuExpandido ? "justify-center px-2" : ""} ${creando ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+              <Plus size={16} className="shrink-0" /> {menuExpandido && "Nueva solicitud"}
+            </button>
+            <NavBtn id="solicitudes" icon={ListChecks} label={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
+          </>
+        )}
+
+        {(puedeVerMisPendientes(currentUser) || puedeAprobarFinanciera(currentUser)) && (
+          <>
+            {menuExpandido ? (
+              <button onClick={() => toggleGrupo("misPendientes")} className="flex items-center justify-between px-2 mt-3 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
+                <span>Pendientes</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.misPendientes ? "rotate-90" : ""}`} />
+              </button>
+            ) : <div className="mt-3" />}
+            {(gruposAbiertos.misPendientes || !menuExpandido) && (
+              <>
+                {puedeVerMisPendientes(currentUser) && <NavBtn id="misPendientes" icon={Clock} label="Pendientes" badge={solicitudesMisPendientes.length} />}
+                {puedeAprobarFinanciera(currentUser) && <NavBtn id="porFirmar" icon={PenTool} label="Órdenes por firmar" badge={solicitudesPorFirmar.length} />}
+              </>
+            )}
+          </>
+        )}
+
+        {menuExpandido ? (
+          <button onClick={() => toggleGrupo("gestion")} className="flex items-center justify-between px-2 mt-3 mb-0.5 w-full text-[10px] font-semibold text-slate-400 uppercase tracking-wide hover:text-slate-600">
+            <span>Gestión de la información</span><ChevronRight size={11} className={`transition-transform ${gruposAbiertos.gestion ? "rotate-90" : ""}`} />
+          </button>
+        ) : <div className="mt-3" />}
+        {(gruposAbiertos.gestion || !menuExpandido) && (
+          <>
+            <NavBtn id="dashboard" icon={LayoutDashboard} label="Gestión de Presupuesto" />
+            <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
+            {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
+            {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Gestión integral de OC/OS/OT" />}
+            {puedeVerPlanInversion(currentUser) && <NavBtn id="planInversion" icon={DollarSign} label="Cronograma de pagos" />}
+            {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
+          </>
+        )}
+
+        <div className="mt-auto pt-4 border-t border-slate-100">
+          <button title="Mi perfil" onClick={() => { setPerfil(true); setAbierta(null); setCreando(false); }} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-100 w-full mb-1 ${!menuExpandido ? "justify-center" : ""}`}><UserCircle size={13} className="shrink-0" /> {menuExpandido && "Mi perfil"}</button>
+          {menuExpandido && (
+            <div className="px-2 mb-2">
+              <div className="text-sm font-medium text-slate-700 truncate">{currentUser.nombre}</div>
+              <div className="text-[11px] text-slate-400 truncate" title={[areas.find((a) => a.id === currentUser.areaId)?.nombre, ...(currentUser.areasAdicionales || []).map((id) => areas.find((a) => a.id === id)?.nombre)].filter(Boolean).join(", ")}>
+                {currentUser.rol} · {[areas.find((a) => a.id === currentUser.areaId)?.nombre, ...(currentUser.areasAdicionales || []).map((id) => areas.find((a) => a.id === id)?.nombre)].filter(Boolean).join(", ")}
+              </div>
+            </div>
+          )}
+          <button title="Cerrar sesión" onClick={() => { cerrarSesion(); setAbierta(null); setCreando(false); }} className={`flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-slate-500 hover:bg-slate-100 w-full ${!menuExpandido ? "justify-center" : ""}`}><LogOut size={13} className="shrink-0" /> {menuExpandido && "Cerrar sesión"}</button>
+          {menuExpandido && <div className="text-[11px] text-slate-400 px-2 leading-relaxed mt-2">Umbral Dir. Financiera: {fmt(UMBRAL_DIRECCION)}<br />Umbral Gerencia: {fmt(UMBRAL_GERENCIA)}<br /><span className="text-slate-300">Versión: {VERSION_APP}</span></div>}
+        </div>
+      </aside>
+
+      <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="flex justify-end items-center gap-2 px-4 pt-3 shrink-0">
+          <BotonPaleta tema={temaActual} onElegir={elegirTema} />
+          <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onBorrar={eliminarNoti} onBorrarTodas={borrarTodasNotis} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
+        </div>
+
+      <main className="flex-1 p-6 pt-2 overflow-auto">
+        {MODO_DEMO && (
+          <div className="no-print flex items-center gap-3 flex-wrap bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-lg px-3 py-2 mb-3">
+            <b>Versión de prueba</b>
+            <span>Datos de ejemplo — no ingreses información real.</span>
+            <label className="flex items-center gap-1.5 ml-auto">Ver como:
+              <select value={currentUser.rol} onChange={async (e) => { await actualizarPerfil({ rol: e.target.value }); setTab("solicitudes"); setAbierta(null); setCreando(false); setPerfil(false); }} className="border border-amber-300 rounded-md px-1.5 py-1 bg-white text-slate-700">
+                {ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </label>
+            <button onClick={async () => { if (!window.confirm("¿Borrar todas las solicitudes de prueba y empezar de cero?")) return; const { error } = await supabase.rpc("demo_restablecer"); if (error) alert("No se pudo restablecer: " + error.message); else window.location.reload(); }} className="bg-white border border-amber-300 text-amber-800 px-2 py-1 rounded-md font-medium">Restablecer demo</button>
+          </div>
+        )}
+        {empresas.some((e) => e.logoUrl) && (
+          <div className="no-print flex items-center justify-end gap-6 pb-2 mb-3 border-b border-slate-200">
+            {empresas.filter((e) => e.logoUrl).map((e) => <img key={e.id} src={e.logoUrl} alt={e.nombre} title={e.nombre} className="h-10 max-w-[140px] object-contain" />)}
+          </div>
+        )}
+        {creando ? (
+          <NuevaSolicitud areas={areas} departamentos={departamentos} empresas={empresas} itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} proveedores={proveedores} guardarProveedor={guardarProveedor} conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} usuarios={usuarios} currentUser={currentUser} solicitudes={solicitudes} onCrear={crearSolicitud} onCancel={() => { setCreando(false); setBorrador(null); }} borrador={borrador} key={borrador?.clave || "nueva"} />
+        ) : perfil ? (
+          <PerfilUsuario currentUser={currentUser} onGuardar={guardarPerfil} onCambiarContrasena={cambiarContrasena} tema={temaActual} onElegirTema={elegirTema} />
+        ) : solicitudAbierta ? (
+          <SolicitudDetalle solicitudes={solicitudes} guardarItemCatalogo={guardarItemCatalogo} solicitud={solicitudAbierta} areas={areas} departamentos={departamentos} empresas={empresas} usuarios={usuarios} proveedores={proveedores} guardarProveedor={guardarProveedor} itemsCatalogo={itemsCatalogo} conceptosGasto={conceptosGasto} historico={historico} setHistorico={setHistorico} currentUser={currentUser} onUpdate={actualizarSolicitud} onEliminar={eliminarSolicitud} onDuplicar={setDuplicando} onVolver={() => setAbierta(null)} crearNotificacion={crearNotiUsuario} />
+        ) : tab === "dashboard" ? (
+          <Dashboard areas={areas} solicitudes={solicitudesVisibles} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onVerCalendario={puedeVerPlanInversion(currentUser) ? () => setTab("planInversion") : undefined} />
+        ) : tab === "misPendientes" && puedeVerMisPendientes(currentUser) ? (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">Mis pendientes</h2>
+              <p className="text-xs text-slate-400 mt-1">Solicitudes que están esperando una acción tuya en este momento, según tu rol.</p>
+            </div>
+            {solicitudesMisPendientes.length ? (
+              <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} onDuplicar={setDuplicando} />
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No tienes solicitudes pendientes de tu acción en este momento.</div>
+            )}
+          </div>
+        ) : tab === "porFirmar" && puedeAprobarFinanciera(currentUser) ? (
+          <div className="space-y-4">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-800">Órdenes por firmar</h2>
+              <p className="text-xs text-slate-400 mt-1">Solicitudes en el paso "Orden generada" que tienen al menos una orden de proveedor pendiente de tu firma.</p>
+            </div>
+            {solicitudesPorFirmar.length ? (
+              <ListaSolicitudes solicitudes={solicitudesPorFirmar} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} onDuplicar={setDuplicando} />
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-sm text-slate-400">No hay órdenes pendientes de firma en este momento.</div>
+            )}
+          </div>
+        ) : tab === "estadisticas" ? (
+          <Estadisticas solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} proveedores={proveedores} />
+        ) : tab === "evalProveedores" && puedeVerEvaluaciones(currentUser) ? (
+          <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
+        ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
+          <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} currentUser={currentUser} onActualizar={actualizarSolicitud} />
+        ) : tab === "planInversion" && puedeVerPlanInversion(currentUser) ? (
+          <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} onActualizarSolicitud={actualizarSolicitudDB} />
+        ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
+          <Catalogos
+            currentUser={currentUser}
+            solicitudes={solicitudes}
+            empresas={empresas} guardarEmpresa={guardarEmpresa} eliminarEmpresa={eliminarEmpresa}
+            areas={areas} guardarArea={guardarArea} eliminarArea={eliminarArea} guardarAreasLote={guardarAreasLote}
+            departamentos={departamentos} guardarDepartamento={guardarDepartamento} eliminarDepartamento={eliminarDepartamento}
+            proveedores={proveedores} guardarProveedor={guardarProveedor} eliminarProveedor={eliminarProveedor}
+            usuarios={usuarios} guardarUsuario={guardarUsuario} eliminarUsuario={eliminarUsuario} recargarUsuarios={recargarUsuarios} importarProveedores={importarProveedores} unidadesCat={unidadesCat} guardarUnidad={guardarUnidad} eliminarUnidad={eliminarUnidad}
+            itemsCatalogo={itemsCatalogo} guardarItemCatalogo={guardarItemCatalogo} eliminarItemCatalogo={eliminarItemCatalogo}
+            conceptosGasto={conceptosGasto} guardarConceptoGasto={guardarConceptoGasto} eliminarConceptoGasto={eliminarConceptoGasto}
+            permisos={permisos} togglePermiso={togglePermiso} parametros={parametros} guardarParametro={guardarParametro}
+          />
+        ) : (
+          <VistaSolicitudes solicitudes={solicitudesVisibles} areas={areas} empresas={empresas} usuarios={usuarios} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} onDuplicar={setDuplicando} titulo={puedeVerTodasSolicitudes(currentUser) ? "Solicitudes" : "Mis solicitudes"} />
+        )}
+      </main>
+      </div>
+
+      {exportando && !solicitudAbierta && (
+        <div className="print-wrapper-oculto" style={{ display: "none" }}>
+          <OrdenDocumento
+            solicitud={exportando}
+            empresa={empresas.find((e) => e.id === exportando.empresaId)}
+            area={areas.find((a) => a.id === exportando.areaId)}
+            departamento={departamentos.find((d) => d.id === exportando.departamentoId)}
+            solicitante={usuarios.find((u) => u.id === exportando.solicitanteId)}
+            proveedores={proveedores}
+            conceptosGasto={conceptosGasto}
+          />
+        </div>
+      )}
+    </div>
+    {duplicando && <DuplicarModal solicitud={duplicando} onCancelar={() => setDuplicando(null)} onConfirmar={confirmarDuplicado} />}
+    <ToastHost toasts={toasts} onCerrar={cerrarToast} />
+    </UnidadesContext.Provider>
+    </ToastContext.Provider>
+  );
+}
