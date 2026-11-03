@@ -727,7 +727,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v32b";
+const VERSION_APP = "novedades v33";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -2216,7 +2216,8 @@ function reconstruirPlanDesdePeriodos(proyecto, periodos, anio) {
 }
 
 // los cronogramas guardados antes con el nombre "Plan de inversión" se muestran como "Cronograma de Pagos"
-function tituloCronograma(t) { return !t || /inversi/i.test(t) ? "Cronograma de Pagos" : t; }
+// el título del cronograma es fijo: nadie lo cambia desde la pantalla
+function tituloCronograma() { return "Cronograma de Pagos"; }
 function periodoVacio() { return { id: nextId(), mes: "", etiqueta: "Semana", rango: "" }; }
 function proyectoVacio(item) { return { id: nextId(), item, nombre: "", valores: {}, destacado: false, solicitudId: null }; }
 
@@ -2340,29 +2341,66 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
 
   // arma automáticamente una fila por cada solicitud real de la empresa/año del plan que todavía
   // no esté vinculada — no duplica las que ya existen, y no toca las filas manuales que haya
-  const generarDesdeSolicitudes = () => {
-    const yaVinculadas = new Set(plan.proyectos.map((p) => p.solicitudId).filter(Boolean));
+  // solicitudes que se pueden sumar a un cronograma: de su empresa, con pagos en su año y que no estén ya en él
+  const ESTADOS_OC = ["oc_enviada", "recepcion", "completada"];
+  const candidatasDe = (p, soloConOrdenEnviada) => {
+    const yaVinculadas = new Set(p.proyectos.map((x) => x.solicitudId).filter(Boolean));
     const anioTieneAlgunPago = (s) => {
       const fechas = s.items.flatMap((it) => tramosDePago(planConfirmadoItem(s, it) ? planOficialItem(s, it) : planSugeridoItem(s, it)).filter((t) => parseFloat(t.valor) > 0 && t.fecha).map((t) => t.fecha));
-      if (fechas.length) return fechas.some((f) => f.startsWith(String(plan.anio)));
-      return (s.fechaEstimada || s.fechaCreacion || "").startsWith(String(plan.anio));
+      if (fechas.length) return fechas.some((f) => f.startsWith(String(p.anio)));
+      return (s.fechaEstimada || s.fechaCreacion || "").startsWith(String(p.anio));
     };
-    const candidatas = solicitudes.filter((s) =>
-      !["rechazada"].includes(s.status) &&
-      (!plan.empresaId || s.empresaId === plan.empresaId) &&
+    return solicitudes.filter((s) =>
+      s.status !== "rechazada" &&
+      (!soloConOrdenEnviada || ESTADOS_OC.includes(s.status)) &&
+      (!p.empresaId || s.empresaId === p.empresaId) &&
       anioTieneAlgunPago(s) &&
       !yaVinculadas.has(s.id)
     );
-    if (!candidatas.length) { alert("No hay solicitudes nuevas por agregar (de esta empresa y año) que no estén ya en el plan."); return; }
-    let periodos = [...plan.periodos];
-    let siguienteItem = (plan.proyectos.reduce((max, p) => Math.max(max, parseFloat(p.item) || 0), 0)) + 1;
+  };
+  const planConNuevas = (p, candidatas) => {
+    let periodos = [...p.periodos];
+    let siguienteItem = (p.proyectos.reduce((max, x) => Math.max(max, parseFloat(x.item) || 0), 0)) + 1;
     const nuevosProyectos = candidatas.map((s) => {
-      const r = distribuirPagosEnPeriodos(s, periodos, plan.anio);
+      const r = distribuirPagosEnPeriodos(s, periodos, p.anio);
       periodos = r.periodos;
       return { id: nextId(), item: siguienteItem++, nombre: `${s.folio} — ${s.objetivo}`, valores: r.valores, destacado: false, solicitudId: s.id };
     });
-    actualizarPlan({ periodos, proyectos: [...plan.proyectos, ...nuevosProyectos] });
+    return { ...p, periodos, proyectos: [...p.proyectos, ...nuevosProyectos] };
   };
+  const generarDesdeSolicitudes = () => {
+    const candidatas = candidatasDe(plan, false);
+    if (!candidatas.length) { alert("No hay solicitudes nuevas por agregar a este cronograma. Solo se agregan las de la misma empresa y con pagos en el año del cronograma (si la orden es de otra empresa o de otro año, está en el cronograma de esa empresa/año)."); return; }
+    const nuevo = planConNuevas(plan, candidatas);
+    actualizarPlan({ periodos: nuevo.periodos, proyectos: nuevo.proyectos });
+  };
+
+  // automático: cada orden ya enviada al proveedor entra sola al cronograma de su empresa (y año), sin pulsar nada.
+  // Si la empresa aún no tiene cronograma, se crea (solo quien tiene permiso para crearlos).
+  const intentadasAuto = useRef(new Set());
+  useEffect(() => {
+    if (cargando || !puedeEditar || !solicitudes?.length) return;
+    planes.forEach((p) => {
+      if (planLocal?.id === p.id && guardarTimer.current) return; // hay cambios a mano sin guardar: no se pisan
+      const nuevas = candidatasDe(p, true).filter((sol) => !intentadasAuto.current.has(`${p.id}:${sol.id}`));
+      if (!nuevas.length) return;
+      nuevas.forEach((sol) => intentadasAuto.current.add(`${p.id}:${sol.id}`));
+      const nuevo = planConNuevas(p, nuevas);
+      guardarPlanDB(nuevo);
+      if (planLocal?.id === p.id) setPlanLocal(nuevo);
+    });
+    if (puedeCrear) {
+      empresas.forEach((e) => {
+        if (planes.some((p) => p.empresaId === e.id) || intentadasAuto.current.has(`empresa:${e.id}`)) return;
+        const base = { id: nextId(), titulo: "Cronograma de Pagos", empresaId: e.id, anio: new Date().getFullYear(), periodos: [], proyectos: [] };
+        const nuevas = candidatasDe(base, true);
+        if (!nuevas.length) return;
+        intentadasAuto.current.add(`empresa:${e.id}`);
+        guardarPlanDB(planConNuevas(base, nuevas));
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [solicitudes, planes, cargando, puedeEditar, puedeCrear]);
 
   // empuja los valores (ya ajustados a mano) de una fila vinculada de vuelta al plan de pagos
   // real de la solicitud — deja el plan como "confirmado" ya que viene de un ajuste deliberado
@@ -2443,7 +2481,7 @@ function PlanInversion({ empresas, currentUser, solicitudes, onAbrir, onActualiz
           </div>
           {puedeEditar && (
             <div className="bg-white rounded-xl border border-slate-200 p-4 grid grid-cols-1 md:grid-cols-3 gap-3 no-print">
-              <div><label className="text-[11px] font-medium text-slate-500">Título</label><input value={plan.titulo} onChange={(e) => actualizarPlan({ titulo: e.target.value })} className="w-full mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
+              <div><label className="text-[11px] font-medium text-slate-500">Título</label><div className="w-full mt-1 border border-slate-100 bg-slate-50 text-slate-500 rounded-lg px-2 py-1.5 text-sm">{tituloCronograma(plan.titulo)}</div></div>
               <div><label className="text-[11px] font-medium text-slate-500">Empresa</label><select value={plan.empresaId || ""} onChange={(e) => actualizarPlan({ empresaId: e.target.value })} className="w-full mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm"><option value="">—</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
               <div><label className="text-[11px] font-medium text-slate-500">Año</label><input type="number" value={plan.anio} onChange={(e) => actualizarPlan({ anio: e.target.value })} className="w-full mt-1 border border-slate-200 rounded-lg px-2 py-1.5 text-sm" /></div>
             </div>
@@ -6480,6 +6518,8 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
   // al cambiar el proveedor de un ítem, su plan de pagos pasa a ser el que ese proveedor cotizó (pago único / por etapas / anticipo),
   // ajustado al nuevo total. Si el plan ya estaba confirmado, queda por confirmar de nuevo, porque era el de otro proveedor.
   const seleccionarCotizaciones = (asignaciones, obs) => {
+    // elegir el proveedor del cuadro comparativo es solo de Compras, y solo mientras la orden no se haya generado
+    if (!puedeGestionarCotizaciones(currentUser) || comparativoBloqueado) { mostrarToast("Solo Compras puede elegir el proveedor del cuadro comparativo.", "alerta"); return; }
     const sinIvaSel = solicitud.tipo === "servicio";
     let planCambiado = false;
     const items = solicitud.items.map((i) => {
@@ -6901,9 +6941,9 @@ function SolicitudDetalle({ solicitud, areas, departamentos, empresas, usuarios,
                     <button type="button" onClick={() => setModoComp("items")} className={`px-2 py-1 rounded text-[11px] font-medium border ${modo === "items" ? "bg-indigo-600 text-white border-indigo-600" : "bg-white text-slate-600 border-slate-200"}`}>Por ítems</button>
                   </div>
                 )}
-                {modo === "general" && <ComparativoGeneral items={solicitud.items} proveedores={proveedores} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} onSeleccionarGeneral={seleccionarCotizaciones} />}
+                {modo === "general" && <ComparativoGeneral items={solicitud.items} proveedores={proveedores} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} soloLectura={comparativoBloqueado || !puedeGestionarCotizaciones(currentUser) || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} onSeleccionarGeneral={seleccionarCotizaciones} />}
                 {modo !== "general" && <ControlExpandirTodo n={solicitud.items.filter((i) => i.cotizaciones.length > 0).length} onTodos={abComp.todos} />}
-                {modo !== "general" && solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} abierto={abComp.abierto(it.id)} onToggle={() => abComp.alternar(it.id)} item={it} tinte={tinteItem(solicitud.items.findIndex((x) => x.id === it.id))} numero={solicitud.items.findIndex((x) => x.id === it.id) + 1} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} />)}
+                {modo !== "general" && solicitud.items.filter((i) => i.cotizaciones.length > 0).map((it) => <ComparativoTabla key={it.id} abierto={abComp.abierto(it.id)} onToggle={() => abComp.alternar(it.id)} item={it} tinte={tinteItem(solicitud.items.findIndex((x) => x.id === it.id))} numero={solicitud.items.findIndex((x) => x.id === it.id) + 1} proveedores={proveedores} onSeleccionar={seleccionarCotizacion} seleccionada={it.cotizacionSeleccionada} soloLectura={comparativoBloqueado || !puedeGestionarCotizaciones(currentUser) || ["aprobacion_jefe", "aprobacion_director"].includes(solicitud.status)} sinIva={solicitud.tipo === "servicio"} ocultarAiu={solicitud.tipo === "servicio" && !aiuVisible(solicitud)} />)}
               </>
             );
           })()}
