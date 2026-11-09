@@ -727,7 +727,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v36";
+const VERSION_APP = "novedades v37";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -2960,7 +2960,7 @@ function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir
   }, []);
 
   const coincidencias = valorTexto.trim()
-    ? proveedores.filter((p) => p.nombre.toLowerCase().includes(valorTexto.trim().toLowerCase())).slice(0, 20)
+    ? proveedores.filter((p) => { const q = valorTexto.trim().toLowerCase(); return [p.nombre, p.suministra, p.categoria, p.nit].some((v) => (v || "").toLowerCase().includes(q)); }).slice(0, 20)
     : proveedores.slice(0, 20);
 
   useEffect(() => { setIndiceActivo(0); }, [valorTexto, abierto]);
@@ -2986,7 +2986,7 @@ function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir
         onChange={(e) => { onEscribir(e.target.value); setAbierto(true); }}
         onFocus={() => setAbierto(true)}
         onKeyDown={manejarTeclas}
-        placeholder="Proveedor — escribe para buscar o crear uno nuevo"
+        placeholder="Proveedor — busca por nombre, servicio/producto o categoría, o crea uno nuevo"
         className="w-full border border-slate-200 rounded-md px-2 py-1.5 text-xs"
       />
       {abierto && coincidencias.length > 0 && (
@@ -2999,7 +2999,8 @@ function AutocompletarProveedor({ proveedores, valorTexto, proveedorId, onElegir
               onClick={() => { onElegir(p); setAbierto(false); }}
               className={`w-full text-left px-3 py-1.5 text-xs ${idx === indiceActivo ? "bg-indigo-50 text-indigo-700" : proveedorId === p.id ? "bg-indigo-50 text-indigo-700 font-medium" : "text-slate-700"}`}
             >
-              {p.nombre}
+              <div>{p.nombre}</div>
+              {(p.categoria || p.suministra) && <div className="text-[10px] text-slate-400 truncate">{[p.categoria, p.suministra].filter(Boolean).join(" · ")}</div>}
             </button>
           ))}
         </div>
