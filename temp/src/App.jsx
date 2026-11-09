@@ -727,7 +727,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v35";
+const VERSION_APP = "novedades v36";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -3077,7 +3077,7 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
       const existente = proveedores.find((p) => p.nombre.trim().toLowerCase() === proveedorNombre.trim().toLowerCase());
       if (existente) idFinal = existente.id;
       else {
-        const creado = await guardarProveedor({ nombre: proveedorNombre.trim(), nit: proveedorNitNuevo.trim(), actividadEconomica: "", contacto: "", email: proveedorEmailNuevo.trim() });
+        const creado = await guardarProveedor({ nombre: proveedorNombre.trim(), nit: proveedorNitNuevo.trim(), actividadEconomica: "", contacto: "", email: proveedorEmailNuevo.trim(), datosPendientes: (proveedorNitNuevo.trim() && proveedorEmailNuevo.trim()) ? "no" : "si" });
         if (creado?.id) idFinal = creado.id;
       }
     }
@@ -3855,7 +3855,7 @@ function CotizacionForm({ item, proveedores, guardarProveedor, onGuardar, compac
         const nitNuevo = (c.proveedorNitNuevo || "").trim();
         const existente = proveedores.find((p) => p.nombre.trim().toLowerCase() === nombreLimpio.toLowerCase());
         if (!existente) {
-          const creado = await guardarProveedor({ nombre: nombreLimpio, nit: nitNuevo, actividadEconomica: "", contacto: "", email: emailNuevo });
+          const creado = await guardarProveedor({ nombre: nombreLimpio, nit: nitNuevo, actividadEconomica: "", contacto: "", email: emailNuevo, datosPendientes: (nitNuevo && emailNuevo) ? "no" : "si" });
           if (creado?.id) listaCots[idx] = { ...c, proveedorId: creado.id, proveedorNombre: "" };
         } else {
           if (emailNuevo && !existente.email) await guardarProveedor({ ...existente, email: emailNuevo });
@@ -7915,9 +7915,9 @@ function Catalogos({
   usuarios, guardarUsuario, eliminarUsuario, recargarUsuarios, importarProveedores,
   itemsCatalogo, guardarItemCatalogo, eliminarItemCatalogo, unidadesCat = [], guardarUnidad, eliminarUnidad,
   conceptosGasto, guardarConceptoGasto, eliminarConceptoGasto,
-  permisos, togglePermiso, parametros = [], guardarParametro,
+  permisos, togglePermiso, parametros = [], guardarParametro, subInicial,
 }) {
-  const [sub, setSub] = useState("empresas");
+  const [sub, setSub] = useState(subInicial || "empresas");
   const { lista: unidadesLista } = React.useContext(UnidadesContext);
   const { datos: motivosRechazoCat, guardar: guardarMotivoCatBase, eliminar: eliminarMotivoCat } = useSupabaseTable('motivos_rechazo', { orderBy: 'nombre' });
   const guardarMotivoCat = (m) => guardarMotivoCatBase((motivosRechazoCat || []).some((x) => x.id === m.id) ? m : { ...m, id: "mot_" + Date.now() });
@@ -7998,10 +7998,11 @@ function Catalogos({
           { key: "representanteLegal", label: "Representante legal" },
           { key: "email", label: "Correo (obligatorio)", requerido: true, alias: ["correo electronico", "corrreo electronico", "correo", "e-mail", "email"] },
           { key: "email2", label: "Correo adicional (opcional)" },
+          { key: "datosPendientes", label: "¿Datos por completar? (lo pone el sistema si el solicitante solo escribió el nombre)", type: "select", options: [{ value: "no", label: "No — completo" }, { value: "si", label: "Sí — Compras debe completarlo" }] },
           { key: "personaNatural", label: "Persona natural (recibe cuenta de cobro, no factura)", type: "select", options: [{ value: "no", label: "No — factura" }, { value: "si", label: "Sí — cuenta de cobro" }] },
         ]}
         datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro} onImportarVarios={importarProveedores}
-        plantilla={{ nombre: "", tipoProveedor: "", suministra: "", categoria: "", nit: "", ciudad: "", direccion: "", telefono: "", contacto: "", representanteLegal: "", email: "", email2: "", personaNatural: "no" }} />}
+        plantilla={{ nombre: "", tipoProveedor: "", suministra: "", categoria: "", nit: "", ciudad: "", direccion: "", telefono: "", contacto: "", representanteLegal: "", email: "", email2: "", personaNatural: "no", datosPendientes: "no" }} />}
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
@@ -8150,8 +8151,8 @@ export default function App() {
     orderBy: 'nombre',
   });
   const { datos: proveedores, cargando: cargandoProveedores, guardar: guardarProveedor, eliminar: eliminarProveedor, guardarVarios: importarProveedores, recargar: recargarProveedores } = useSupabaseTable('proveedores', {
-    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, tipoProveedor: r.tipo_proveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representanteLegal: r.representante_legal, actividadEconomica: r.actividad_economica, suministra: r.servicio_producto || "", categoria: r.categoria || "", contacto: r.contacto, email: r.email, email2: r.email2 }),
-    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, tipo_proveedor: r.tipoProveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representante_legal: r.representanteLegal, actividad_economica: r.actividadEconomica, servicio_producto: r.suministra || null, categoria: r.categoria || null, contacto: r.contacto, email: r.email, email2: r.email2 }),
+    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, tipoProveedor: r.tipo_proveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representanteLegal: r.representante_legal, actividadEconomica: r.actividad_economica, suministra: r.servicio_producto || "", categoria: r.categoria || "", datosPendientes: r.datos_pendientes || "no", contacto: r.contacto, email: r.email, email2: r.email2 }),
+    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, tipo_proveedor: r.tipoProveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representante_legal: r.representanteLegal, actividad_economica: r.actividadEconomica, servicio_producto: r.suministra || null, categoria: r.categoria || null, datos_pendientes: r.datosPendientes || "no", contacto: r.contacto, email: r.email, email2: r.email2 }),
     orderBy: 'nombre',
   });
   const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios, recargar: recargarUsuarios } = useSupabaseTable('usuarios', {
@@ -8209,6 +8210,7 @@ export default function App() {
   const valorUnidades = useMemo(() => ({ lista: unidadesLista }), [unidadesLista]);
   const [tab, setTab] = useState("solicitudes");
   const [abierta, setAbierta] = useState(null);
+  const [catSubInicial, setCatSubInicial] = useState(null);
   // los proveedores los crean y editan varios usuarios: se vuelven a leer al abrir una solicitud, al volver a la pestaña y cada 30 s,
   // para que lo que guardó otro usuario (nombre, NIT…) aparezca sin tener que recargar la página
   useEffect(() => { recargarProveedores(); recargarSolicitudes(); }, [abierta, recargarProveedores, recargarSolicitudes]);
@@ -8529,6 +8531,16 @@ export default function App() {
               <h2 className="text-lg font-semibold text-slate-800">Mis pendientes</h2>
               <p className="text-xs text-slate-400 mt-1">Solicitudes que están esperando una acción tuya en este momento, según tu rol.</p>
             </div>
+            {puedeGestionarCotizaciones(currentUser) && proveedores.some((pv) => pv.datosPendientes === "si") && (
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-2">
+                <div className="text-sm font-semibold text-amber-800">Proveedores nuevos por completar ({proveedores.filter((pv) => pv.datosPendientes === "si").length})</div>
+                <div className="text-xs text-amber-700">Un solicitante escribió estos proveedores solo con el nombre (o sin NIT/correo). Completa su información real en el catálogo; al terminar, cambia «¿Datos por completar?» a «No».</div>
+                <ul className="text-xs text-slate-700 list-disc pl-5">
+                  {proveedores.filter((pv) => pv.datosPendientes === "si").map((pv) => <li key={pv.id}>{pv.nombre}{!pv.nit ? " — falta NIT" : ""}{!pv.email ? " — falta correo" : ""}</li>)}
+                </ul>
+                {puedeVerCatalogos(currentUser) && <button onClick={() => { setCatSubInicial("proveedores"); setTab("catalogos"); setAbierta(null); setCreando(false); setPerfil(false); }} className="text-xs bg-amber-600 text-white px-3 py-1.5 rounded-md font-medium">Completar en el catálogo →</button>}
+              </div>
+            )}
             {solicitudesMisPendientes.length ? (
               <ListaSolicitudes solicitudes={solicitudesMisPendientes} areas={areas} empresas={empresas} proveedores={proveedores} currentUser={currentUser} onAbrir={setAbierta} onExportar={setExportando} onEliminarSeleccionadas={eliminarSolicitudesSeleccionadas} onDuplicar={setDuplicando} />
             ) : (
@@ -8557,6 +8569,7 @@ export default function App() {
           <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} onActualizarSolicitud={actualizarSolicitudDB} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
           <Catalogos
+            subInicial={catSubInicial}
             currentUser={currentUser}
             solicitudes={solicitudes}
             empresas={empresas} guardarEmpresa={guardarEmpresa} eliminarEmpresa={eliminarEmpresa}
