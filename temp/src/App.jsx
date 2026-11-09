@@ -727,7 +727,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v34";
+const VERSION_APP = "novedades v35";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -7988,6 +7988,8 @@ function Catalogos({
         columnas={[
           { key: "nombre", label: "Razón social", alias: ["proveedor", "nombre proveedor", "razon social proveedor"] },
           { key: "tipoProveedor", label: "Tipo de proveedor", type: "select", options: [{ value: "compra", label: "Compra" }, { value: "servicio", label: "Servicio" }, { value: "trabajo", label: "Trabajo" }] },
+          { key: "suministra", label: "Servicio o producto que suministra", alias: ["servicio o producto", "producto o servicio", "suministra", "servicio/producto"] },
+          { key: "categoria", label: "Categoría", alias: ["categoria proveedor"] },
           { key: "nit", label: "NIT" },
           { key: "ciudad", label: "Ciudad" },
           { key: "direccion", label: "Dirección" },
@@ -7999,7 +8001,7 @@ function Catalogos({
           { key: "personaNatural", label: "Persona natural (recibe cuenta de cobro, no factura)", type: "select", options: [{ value: "no", label: "No — factura" }, { value: "si", label: "Sí — cuenta de cobro" }] },
         ]}
         datos={proveedores} onGuardar={guardarProveedor} onEliminar={eliminarProveedorSeguro} onImportarVarios={importarProveedores}
-        plantilla={{ nombre: "", tipoProveedor: "", nit: "", ciudad: "", direccion: "", telefono: "", contacto: "", representanteLegal: "", email: "", email2: "", personaNatural: "no" }} />}
+        plantilla={{ nombre: "", tipoProveedor: "", suministra: "", categoria: "", nit: "", ciudad: "", direccion: "", telefono: "", contacto: "", representanteLegal: "", email: "", email2: "", personaNatural: "no" }} />}
       {sub === "usuarios" && (
         <>
           <div className="text-xs text-slate-400 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
@@ -8148,8 +8150,8 @@ export default function App() {
     orderBy: 'nombre',
   });
   const { datos: proveedores, cargando: cargandoProveedores, guardar: guardarProveedor, eliminar: eliminarProveedor, guardarVarios: importarProveedores, recargar: recargarProveedores } = useSupabaseTable('proveedores', {
-    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, tipoProveedor: r.tipo_proveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representanteLegal: r.representante_legal, actividadEconomica: r.actividad_economica, contacto: r.contacto, email: r.email, email2: r.email2 }),
-    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, tipo_proveedor: r.tipoProveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representante_legal: r.representanteLegal, actividad_economica: r.actividadEconomica, contacto: r.contacto, email: r.email, email2: r.email2 }),
+    desdeDb: (r) => ({ id: r.id, nombre: r.nombre, tipoProveedor: r.tipo_proveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representanteLegal: r.representante_legal, actividadEconomica: r.actividad_economica, suministra: r.servicio_producto || "", categoria: r.categoria || "", contacto: r.contacto, email: r.email, email2: r.email2 }),
+    haciaDb: (r) => ({ id: r.id, nombre: r.nombre, tipo_proveedor: r.tipoProveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representante_legal: r.representanteLegal, actividad_economica: r.actividadEconomica, servicio_producto: r.suministra || null, categoria: r.categoria || null, contacto: r.contacto, email: r.email, email2: r.email2 }),
     orderBy: 'nombre',
   });
   const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios, recargar: recargarUsuarios } = useSupabaseTable('usuarios', {
