@@ -696,6 +696,8 @@ const PERMISOS_DISPONIBLES = [
   { key: "crear_plan_inversion", label: "Crear nuevos cronogramas de pago (botón \"Nuevo plan\")" },
   { key: "editar_plan_inversion", label: "Editar el Cronograma de pagos (fechas y montos)" },
   { key: "editar_pagos_finales", label: "Modificar fechas y montos finales de pago después de emitida la orden (Dirección Financiera / Contabilidad)" },
+  { key: "ver_reportabilidad", label: "Ver todos los reportes a autoridades (Reportabilidad). Quien sea responsable o revisor de un reporte siempre ve el suyo" },
+  { key: "gestionar_reportabilidad", label: "Crear, editar, importar y eliminar reportes a autoridades (Reportabilidad)" },
   { key: "ver_evaluaciones_proveedores", label: "Ver el reporte de Evaluación de proveedores" },
 ];
 
@@ -727,7 +729,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v37";
+const VERSION_APP = "novedades v38";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -778,6 +780,8 @@ const puedeVerMisPendientes = (u) => u.rol === "Administrador" || tienePermiso(u
 const puedeVerCalendarioPagos = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_calendario_pagos");
 const puedeVerOrdenesEnviadas = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_ordenes_enviadas");
 const puedeVerPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_plan_inversion");
+const puedeVerTodosReportes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_reportabilidad") || tienePermiso(u.rol, "gestionar_reportabilidad");
+const puedeGestionarReportes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "gestionar_reportabilidad");
 const puedeCrearPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "crear_plan_inversion");
 const puedeEditarPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "editar_plan_inversion");
 const puedeEditarPagosFinales = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "editar_pagos_finales");
@@ -1438,7 +1442,7 @@ function SelectorPaleta({ tema, onElegir, compacto }) {
 // ---- DIRECCIÓN (URL) SEGÚN LA PANTALLA ----
 // La app es de una sola página: para que la dirección del navegador cambie según la vista (y funcionen F5, el botón «atrás» y los
 // enlaces directos) se usa la parte final de la dirección (#/...). Ej.: #/cronograma-de-pagos, #/solicitud/SOL-1005, #/nueva.
-const RUTAS_PANTALLA = { solicitudes: "solicitudes", misPendientes: "pendientes", porFirmar: "ordenes-por-firmar", dashboard: "presupuesto", estadisticas: "estadisticas", evalProveedores: "evaluacion-proveedores", ordenesEnviadas: "gestion-integral", planInversion: "cronograma-de-pagos", catalogos: "catalogo" };
+const RUTAS_PANTALLA = { solicitudes: "solicitudes", misPendientes: "pendientes", porFirmar: "ordenes-por-firmar", dashboard: "presupuesto", estadisticas: "estadisticas", evalProveedores: "evaluacion-proveedores", ordenesEnviadas: "gestion-integral", planInversion: "cronograma-de-pagos", reportabilidad: "reportabilidad-autoridades", catalogos: "catalogo" };
 function hashDesdeEstado({ tab, folio, creando, perfil }) {
   if (creando) return "#/nueva";
   if (perfil) return "#/perfil";
@@ -8066,7 +8070,394 @@ function Catalogos({
 --------------------------------------------------------- */
 // Campanita de notificaciones dentro de la app — se refresca sola, con contador de no leídas,
 // desplegable con las últimas, clic para ir directo a la solicitud y marcarla leída de una vez.
-function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas, onAbrir, onBorrar, onBorrarTodas }) {
+// ===================== Reportabilidad a autoridades =====================
+// Cada reporte tiene un próximo vencimiento; el semáforo se calcula solo: rojo ≤ 7 días (incluye vencidos), amarillo 8–20, verde > 20.
+const PERIODICIDADES = [
+  { value: "semanal", label: "Semanal", dias: 7 },
+  { value: "mensual", label: "Mensual", meses: 1 },
+  { value: "bimestral", label: "Bimestral", meses: 2 },
+  { value: "trimestral", label: "Trimestral", meses: 3 },
+  { value: "cuatrimestral", label: "Cuatrimestral", meses: 4 },
+  { value: "semestral", label: "Semestral", meses: 6 },
+  { value: "anual", label: "Anual", meses: 12 },
+  { value: "eventual", label: "Cuando haya lugar (sin fecha fija)" },
+];
+const DIAS_REPORTE_ROJO = 7;
+const DIAS_REPORTE_AMARILLO = 20;
+const MESES_REP = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const isoDeFechaLocal = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const hoyLocalISO = () => isoDeFechaLocal(new Date());
+const fechaDeISOLocal = (iso) => { const [a, m, d] = String(iso).slice(0, 10).split("-").map(Number); return new Date(a, m - 1, d); };
+const diasHastaISO = (iso) => Math.round((fechaDeISOLocal(iso) - fechaDeISOLocal(hoyLocalISO())) / 86400000);
+const fechaCortaRep = (iso) => { if (!iso) return "—"; const d = fechaDeISOLocal(iso); return `${d.getDate()}-${MESES_REP[d.getMonth()]}-${String(d.getFullYear()).slice(2)}`; };
+const sumarPeriodoRep = (iso, per) => {
+  const d = fechaDeISOLocal(iso);
+  if (per.dias) d.setDate(d.getDate() + per.dias);
+  else {
+    const dia = d.getDate();
+    d.setDate(1); d.setMonth(d.getMonth() + per.meses);
+    d.setDate(Math.min(dia, new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()));
+  }
+  return isoDeFechaLocal(d);
+};
+// próximo vencimiento al registrar un envío: mantiene el ritmo del reporte (ej. mensual el día 2), sin quedar nunca en el pasado
+const calcularProximoReporte = (r, fechaEnvio) => {
+  const per = PERIODICIDADES.find((p) => p.value === r.periodicidad);
+  if (!per || per.value === "eventual") return "";
+  let prox = sumarPeriodoRep(r.proximoEnvio || fechaEnvio, per);
+  let guardia = 0;
+  while (prox <= fechaEnvio && guardia++ < 60) prox = sumarPeriodoRep(prox, per);
+  return prox;
+};
+const semaforoReporte = (r) => {
+  if (!r.proximoEnvio) return { clave: "nada", dias: null, texto: "Sin fecha" };
+  const dias = diasHastaISO(r.proximoEnvio);
+  const clave = dias <= DIAS_REPORTE_ROJO ? "rojo" : dias <= DIAS_REPORTE_AMARILLO ? "amarillo" : "verde";
+  const texto = dias < 0 ? `Vencido hace ${-dias} d` : dias === 0 ? "Vence hoy" : `Vence en ${dias} d`;
+  return { clave, dias, texto };
+};
+const ESTILO_SEMAFORO = {
+  rojo: { chip: "bg-rose-50 text-rose-700 border-rose-200", dot: "bg-rose-600", nombre: "Rojo · inmediato", ayuda: "7 días o menos, o vencidos" },
+  amarillo: { chip: "bg-amber-50 text-amber-700 border-amber-200", dot: "bg-amber-500", nombre: "Amarillo · segunda prioridad", ayuda: "de 8 a 20 días" },
+  verde: { chip: "bg-emerald-50 text-emerald-700 border-emerald-200", dot: "bg-emerald-500", nombre: "Verde · mediano plazo", ayuda: "más de 20 días" },
+  nada: { chip: "bg-slate-50 text-slate-500 border-slate-200", dot: "bg-slate-400", nombre: "Sin fecha", ayuda: "«cuando haya lugar»" },
+};
+const ORDEN_SEMAFORO = { rojo: 0, amarillo: 1, verde: 2, nada: 3 };
+const esReporteDe = (r, u) => !!u && (r.responsableId === u.id || (r.revisoresIds || []).includes(u.id));
+const textoSinTildes = (t) => String(t ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+
+// avisos de la campanita: reportes propios (como responsable o revisor) en rojo o amarillo
+function alertasDeReportes(reportes, u) {
+  if (!u) return [];
+  return reportes.filter((r) => esReporteDe(r, u)).map((r) => ({ r, s: semaforoReporte(r) })).filter(({ s }) => s.clave === "rojo" || s.clave === "amarillo")
+    .sort((a, b) => a.s.dias - b.s.dias)
+    .map(({ r, s }) => ({
+      id: `rep:${r.id}`, reporteId: r.id, leida: false, creadoEn: new Date().toISOString(),
+      mensaje: `${s.dias < 0 ? `Reporte VENCIDO hace ${-s.dias} día(s)` : s.dias === 0 ? "Reporte que vence HOY" : `Reporte por vencer en ${s.dias} día(s)`}: ${r.autoridad} — ${r.descripcion}`,
+      clave: s.clave,
+    }));
+}
+
+function CampoRep({ label, children, className }) { return <div className={className}><label className="text-[11px] text-slate-500 block mb-0.5">{label}</label>{children}</div>; }
+
+function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, puedeGestionar, puedeVerTodos, onGuardar, onEliminar, onGuardarVarios }) {
+  const [fEmpresa, setFEmpresa] = useState("");
+  const [fResp, setFResp] = useState("");
+  const [fSem, setFSem] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+  const [editando, setEditando] = useState(null);
+  const [registrando, setRegistrando] = useState(null);
+  const [abierto, setAbierto] = useState(null);
+  const [mensaje, setMensaje] = useState("");
+  const [verAvisos, setVerAvisos] = useState(false);
+
+  const nombreResp = (r) => usuarios.find((u) => u.id === r.responsableId)?.nombre || r.responsableTexto || "Sin responsable";
+  const nombresRevisores = (r) => [...(r.revisoresIds || []).map((id) => usuarios.find((u) => u.id === id)?.nombre).filter(Boolean), ...(r.revisoresTexto ? [r.revisoresTexto] : [])].join(", ") || "—";
+  const nombreEmpresa = (id) => empresas.find((e) => e.id === id)?.nombre || "—";
+
+  const visibles = (puedeVerTodos ? reportes : reportes.filter((r) => esReporteDe(r, currentUser))).map((r) => ({ ...r, sem: semaforoReporte(r) }));
+  const q = textoSinTildes(busqueda);
+  const base = visibles.filter((r) =>
+    (!fEmpresa || r.empresaId === fEmpresa) &&
+    (!fResp || nombreResp(r) === fResp) &&
+    (!q || textoSinTildes(`${r.autoridad} ${r.descripcion} ${r.categoria}`).includes(q)));
+  const filas = base.filter((r) => !fSem || r.sem.clave === fSem).sort((a, b) => ORDEN_SEMAFORO[a.sem.clave] - ORDEN_SEMAFORO[b.sem.clave] || (a.sem.dias ?? 1e9) - (b.sem.dias ?? 1e9));
+  const conteo = (c) => base.filter((r) => r.sem.clave === c).length;
+  const carga = Object.values(visibles.reduce((acc, r) => {
+    const n = nombreResp(r); const x = acc[n] || (acc[n] = { nombre: n, rojos: 0, total: 0 });
+    x.total++; if (r.sem.clave === "rojo") x.rojos++; return acc;
+  }, {})).sort((a, b) => b.rojos - a.rojos || b.total - a.total);
+
+  const puedeRegistrar = (r) => puedeGestionar || r.responsableId === currentUser?.id;
+  const nuevoVacio = { id: "", empresaId: empresas[0]?.id || "", autoridad: "", contactoNombre: "", contactoEmail: "", contactoCelular: "", descripcion: "", categoria: "", medioEnvio: "", responsableId: "", responsableTexto: "", revisoresIds: [], revisoresTexto: "", periodicidad: "mensual", ultimoEnvio: "", proximoEnvio: "", historial: [] };
+
+  const guardarForm = () => {
+    if (!editando.autoridad.trim() || !editando.descripcion.trim() || !editando.empresaId) { alert("Falta la empresa, la autoridad o la descripción del reporte."); return; }
+    onGuardar({ ...editando, id: editando.id || nextId() });
+    setEditando(null);
+  };
+
+  const exportarExcel = () => {
+    const filasXls = [["Empresa", "Autoridad", "Contacto", "Email", "Celular", "Descripción del reporte", "Categoría", "Medio de envío", "Responsable", "Revisor", "Periodicidad", "Último envío", "Próximo vencimiento", "Semáforo"],
+      ...filas.map((r) => [nombreEmpresa(r.empresaId), r.autoridad, r.contactoNombre, r.contactoEmail, r.contactoCelular, r.descripcion, r.categoria, r.medioEnvio, nombreResp(r), nombresRevisores(r), PERIODICIDADES.find((p) => p.value === r.periodicidad)?.label || "", r.ultimoEnvio || "", r.proximoEnvio || "", r.sem.texto])];
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, XLSX.utils.aoa_to_sheet(filasXls), "Reportabilidad");
+    XLSX.writeFile(libro, `reportabilidad_autoridades_${hoyLocalISO()}.xlsx`);
+  };
+
+  // ---- importar desde el Excel de reportabilidad (encabezado en dos filas: Contacto → Nombre / Email / Celular) ----
+  const parseFechaTexto = (t) => {
+    const s = String(t ?? "").trim().toLowerCase();
+    if (!s || ["nd", "na", "n/a", "-", "—"].includes(s)) return "";
+    let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (m) return `${m[1]}-${m[2].padStart(2, "0")}-${m[3].padStart(2, "0")}`;
+    m = s.match(/^(\d{1,2})[-\s/]([a-záéíóú]{3,})\.?[-\s/](\d{2,4})$/);
+    if (m) { const mi = MESES_REP.indexOf(textoSinTildes(m[2]).slice(0, 3)); if (mi >= 0) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${String(mi + 1).padStart(2, "0")}-${m[1].padStart(2, "0")}`; }
+    m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+    if (m) return `${m[3].length === 2 ? "20" + m[3] : m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return "";
+  };
+  const periodicidadDeTexto = (t) => {
+    const s = textoSinTildes(t);
+    if (!s) return "";
+    if (s.includes("semanal")) return "semanal";
+    if (s.includes("bimestr")) return "bimestral";
+    if (s.includes("trimestr")) return "trimestral";
+    if (s.includes("cuatrimestr")) return "cuatrimestral";
+    if (s.includes("semestr")) return "semestral";
+    if (s.includes("mensual")) return "mensual";
+    if (s.includes("anual")) return "anual";
+    return "eventual";
+  };
+  const usuarioDeTexto = (t) => {
+    const palabras = textoSinTildes(t).split(/\s+/).filter((p) => p.length > 1);
+    if (!palabras.length) return null;
+    const exactos = usuarios.filter((u) => textoSinTildes(u.nombre) === textoSinTildes(t));
+    if (exactos.length === 1) return exactos[0];
+    const coinciden = usuarios.filter((u) => palabras.every((p) => textoSinTildes(u.nombre).split(/\s+/).includes(p)));
+    return coinciden.length === 1 ? coinciden[0] : null;
+  };
+  const importarExcel = async (file) => {
+    try {
+      const libro = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const matriz = XLSX.utils.sheet_to_json(libro.Sheets[libro.SheetNames[0]], { header: 1, defval: "", raw: false });
+      const idx = matriz.findIndex((f) => f.some((v) => textoSinTildes(v) === "autoridad") && f.some((v) => textoSinTildes(v).startsWith("periodicidad")));
+      if (idx < 0) { setMensaje("No encontré la fila de encabezados (Empresa, Autoridad, Periodicidad…)."); setTimeout(() => setMensaje(""), 7000); return; }
+      const sub = matriz[idx + 1] || [];
+      const tieneSub = sub.some((v) => textoSinTildes(v) === "email" || textoSinTildes(v) === "nombre");
+      const enc = matriz[idx].map((h, i) => textoSinTildes(tieneSub && String(sub[i] ?? "").trim() ? sub[i] : h));
+      const col = (...claves) => enc.findIndex((h) => claves.some((c) => h.includes(c)));
+      const c = { empresa: col("empresa"), autoridad: enc.indexOf("autoridad"), cNombre: col("nombre"), cEmail: col("email", "correo"), cCel: col("celular", "telefono"), desc: col("descripcion"), cat: col("categoria"), medio: col("medio"), resp: col("responsable"), rev: col("revisor"), per: col("periodicidad"), ult: col("ultimo"), prox: col("proximo", "proxima") };
+      const val = (f, i) => (i >= 0 ? String(f[i] ?? "").trim() : "");
+      const sinND = (t) => (["nd", "na", "n/a", "-"].includes(textoSinTildes(t)) ? "" : t);
+      const existentes = new Set(reportes.map((r) => textoSinTildes(`${r.empresaId}|${r.autoridad}|${r.descripcion}`)));
+      const lote = []; let omitidos = 0; const sinUsuario = new Set(); let sinEmpresa = 0;
+      matriz.slice(idx + (tieneSub ? 2 : 1)).forEach((f) => {
+        const autoridad = val(f, c.autoridad); const descripcion = val(f, c.desc);
+        if (!autoridad || !descripcion) return;
+        const txtEmp = textoSinTildes(val(f, c.empresa)).replace(/\s+/g, "");
+        const emp = empresas.find((e) => textoSinTildes(e.nombre).replace(/\s+/g, "") === txtEmp) || empresas.find((e) => txtEmp && (textoSinTildes(e.nombre).replace(/\s+/g, "").includes(txtEmp) || txtEmp.includes(textoSinTildes(e.nombre).replace(/\s+/g, ""))));
+        if (!emp) { sinEmpresa++; return; }
+        if (existentes.has(textoSinTildes(`${emp.id}|${autoridad}|${descripcion}`))) { omitidos++; return; }
+        const textoResp = val(f, c.resp); const resp = usuarioDeTexto(textoResp);
+        if (textoResp && !resp) sinUsuario.add(textoResp);
+        const revisoresIds = []; const revisoresSinMatch = [];
+        val(f, c.rev).split(/,|\sy\s|\//).map((x) => x.trim()).filter((x) => x && textoSinTildes(x) !== "na").forEach((n) => { const u = usuarioDeTexto(n); if (u) revisoresIds.push(u.id); else revisoresSinMatch.push(n); });
+        const periodicidad = periodicidadDeTexto(val(f, c.per)) || "eventual";
+        const ultimoEnvio = parseFechaTexto(val(f, c.ult));
+        let proximoEnvio = parseFechaTexto(val(f, c.prox));
+        const per = PERIODICIDADES.find((p) => p.value === periodicidad);
+        if (!proximoEnvio && ultimoEnvio && per && per.value !== "eventual") proximoEnvio = sumarPeriodoRep(ultimoEnvio, per);
+        lote.push({ id: nextId(), empresaId: emp.id, autoridad, contactoNombre: sinND(val(f, c.cNombre)), contactoEmail: sinND(val(f, c.cEmail)), contactoCelular: sinND(val(f, c.cCel)), descripcion, categoria: val(f, c.cat), medioEnvio: val(f, c.medio), responsableId: resp?.id || "", responsableTexto: resp ? "" : textoResp, revisoresIds, revisoresTexto: revisoresSinMatch.join(", "), periodicidad, ultimoEnvio, proximoEnvio, historial: [] });
+        existentes.add(textoSinTildes(`${emp.id}|${autoridad}|${descripcion}`));
+      });
+      if (lote.length) await onGuardarVarios(lote);
+      setMensaje(`${lote.length} reporte(s) importado(s).${omitidos ? ` ${omitidos} ya existían.` : ""}${sinEmpresa ? ` ${sinEmpresa} fila(s) omitidas porque la empresa no coincide con el catálogo.` : ""}${sinUsuario.size ? ` Responsables que no encontré entre los usuarios (asígnalos editando el reporte): ${[...sinUsuario].slice(0, 6).join(", ")}.` : ""}`);
+      setTimeout(() => setMensaje(""), 15000);
+    } catch (e) { console.error(e); setMensaje("No se pudo leer el archivo Excel."); setTimeout(() => setMensaje(""), 5000); }
+  };
+
+  const inp = "border border-slate-200 rounded-md px-2 py-1.5 text-xs w-full";
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-800">{puedeVerTodos ? "Reportabilidad a autoridades" : "Mis reportes a autoridades"}</h2>
+          <p className="text-xs text-slate-400 mt-1">{puedeVerTodos ? "Reportes periódicos que la Dirección de Operaciones de Zofranca y SPD debe enviar a las autoridades." : "Solo ves los reportes donde eres responsable o revisor."} Hoy: {fechaCortaRep(hoyLocalISO())}.</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button onClick={() => setVerAvisos((v) => !v)} className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Info size={13} /> ¿Cómo funcionan los avisos?</button>
+          <button onClick={exportarExcel} className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><FileText size={13} /> Excel</button>
+          {puedeGestionar && (
+            <label className="text-xs bg-white border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium flex items-center gap-1 cursor-pointer"><UploadIcon size={13} /> Importar Excel
+              <input type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => { if (e.target.files[0]) importarExcel(e.target.files[0]); e.target.value = ""; }} />
+            </label>
+          )}
+          {puedeGestionar && <button onClick={() => setEditando({ ...nuevoVacio })} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-md font-medium flex items-center gap-1"><Plus size={13} /> Nuevo reporte</button>}
+        </div>
+      </div>
+
+      {mensaje && <div className="text-xs bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg px-3 py-2">{mensaje}</div>}
+
+      {verAvisos && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 text-xs text-slate-600 space-y-1.5">
+          <div className="font-semibold text-slate-700">Semáforo y avisos</div>
+          <div>El color se calcula solo con la fecha del próximo vencimiento: <b className="text-rose-700">rojo</b> 7 días o menos (incluye vencidos), <b className="text-amber-700">amarillo</b> de 8 a 20 días y <b className="text-emerald-700">verde</b> más de 20 días.</div>
+          <div>Cuando un reporte tuyo (como responsable o revisor) está en rojo o amarillo, aparece en la <b>campanita</b> y en el menú. El aviso se quita solo cuando registras el envío.</div>
+          <div>Al registrar un envío (con su evidencia) el reporte queda en el historial y el próximo vencimiento se calcula según su periodicidad.</div>
+        </div>
+      )}
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        {["rojo", "amarillo", "verde", "nada"].map((c) => (
+          <button key={c} onClick={() => setFSem(fSem === c ? "" : c)} className={`text-left bg-white rounded-xl border p-3 ${fSem === c ? "border-indigo-500 ring-1 ring-indigo-500" : "border-slate-200"}`}>
+            <div className="flex items-center gap-2 text-xs font-medium text-slate-700"><span className={`w-2.5 h-2.5 rounded-full ${ESTILO_SEMAFORO[c].dot}`} />{ESTILO_SEMAFORO[c].nombre}</div>
+            <div className="text-2xl font-semibold text-slate-800 mt-1">{conteo(c)}</div>
+            <div className="text-[11px] text-slate-400">{ESTILO_SEMAFORO[c].ayuda}</div>
+          </button>
+        ))}
+      </div>
+
+      {puedeVerTodos && carga.length > 1 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-3">
+          <div className="text-xs font-medium text-slate-700 mb-2">Carga por responsable <span className="font-normal text-slate-400">· clic para filtrar</span></div>
+          <div className="flex flex-wrap gap-2">
+            {carga.map((x) => (
+              <button key={x.nombre} onClick={() => setFResp(fResp === x.nombre ? "" : x.nombre)} className={`flex items-center gap-1.5 border rounded-full px-3 py-1 text-xs ${fResp === x.nombre ? "border-indigo-500 bg-indigo-50 text-indigo-700" : "border-slate-200 bg-slate-50 text-slate-700"}`}>
+                <span className="font-medium">{x.nombre}</span>
+                {x.rojos > 0 && <span className="bg-rose-100 text-rose-700 rounded-full px-1.5 font-semibold">{x.rojos}</span>}
+                <span className="text-slate-400">de {x.total}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 flex-wrap">
+        <select value={fEmpresa} onChange={(e) => setFEmpresa(e.target.value)} className="border border-slate-200 rounded-md px-2 py-1.5 text-xs bg-white">
+          <option value="">Todas las empresas</option>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}
+        </select>
+        <input value={busqueda} onChange={(e) => setBusqueda(e.target.value)} placeholder="Buscar autoridad o reporte…" className="border border-slate-200 rounded-md px-2 py-1.5 text-xs bg-white min-w-[220px]" />
+        {(fEmpresa || fResp || fSem || busqueda) && <button onClick={() => { setFEmpresa(""); setFResp(""); setFSem(""); setBusqueda(""); }} className="text-xs text-indigo-600 font-medium">Quitar filtros</button>}
+        <span className="text-[11px] text-slate-400 ml-auto">{filas.length} reporte(s)</span>
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+        {filas.length === 0 ? (
+          <div className="p-8 text-center text-sm text-slate-400">{reportes.length === 0 ? (puedeGestionar ? "Aún no hay reportes. Importa el Excel de reportabilidad o crea uno con «Nuevo reporte»." : "Aún no hay reportes cargados.") : "No hay reportes con esos filtros."}</div>
+        ) : (
+          <table className="w-full text-xs min-w-[1000px]">
+            <thead className="bg-slate-50 text-slate-500 text-left">
+              <tr>
+                <th className="px-3 py-2 font-medium">Semáforo</th><th className="px-3 py-2 font-medium">Empresa</th><th className="px-3 py-2 font-medium">Autoridad</th>
+                <th className="px-3 py-2 font-medium">Reporte</th><th className="px-3 py-2 font-medium">Responsable</th><th className="px-3 py-2 font-medium">Periodicidad</th>
+                <th className="px-3 py-2 font-medium">Último envío</th><th className="px-3 py-2 font-medium">Próximo</th><th className="px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filas.map((r) => (
+                <React.Fragment key={r.id}>
+                  <tr onClick={() => setAbierto(abierto === r.id ? null : r.id)} className="border-t border-slate-100 hover:bg-slate-50 cursor-pointer">
+                    <td className="px-3 py-2 whitespace-nowrap"><span className={`inline-flex items-center gap-1.5 border rounded-full px-2 py-0.5 font-medium ${ESTILO_SEMAFORO[r.sem.clave].chip}`}><span className={`w-2 h-2 rounded-full ${ESTILO_SEMAFORO[r.sem.clave].dot}`} />{r.sem.texto}</span></td>
+                    <td className="px-3 py-2">{nombreEmpresa(r.empresaId)}</td>
+                    <td className="px-3 py-2 font-medium text-slate-700">{r.autoridad}</td>
+                    <td className="px-3 py-2">{r.descripcion}{r.categoria && <div className="text-[10px] text-slate-400">{r.categoria}</div>}</td>
+                    <td className="px-3 py-2">{nombreResp(r)}</td>
+                    <td className="px-3 py-2">{PERIODICIDADES.find((p) => p.value === r.periodicidad)?.label.replace(" (sin fecha fija)", "") || "—"}</td>
+                    <td className="px-3 py-2 whitespace-nowrap">{fechaCortaRep(r.ultimoEnvio)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap font-medium text-slate-700">{fechaCortaRep(r.proximoEnvio)}</td>
+                    <td className="px-3 py-2 whitespace-nowrap text-right" onClick={(e) => e.stopPropagation()}>
+                      {puedeRegistrar(r) && <button onClick={() => setRegistrando({ r, fecha: hoyLocalISO(), proximo: calcularProximoReporte(r, hoyLocalISO()), evidencia: "", nota: "" })} className="text-[11px] border border-indigo-600 text-indigo-600 px-2 py-1 rounded-md font-medium">Registrar envío</button>}
+                    </td>
+                  </tr>
+                  {abierto === r.id && (
+                    <tr className="bg-slate-50/70">
+                      <td colSpan={9} className="px-4 py-3">
+                        <div className="grid md:grid-cols-3 gap-4 text-xs text-slate-600">
+                          <div className="space-y-0.5">
+                            <div className="font-medium text-slate-700">Contacto en la autoridad</div>
+                            <div>{r.contactoNombre || "—"}</div><div>{r.contactoEmail || "—"}</div><div>{r.contactoCelular || "—"}</div>
+                          </div>
+                          <div className="space-y-0.5">
+                            <div className="font-medium text-slate-700">Cómo se envía</div>
+                            <div>{r.medioEnvio || "—"}</div>
+                            <div className="pt-1"><span className="text-slate-400">Revisor(es):</span> {nombresRevisores(r)}</div>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="font-medium text-slate-700">Historial de envíos</div>
+                            {(r.historial || []).length === 0 ? <div className="text-slate-400">Todavía no hay envíos registrados en la aplicación.</div> : (r.historial || []).slice(0, 8).map((h) => (
+                              <div key={h.id} className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium">{fechaCortaRep(h.fecha)}</span><span className="text-slate-400">por {h.porNombre}</span>
+                                {h.evidencia && <EnlacePrivado path={h.evidencia} className="text-indigo-600 underline">evidencia</EnlacePrivado>}
+                                {h.nota && <span className="text-slate-500">· {h.nota}</span>}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        {puedeGestionar && (
+                          <div className="flex gap-3 mt-3">
+                            <button onClick={() => setEditando({ ...nuevoVacio, ...r, sem: undefined })} className="text-xs text-indigo-600 font-medium flex items-center gap-1"><Pencil size={12} /> Editar</button>
+                            <button onClick={() => { if (window.confirm(`¿Eliminar el reporte «${r.descripcion}» de ${r.autoridad}? Se pierde también su historial.`)) onEliminar(r.id); }} className="text-xs text-rose-600 font-medium flex items-center gap-1"><Trash2 size={12} /> Eliminar</button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  )}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {editando && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setEditando(null)}>
+          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-slate-800">{editando.id ? "Editar reporte" : "Nuevo reporte"}</h3>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <CampoRep label="Empresa"><select value={editando.empresaId} onChange={(e) => setEditando({ ...editando, empresaId: e.target.value })} className={inp}>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></CampoRep>
+              <CampoRep label="Autoridad"><input value={editando.autoridad} onChange={(e) => setEditando({ ...editando, autoridad: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Descripción del reporte" className="sm:col-span-2"><input value={editando.descripcion} onChange={(e) => setEditando({ ...editando, descripcion: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Categoría"><input value={editando.categoria} onChange={(e) => setEditando({ ...editando, categoria: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Medio de envío"><input value={editando.medioEnvio} onChange={(e) => setEditando({ ...editando, medioEnvio: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Contacto en la autoridad (nombre)"><input value={editando.contactoNombre} onChange={(e) => setEditando({ ...editando, contactoNombre: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Correo del contacto"><input value={editando.contactoEmail} onChange={(e) => setEditando({ ...editando, contactoEmail: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Celular del contacto"><input value={editando.contactoCelular} onChange={(e) => setEditando({ ...editando, contactoCelular: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Responsable">
+                <select value={editando.responsableId} onChange={(e) => setEditando({ ...editando, responsableId: e.target.value, responsableTexto: e.target.value ? "" : editando.responsableTexto })} className={inp}>
+                  <option value="">{editando.responsableTexto ? `(sin asignar — Excel decía: ${editando.responsableTexto})` : "—"}</option>{[...usuarios].sort((a, b) => a.nombre.localeCompare(b.nombre)).map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
+                </select>
+              </CampoRep>
+              <CampoRep label={`Revisor(es)${editando.revisoresTexto ? ` — Excel decía: ${editando.revisoresTexto}` : ""}`} className="sm:col-span-2">
+                <div className="border border-slate-200 rounded-md px-2 py-1 max-h-24 overflow-y-auto grid sm:grid-cols-2">
+                  {[...usuarios].sort((a, b) => a.nombre.localeCompare(b.nombre)).map((u) => (
+                    <label key={u.id} className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={(editando.revisoresIds || []).includes(u.id)} onChange={() => setEditando({ ...editando, revisoresIds: (editando.revisoresIds || []).includes(u.id) ? editando.revisoresIds.filter((x) => x !== u.id) : [...(editando.revisoresIds || []), u.id] })} /> {u.nombre}</label>
+                  ))}
+                </div>
+              </CampoRep>
+              <CampoRep label="Periodicidad"><select value={editando.periodicidad} onChange={(e) => setEditando({ ...editando, periodicidad: e.target.value })} className={inp}>{PERIODICIDADES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></CampoRep>
+              <CampoRep label="Último envío"><input type="date" value={editando.ultimoEnvio || ""} onChange={(e) => setEditando({ ...editando, ultimoEnvio: e.target.value })} className={inp} /></CampoRep>
+              <CampoRep label="Próximo vencimiento (de aquí sale el semáforo)"><input type="date" value={editando.proximoEnvio || ""} onChange={(e) => setEditando({ ...editando, proximoEnvio: e.target.value })} className={inp} /></CampoRep>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={() => setEditando(null)} className="text-xs border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium">Cancelar</button>
+              <button onClick={guardarForm} className="text-xs bg-indigo-600 text-white px-4 py-1.5 rounded-md font-medium">Guardar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {registrando && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setRegistrando(null)}>
+          <div className="bg-white rounded-xl w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold text-slate-800">Registrar envío</h3>
+            <div className="text-xs text-slate-500">{registrando.r.autoridad} — {registrando.r.descripcion} ({nombreEmpresa(registrando.r.empresaId)})</div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <CampoRep label="Fecha en que se envió"><input type="date" value={registrando.fecha} max={hoyLocalISO()} onChange={(e) => setRegistrando({ ...registrando, fecha: e.target.value, proximo: calcularProximoReporte(registrando.r, e.target.value) })} className={inp} /></CampoRep>
+              <CampoRep label={registrando.r.periodicidad === "eventual" ? "Próximo vencimiento (no aplica)" : "Próximo vencimiento (automático, ajustable)"}><input type="date" disabled={registrando.r.periodicidad === "eventual"} value={registrando.proximo} onChange={(e) => setRegistrando({ ...registrando, proximo: e.target.value })} className={inp} /></CampoRep>
+            </div>
+            <CampoRep label="Evidencia del envío (PDF o imagen, opcional)"><AdjuntarArchivo nombre={registrando.evidencia} carpeta="reportes-autoridades" label="Adjuntar evidencia" onSeleccionar={(ruta) => setRegistrando({ ...registrando, evidencia: ruta })} /></CampoRep>
+            <CampoRep label="Nota (opcional)"><input value={registrando.nota} onChange={(e) => setRegistrando({ ...registrando, nota: e.target.value })} placeholder="Ej. radicado 12345" className={inp} /></CampoRep>
+            <div className="text-[11px] text-slate-400">Al guardar, el reporte pasa a su siguiente fecha y queda este envío en el historial.</div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setRegistrando(null)} className="text-xs border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium">Cancelar</button>
+              <button onClick={() => {
+                if (!registrando.fecha) { alert("Escribe la fecha del envío."); return; }
+                const r = registrando.r;
+                const { sem, ...limpio } = r;
+                onGuardar({ ...limpio, ultimoEnvio: registrando.fecha, proximoEnvio: registrando.proximo || "", historial: [{ id: nextId(), fecha: registrando.fecha, evidencia: registrando.evidencia, nota: registrando.nota.trim(), vencia: r.proximoEnvio || "", porId: currentUser.id, porNombre: currentUser.nombre }, ...(r.historial || [])] });
+                setRegistrando(null);
+              }} className="text-xs bg-indigo-600 text-white px-4 py-1.5 rounded-md font-medium">Guardar envío</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas, onAbrir, onBorrar, onBorrarTodas, onAbrirReporte }) {
   const [abierto, setAbierto] = useState(false);
   const ref = useRef(null);
   const sinLeer = notificaciones.filter((n) => !n.leida).length;
@@ -8078,6 +8469,7 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
   }, []);
 
   const clickNotificacion = (n) => {
+    if (n.reporteId) { if (onAbrirReporte) onAbrirReporte(n.reporteId); setAbierto(false); return; }
     if (!n.leida) onMarcarLeida(n.id);
     if (n.solicitudId) onAbrir(n.solicitudId);
     setAbierto(false);
@@ -8115,12 +8507,12 @@ function NotificacionesBell({ notificaciones, onMarcarLeida, onMarcarTodasLeidas
               notificaciones.map((n) => (
                 <div key={n.id} onClick={() => clickNotificacion(n)} className={`px-4 py-2.5 border-b border-slate-50 cursor-pointer hover:bg-slate-50 ${!n.leida ? "bg-indigo-50/40" : ""}`}>
                   <div className="flex items-start gap-2">
-                    {!n.leida && <span className="w-1.5 h-1.5 rounded-full bg-indigo-600 mt-1.5 shrink-0" />}
+                    {!n.leida && <span className={`w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 ${n.reporteId ? (n.clave === "rojo" ? "bg-rose-600" : "bg-amber-500") : "bg-indigo-600"}`} />}
                     <div className="min-w-0 flex-1">
                       <div className={`text-xs ${!n.leida ? "text-slate-700 font-medium" : "text-slate-500"}`}>{n.mensaje}</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">{hace(n.creadoEn)}</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">{n.reporteId ? "Reportabilidad a autoridades" : hace(n.creadoEn)}</div>
                     </div>
-                    {onBorrar && <button title="Borrar esta notificación" onClick={(e) => { e.stopPropagation(); onBorrar(n.id); }} className="text-slate-300 hover:text-rose-500 text-sm leading-none shrink-0">×</button>}
+                    {onBorrar && !n.reporteId && <button title="Borrar esta notificación" onClick={(e) => { e.stopPropagation(); onBorrar(n.id); }} className="text-slate-300 hover:text-rose-500 text-sm leading-none shrink-0">×</button>}
                   </div>
                 </div>
               ))
@@ -8155,6 +8547,11 @@ export default function App() {
     desdeDb: (r) => ({ id: r.id, nombre: r.nombre, tipoProveedor: r.tipo_proveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representanteLegal: r.representante_legal, actividadEconomica: r.actividad_economica, suministra: r.servicio_producto || "", categoria: r.categoria || "", datosPendientes: r.datos_pendientes || "no", contacto: r.contacto, email: r.email, email2: r.email2 }),
     haciaDb: (r) => ({ id: r.id, nombre: r.nombre, tipo_proveedor: r.tipoProveedor, nit: r.nit, ciudad: r.ciudad, direccion: r.direccion, telefono: r.telefono, representante_legal: r.representanteLegal, actividad_economica: r.actividadEconomica, servicio_producto: r.suministra || null, categoria: r.categoria || null, datos_pendientes: r.datosPendientes || "no", contacto: r.contacto, email: r.email, email2: r.email2 }),
     orderBy: 'nombre',
+  });
+  const { datos: reportes, guardar: guardarReporte, eliminar: eliminarReporte, guardarVarios: importarReportes } = useSupabaseTable('reportes_autoridades', {
+    desdeDb: (r) => ({ id: r.id, empresaId: r.empresa_id, autoridad: r.autoridad || "", contactoNombre: r.contacto_nombre || "", contactoEmail: r.contacto_email || "", contactoCelular: r.contacto_celular || "", descripcion: r.descripcion || "", categoria: r.categoria || "", medioEnvio: r.medio_envio || "", responsableId: r.responsable_id || "", responsableTexto: r.responsable_texto || "", revisoresIds: r.revisores_ids || [], revisoresTexto: r.revisores_texto || "", periodicidad: r.periodicidad || "mensual", ultimoEnvio: r.ultimo_envio || "", proximoEnvio: r.proximo_envio || "", historial: r.historial || [] }),
+    haciaDb: (r) => ({ id: r.id, empresa_id: r.empresaId, autoridad: r.autoridad, contacto_nombre: r.contactoNombre || null, contacto_email: r.contactoEmail || null, contacto_celular: r.contactoCelular || null, descripcion: r.descripcion, categoria: r.categoria || null, medio_envio: r.medioEnvio || null, responsable_id: r.responsableId || null, responsable_texto: r.responsableTexto || null, revisores_ids: r.revisoresIds || [], revisores_texto: r.revisoresTexto || null, periodicidad: r.periodicidad || "mensual", ultimo_envio: r.ultimoEnvio || null, proximo_envio: r.proximoEnvio || null, historial: r.historial || [] }),
+    orderBy: 'autoridad',
   });
   const { datos: usuarios, cargando: cargandoUsuarios, guardar: guardarUsuario, eliminar: eliminarUsuario, guardarVarios: importarUsuarios, recargar: recargarUsuarios } = useSupabaseTable('usuarios', {
     desdeDb: (r) => ({ id: r.id, nombre: r.nombre, email: r.email, cargo: r.cargo, areaId: r.area_id, areasAdicionales: r.areas_adicionales || [], rol: r.rol, firmaFotoUrl: r.firma_foto_url }),
@@ -8409,6 +8806,10 @@ export default function App() {
   const solicitudesVisibles = puedeVerTodasSolicitudes(currentUser) ? solicitudes : solicitudes.filter((s) => s.solicitanteId === currentUser.id);
   const solicitudesPorFirmar = solicitudes.filter((s) => s.status === "orden" && !todasOrdenesFirmadas(s, proveedores));
   const solicitudesMisPendientes = solicitudes.filter((s) => requiereMiAccion(currentUser, s, proveedores));
+  const alertasReportesUsuario = alertasDeReportes(reportes, currentUser);
+  const verTodosReportes = puedeVerTodosReportes(currentUser);
+  const accesoReportes = verTodosReportes || reportes.some((r) => esReporteDe(r, currentUser));
+  const reportesRojos = (verTodosReportes ? reportes : reportes.filter((r) => esReporteDe(r, currentUser))).filter((r) => semaforoReporte(r).clave === "rojo").length;
 
   const NavBtn = ({ id, icon: Icon, label, badge }) => (
     <button title={label} onClick={() => { setTab(id); setAbierta(null); setCreando(false); setPerfil(false); }} className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium w-full text-left ${!menuExpandido ? "justify-center px-2" : ""} ${tab === id && !abierta && !creando && !perfil ? "bg-indigo-600 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
@@ -8474,6 +8875,7 @@ export default function App() {
             <NavBtn id="estadisticas" icon={BarChart3} label="Estadísticas" />
             {puedeVerEvaluaciones(currentUser) && <NavBtn id="evalProveedores" icon={Award} label="Evaluación proveedores" />}
             {puedeVerOrdenesEnviadas(currentUser) && <NavBtn id="ordenesEnviadas" icon={FileText} label="Gestión integral de OC/OS/OT" />}
+            {accesoReportes && <NavBtn id="reportabilidad" icon={ShieldCheck} label="Reportabilidad a autoridades" badge={reportesRojos} />}
             {puedeVerPlanInversion(currentUser) && <NavBtn id="planInversion" icon={DollarSign} label="Cronograma de pagos" />}
             {puedeVerCatalogos(currentUser) && <NavBtn id="catalogos" icon={Settings} label="Catálogo" />}
           </>
@@ -8497,7 +8899,7 @@ export default function App() {
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="flex justify-end items-center gap-2 px-4 pt-3 shrink-0">
           <BotonPaleta tema={temaActual} onElegir={elegirTema} />
-          <NotificacionesBell notificaciones={notisUsuario} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onBorrar={eliminarNoti} onBorrarTodas={borrarTodasNotis} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
+          <NotificacionesBell notificaciones={[...alertasReportesUsuario, ...notisUsuario]} onAbrirReporte={() => { setTab("reportabilidad"); setAbierta(null); setCreando(false); setPerfil(false); }} onMarcarLeida={marcarNotiLeida} onMarcarTodasLeidas={marcarTodasNotisLeidas} onBorrar={eliminarNoti} onBorrarTodas={borrarTodasNotis} onAbrir={(id) => { setAbierta(id); setCreando(false); setPerfil(false); }} />
         </div>
 
       <main className="flex-1 p-6 pt-2 overflow-auto">
@@ -8566,6 +8968,8 @@ export default function App() {
           <ReporteEvaluacionesProveedores solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} />
         ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
           <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} currentUser={currentUser} onActualizar={actualizarSolicitud} />
+        ) : tab === "reportabilidad" && accesoReportes ? (
+          <ReportabilidadAutoridades reportes={reportes} empresas={empresas} usuarios={usuarios} currentUser={currentUser} puedeGestionar={puedeGestionarReportes(currentUser)} puedeVerTodos={verTodosReportes} onGuardar={guardarReporte} onEliminar={eliminarReporte} onGuardarVarios={importarReportes} />
         ) : tab === "planInversion" && puedeVerPlanInversion(currentUser) ? (
           <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} onActualizarSolicitud={actualizarSolicitudDB} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
