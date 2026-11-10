@@ -730,7 +730,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v38d";
+const VERSION_APP = "novedades v38e";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -8423,7 +8423,8 @@ function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, 
                           <div className="space-y-0.5">
                             <div className="font-medium text-slate-700">Cómo se envía</div>
                             <div>{r.medioEnvio || "—"}</div>
-                            <div className="pt-1"><span className="text-slate-400">Revisor(es):</span> {nombresRevisores(r)}</div>
+                            <div className="pt-1"><span className="text-slate-400">Responsable:</span> <span className="font-medium text-slate-700">{nombreResp(r)}</span></div>
+                            <div><span className="text-slate-400">Revisor(es):</span> {nombresRevisores(r)}</div>
                           </div>
                           <div className="space-y-1">
                             <div className="font-medium text-slate-700">Historial de envíos</div>
