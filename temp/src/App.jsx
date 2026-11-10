@@ -697,6 +697,7 @@ const PERMISOS_DISPONIBLES = [
   { key: "editar_plan_inversion", label: "Editar el Cronograma de pagos (fechas y montos)" },
   { key: "editar_pagos_finales", label: "Modificar fechas y montos finales de pago después de emitida la orden (Dirección Financiera / Contabilidad)" },
   { key: "ver_reportabilidad", label: "Ver todos los reportes a autoridades (Reportabilidad). Quien sea responsable o revisor de un reporte siempre ve el suyo" },
+  { key: "asignar_reportabilidad", label: "Asignar o cambiar el responsable y los revisores de un reporte a autoridades (jefes / directores). Incluye ver todos los reportes" },
   { key: "gestionar_reportabilidad", label: "Crear, editar, importar y eliminar reportes a autoridades (Reportabilidad)" },
   { key: "ver_evaluaciones_proveedores", label: "Ver el reporte de Evaluación de proveedores" },
 ];
@@ -729,7 +730,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v38b";
+const VERSION_APP = "novedades v38c";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -780,7 +781,8 @@ const puedeVerMisPendientes = (u) => u.rol === "Administrador" || tienePermiso(u
 const puedeVerCalendarioPagos = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_calendario_pagos");
 const puedeVerOrdenesEnviadas = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_ordenes_enviadas");
 const puedeVerPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_plan_inversion");
-const puedeVerTodosReportes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_reportabilidad") || tienePermiso(u.rol, "gestionar_reportabilidad");
+const puedeVerTodosReportes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "ver_reportabilidad") || tienePermiso(u.rol, "gestionar_reportabilidad") || tienePermiso(u.rol, "asignar_reportabilidad");
+const puedeAsignarReportes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "asignar_reportabilidad") || tienePermiso(u.rol, "gestionar_reportabilidad");
 const puedeGestionarReportes = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "gestionar_reportabilidad");
 const puedeCrearPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "crear_plan_inversion");
 const puedeEditarPlanInversion = (u) => u.rol === "Administrador" || tienePermiso(u.rol, "editar_plan_inversion");
@@ -8140,13 +8142,14 @@ function alertasDeReportes(reportes, u) {
 
 function CampoRep({ label, children, className }) { return <div className={className}><label className="text-[11px] text-slate-500 block mb-0.5">{label}</label>{children}</div>; }
 
-function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, puedeGestionar, puedeVerTodos, onGuardar, onEliminar, onGuardarVarios }) {
+function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, puedeGestionar, puedeAsignar, puedeVerTodos, onGuardar, onEliminar, onGuardarVarios }) {
   const [fEmpresa, setFEmpresa] = useState("");
   const [fResp, setFResp] = useState("");
   const [fSem, setFSem] = useState("");
   const [busqueda, setBusqueda] = useState("");
   const [editando, setEditando] = useState(null);
   const [registrando, setRegistrando] = useState(null);
+  const [asignando, setAsignando] = useState(null);
   const [abierto, setAbierto] = useState(null);
   const [mensaje, setMensaje] = useState("");
   const [verAvisos, setVerAvisos] = useState(false);
@@ -8169,7 +8172,7 @@ function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, 
   }, {})).sort((a, b) => b.rojos - a.rojos || b.total - a.total);
 
   const puedeRegistrar = (r) => puedeGestionar || r.responsableId === currentUser?.id;
-  const nuevoVacio = { id: "", empresaId: empresas[0]?.id || "", autoridad: "", contactoNombre: "", contactoEmail: "", contactoCelular: "", descripcion: "", categoria: "", medioEnvio: "", responsableId: "", responsableTexto: "", revisoresIds: [], revisoresTexto: "", periodicidad: "mensual", ultimoEnvio: "", proximoEnvio: "", historial: [] };
+  const nuevoVacio = { id: "", empresaId: empresas[0]?.id || "", autoridad: "", contactoNombre: "", contactoEmail: "", contactoCelular: "", descripcion: "", categoria: "", medioEnvio: "", responsableId: currentUser?.id || "", responsableTexto: "", revisoresIds: [], revisoresTexto: "", periodicidad: "mensual", ultimoEnvio: "", proximoEnvio: "", historial: [] };
 
   const guardarForm = () => {
     if (!editando.autoridad.trim() || !editando.descripcion.trim() || !editando.empresaId) { alert("Falta la empresa, la autoridad o la descripción del reporte."); return; }
@@ -8419,6 +8422,11 @@ function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, 
                             ))}
                           </div>
                         </div>
+                        {puedeAsignar && (
+                          <div className="flex gap-3 mt-3">
+                            <button onClick={() => setAsignando({ id: r.id, responsableId: r.responsableId || "", revisoresIds: [...(r.revisoresIds || [])], r })} className="text-xs text-indigo-600 font-medium flex items-center gap-1"><Users size={12} /> Asignar responsable</button>
+                          </div>
+                        )}
                         {puedeGestionar && (
                           <div className="flex gap-3 mt-3">
                             <button onClick={() => setEditando({ ...nuevoVacio, ...r, sem: undefined })} className="text-xs text-indigo-600 font-medium flex items-center gap-1"><Pencil size={12} /> Editar</button>
@@ -8434,6 +8442,30 @@ function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, 
           </table>
         )}
       </div>
+
+      {asignando && (() => {
+        const ordenados = [...usuarios].sort((a, b) => a.nombre.localeCompare(b.nombre));
+        return (
+          <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setAsignando(null)}>
+            <div className="bg-white rounded-xl w-full max-w-lg p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
+              <h3 className="text-sm font-semibold text-slate-800">Asignar responsable</h3>
+              <div className="text-xs text-slate-500">{asignando.r.autoridad} — {asignando.r.descripcion} ({nombreEmpresa(asignando.r.empresaId)})</div>
+              <div><label className="text-xs font-medium text-slate-500">Responsable</label>
+                <div className="mt-1"><SelectorBuscable opciones={ordenados.map((u) => ({ value: u.id, label: u.nombre }))} value={asignando.responsableId} onChange={(v) => setAsignando({ ...asignando, responsableId: v })} placeholder="Buscar al responsable…" /></div>
+              </div>
+              <div><label className="text-xs font-medium text-slate-500">Revisor(es)</label>
+                <div className="mt-1"><SelectorBuscable opciones={ordenados.filter((u) => !asignando.revisoresIds.includes(u.id)).map((u) => ({ value: u.id, label: u.nombre }))} value="" onChange={(v) => v && setAsignando({ ...asignando, revisoresIds: [...asignando.revisoresIds, v] })} placeholder="Buscar y agregar un revisor…" /></div>
+                {asignando.revisoresIds.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">{asignando.revisoresIds.map((id) => <span key={id} className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-xs rounded-full pl-2.5 pr-1.5 py-0.5">{usuarios.find((u) => u.id === id)?.nombre || id}<button type="button" title="Quitar" onClick={() => setAsignando({ ...asignando, revisoresIds: asignando.revisoresIds.filter((x) => x !== id) })} className="text-slate-400 hover:text-rose-600 leading-none">×</button></span>)}</div>}
+              </div>
+              <div className="text-[11px] text-slate-400">La persona asignada verá este reporte en «Mis reportes» y recibirá los avisos en la campanita.</div>
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setAsignando(null)} className="text-xs border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium">Cancelar</button>
+                <button onClick={() => { if (!asignando.responsableId) { alert("Elige al responsable."); return; } const { sem, ...limpio } = asignando.r; onGuardar({ ...limpio, responsableId: asignando.responsableId, responsableTexto: "", revisoresIds: asignando.revisoresIds, revisoresTexto: "" }); setAsignando(null); }} className="text-xs bg-indigo-600 text-white px-4 py-1.5 rounded-md font-medium">Guardar</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {registrando && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setRegistrando(null)}>
@@ -8976,7 +9008,7 @@ export default function App() {
         ) : tab === "ordenesEnviadas" && puedeVerOrdenesEnviadas(currentUser) ? (
           <ReporteOrdenesEnviadas solicitudes={solicitudes} proveedores={proveedores} empresas={empresas} onAbrir={setAbierta} currentUser={currentUser} onActualizar={actualizarSolicitud} />
         ) : tab === "reportabilidad" && accesoReportes ? (
-          <ReportabilidadAutoridades reportes={reportes} empresas={empresas} usuarios={usuarios} currentUser={currentUser} puedeGestionar={puedeGestionarReportes(currentUser)} puedeVerTodos={verTodosReportes} onGuardar={guardarReporte} onEliminar={eliminarReporte} onGuardarVarios={importarReportes} />
+          <ReportabilidadAutoridades reportes={reportes} empresas={empresas} usuarios={usuarios} currentUser={currentUser} puedeGestionar={puedeGestionarReportes(currentUser)} puedeAsignar={puedeAsignarReportes(currentUser)} puedeVerTodos={verTodosReportes} onGuardar={guardarReporte} onEliminar={eliminarReporte} onGuardarVarios={importarReportes} />
         ) : tab === "planInversion" && puedeVerPlanInversion(currentUser) ? (
           <PlanInversion empresas={empresas} currentUser={currentUser} solicitudes={solicitudes} proveedores={proveedores} onAbrir={setAbierta} onActualizarSolicitud={actualizarSolicitudDB} />
         ) : tab === "catalogos" && puedeVerCatalogos(currentUser) ? (
