@@ -24,7 +24,7 @@ import {
   Calendar, Award, ArrowLeft, LayoutDashboard, ListChecks, BarChart3,
   DollarSign, PackageCheck, CalendarClock, Boxes, Users, Truck,
   Settings, Target, ClipboardList, Lock, LogOut, History, PenTool, ShieldCheck,
-  Paperclip, Mail, Camera, Timer, AlertTriangle, Info, Palette, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive, Copy, RefreshCw,
+  Paperclip, Mail, Camera, Timer, AlertTriangle, Info, Palette, Layers, MessageSquare, UserCircle, Send, CheckSquare, PanelLeftClose, PanelLeftOpen, Upload as UploadIcon, Bell, Archive, Copy, RefreshCw, MessageCircle,
 } from "lucide-react";
 import {
   BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, Tooltip,
@@ -730,7 +730,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v38c";
+const VERSION_APP = "novedades v38d";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -8125,6 +8125,14 @@ const ESTILO_SEMAFORO = {
   nada: { chip: "bg-slate-50 text-slate-500 border-slate-200", dot: "bg-slate-400", nombre: "Sin fecha", ayuda: "«cuando haya lugar»" },
 };
 const ORDEN_SEMAFORO = { rojo: 0, amarillo: 1, verde: 2, nada: 3 };
+// enlace de WhatsApp: toma el primer número del texto; si tiene 10 dígitos (celular colombiano) le antepone 57
+const urlWhatsApp = (celular, mensaje) => {
+  const primero = String(celular || "").split(/[;,/]| y /)[0];
+  let n = primero.replace(/\D/g, "");
+  if (n.length === 10 && n.startsWith("3")) n = "57" + n;
+  if (n.length < 11 || n.length > 15) return "";
+  return `https://wa.me/${n}${mensaje ? `?text=${encodeURIComponent(mensaje)}` : ""}`;
+};
 const esReporteDe = (r, u) => !!u && (r.responsableId === u.id || (r.revisoresIds || []).includes(u.id));
 const textoSinTildes = (t) => String(t ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
 
@@ -8404,7 +8412,13 @@ function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, 
                         <div className="grid md:grid-cols-3 gap-4 text-xs text-slate-600">
                           <div className="space-y-0.5">
                             <div className="font-medium text-slate-700">Contacto en la autoridad</div>
-                            <div>{r.contactoNombre || "—"}</div><div>{r.contactoEmail || "—"}</div><div>{r.contactoCelular || "—"}</div>
+                            <div>{r.contactoNombre || "—"}</div>
+                            <div>{r.contactoEmail ? <a href={`mailto:${r.contactoEmail.split(/[;,\s]+/)[0]}`} onClick={(e) => e.stopPropagation()} className="text-indigo-600 underline">{r.contactoEmail}</a> : "—"}</div>
+                            <div className="flex items-center gap-2 flex-wrap">{r.contactoCelular || "—"}
+                              {urlWhatsApp(r.contactoCelular, `Hola${r.contactoNombre ? " " + r.contactoNombre.split(/\s+/)[0] : ""}, le escribo de ${nombreEmpresa(r.empresaId)} sobre el reporte «${r.descripcion}».`) && (
+                                <a href={urlWhatsApp(r.contactoCelular, `Hola${r.contactoNombre ? " " + r.contactoNombre.split(/\s+/)[0] : ""}, le escribo de ${nombreEmpresa(r.empresaId)} sobre el reporte «${r.descripcion}».`)} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} title="Abrir chat de WhatsApp con el contacto" className="inline-flex items-center gap-1 bg-emerald-600 text-white rounded-md px-2 py-0.5 text-[11px] font-medium"><MessageCircle size={12} /> WhatsApp</a>
+                              )}
+                            </div>
                           </div>
                           <div className="space-y-0.5">
                             <div className="font-medium text-slate-700">Cómo se envía</div>
