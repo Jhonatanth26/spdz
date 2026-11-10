@@ -729,7 +729,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v38";
+const VERSION_APP = "novedades v38b";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -8258,6 +8258,50 @@ function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, 
   };
 
   const inp = "border border-slate-200 rounded-md px-2 py-1.5 text-xs w-full";
+  const clsPag = "w-full mt-1 border border-slate-200 rounded-lg px-3 py-2 text-sm";
+  const set = (k, v) => setEditando({ ...editando, [k]: v });
+
+  if (editando) {
+    const usuariosOrdenados = [...usuarios].sort((a, b) => a.nombre.localeCompare(b.nombre));
+    return (
+      <div className="space-y-4">
+        <button onClick={() => setEditando(null)} className="flex items-center gap-1 text-sm text-slate-500 hover:text-slate-700"><ArrowLeft size={15} /> Volver a reportabilidad</button>
+        <div className="bg-white rounded-xl border border-slate-200 p-6">
+          <h2 className="text-lg font-semibold text-slate-800 mb-5">{editando.id ? "Editar reporte" : "Nuevo reporte a autoridad"}</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 mb-5">
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Empresa</label><select value={editando.empresaId} onChange={(e) => set("empresaId", e.target.value)} className={clsPag}>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Autoridad</label><input value={editando.autoridad} onChange={(e) => set("autoridad", e.target.value)} placeholder="Ej. UIAF, Supertransporte, DANE" className={clsPag} /></div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Categoría</label><input value={editando.categoria} onChange={(e) => set("categoria", e.target.value)} placeholder="Ej. Medio ambiente, SST, Sarlaft" className={clsPag} /></div>
+            <div className="md:col-span-2 xl:col-span-8"><label className="text-xs font-medium text-slate-500 flex items-center gap-1"><ClipboardList size={12} /> Descripción del reporte</label><input value={editando.descripcion} onChange={(e) => set("descripcion", e.target.value)} className={clsPag} /></div>
+            <div className="md:col-span-2 xl:col-span-4"><label className="text-xs font-medium text-slate-500">Medio de envío</label><input value={editando.medioEnvio} onChange={(e) => set("medioEnvio", e.target.value)} placeholder="Ej. A través de la web, correo" className={clsPag} /></div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Contacto en la autoridad <span className="text-slate-400 font-normal">(opcional)</span></label><input value={editando.contactoNombre} onChange={(e) => set("contactoNombre", e.target.value)} className={clsPag} /></div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Correo del contacto</label><input value={editando.contactoEmail} onChange={(e) => set("contactoEmail", e.target.value)} className={clsPag} /></div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Celular del contacto</label><input value={editando.contactoCelular} onChange={(e) => set("contactoCelular", e.target.value)} className={clsPag} /></div>
+            <div className="md:col-span-2 xl:col-span-6">
+              <label className="text-xs font-medium text-slate-500">Responsable{editando.responsableTexto && !editando.responsableId ? <span className="text-amber-600 font-normal"> — el Excel decía «{editando.responsableTexto}»: elige al usuario</span> : ""}</label>
+              <div className="mt-1"><SelectorBuscable opciones={usuariosOrdenados.map((u) => ({ value: u.id, label: u.nombre }))} value={editando.responsableId} onChange={(v) => setEditando({ ...editando, responsableId: v, responsableTexto: "" })} placeholder="Buscar al responsable…" /></div>
+            </div>
+            <div className="md:col-span-2 xl:col-span-6">
+              <label className="text-xs font-medium text-slate-500">Revisor(es){editando.revisoresTexto ? <span className="text-amber-600 font-normal"> — el Excel decía «{editando.revisoresTexto}»</span> : ""}</label>
+              <div className="mt-1"><SelectorBuscable opciones={usuariosOrdenados.filter((u) => !(editando.revisoresIds || []).includes(u.id)).map((u) => ({ value: u.id, label: u.nombre }))} value="" onChange={(v) => v && setEditando({ ...editando, revisoresIds: [...(editando.revisoresIds || []), v] })} placeholder="Buscar y agregar un revisor…" /></div>
+              {(editando.revisoresIds || []).length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mt-2">
+                  {editando.revisoresIds.map((id) => <span key={id} className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-xs rounded-full pl-2.5 pr-1.5 py-0.5">{usuarios.find((u) => u.id === id)?.nombre || id}<button type="button" title="Quitar" onClick={() => setEditando({ ...editando, revisoresIds: editando.revisoresIds.filter((x) => x !== id) })} className="text-slate-400 hover:text-rose-600 leading-none">×</button></span>)}
+                </div>
+              )}
+            </div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Periodicidad</label><select value={editando.periodicidad} onChange={(e) => set("periodicidad", e.target.value)} className={clsPag}>{PERIODICIDADES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Último envío</label><input type="date" value={editando.ultimoEnvio || ""} onChange={(e) => set("ultimoEnvio", e.target.value)} className={clsPag} /></div>
+            <div className="xl:col-span-4"><label className="text-xs font-medium text-slate-500">Próximo vencimiento <span className="text-slate-400 font-normal">(de aquí sale el semáforo)</span></label><input type="date" value={editando.proximoEnvio || ""} onChange={(e) => set("proximoEnvio", e.target.value)} className={clsPag} /></div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setEditando(null)} className="text-sm border border-slate-200 text-slate-600 px-4 py-2 rounded-lg font-medium">Cancelar</button>
+            <button onClick={guardarForm} className="text-sm bg-indigo-600 text-white px-5 py-2 rounded-lg font-medium">Guardar reporte</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -8390,43 +8434,6 @@ function ReportabilidadAutoridades({ reportes, empresas, usuarios, currentUser, 
           </table>
         )}
       </div>
-
-      {editando && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setEditando(null)}>
-          <div className="bg-white rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-5 space-y-3" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-slate-800">{editando.id ? "Editar reporte" : "Nuevo reporte"}</h3>
-            <div className="grid sm:grid-cols-2 gap-3">
-              <CampoRep label="Empresa"><select value={editando.empresaId} onChange={(e) => setEditando({ ...editando, empresaId: e.target.value })} className={inp}>{empresas.map((e) => <option key={e.id} value={e.id}>{e.nombre}</option>)}</select></CampoRep>
-              <CampoRep label="Autoridad"><input value={editando.autoridad} onChange={(e) => setEditando({ ...editando, autoridad: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Descripción del reporte" className="sm:col-span-2"><input value={editando.descripcion} onChange={(e) => setEditando({ ...editando, descripcion: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Categoría"><input value={editando.categoria} onChange={(e) => setEditando({ ...editando, categoria: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Medio de envío"><input value={editando.medioEnvio} onChange={(e) => setEditando({ ...editando, medioEnvio: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Contacto en la autoridad (nombre)"><input value={editando.contactoNombre} onChange={(e) => setEditando({ ...editando, contactoNombre: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Correo del contacto"><input value={editando.contactoEmail} onChange={(e) => setEditando({ ...editando, contactoEmail: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Celular del contacto"><input value={editando.contactoCelular} onChange={(e) => setEditando({ ...editando, contactoCelular: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Responsable">
-                <select value={editando.responsableId} onChange={(e) => setEditando({ ...editando, responsableId: e.target.value, responsableTexto: e.target.value ? "" : editando.responsableTexto })} className={inp}>
-                  <option value="">{editando.responsableTexto ? `(sin asignar — Excel decía: ${editando.responsableTexto})` : "—"}</option>{[...usuarios].sort((a, b) => a.nombre.localeCompare(b.nombre)).map((u) => <option key={u.id} value={u.id}>{u.nombre}</option>)}
-                </select>
-              </CampoRep>
-              <CampoRep label={`Revisor(es)${editando.revisoresTexto ? ` — Excel decía: ${editando.revisoresTexto}` : ""}`} className="sm:col-span-2">
-                <div className="border border-slate-200 rounded-md px-2 py-1 max-h-24 overflow-y-auto grid sm:grid-cols-2">
-                  {[...usuarios].sort((a, b) => a.nombre.localeCompare(b.nombre)).map((u) => (
-                    <label key={u.id} className="flex items-center gap-1.5 text-xs"><input type="checkbox" checked={(editando.revisoresIds || []).includes(u.id)} onChange={() => setEditando({ ...editando, revisoresIds: (editando.revisoresIds || []).includes(u.id) ? editando.revisoresIds.filter((x) => x !== u.id) : [...(editando.revisoresIds || []), u.id] })} /> {u.nombre}</label>
-                  ))}
-                </div>
-              </CampoRep>
-              <CampoRep label="Periodicidad"><select value={editando.periodicidad} onChange={(e) => setEditando({ ...editando, periodicidad: e.target.value })} className={inp}>{PERIODICIDADES.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}</select></CampoRep>
-              <CampoRep label="Último envío"><input type="date" value={editando.ultimoEnvio || ""} onChange={(e) => setEditando({ ...editando, ultimoEnvio: e.target.value })} className={inp} /></CampoRep>
-              <CampoRep label="Próximo vencimiento (de aquí sale el semáforo)"><input type="date" value={editando.proximoEnvio || ""} onChange={(e) => setEditando({ ...editando, proximoEnvio: e.target.value })} className={inp} /></CampoRep>
-            </div>
-            <div className="flex justify-end gap-2 pt-1">
-              <button onClick={() => setEditando(null)} className="text-xs border border-slate-200 text-slate-600 px-3 py-1.5 rounded-md font-medium">Cancelar</button>
-              <button onClick={guardarForm} className="text-xs bg-indigo-600 text-white px-4 py-1.5 rounded-md font-medium">Guardar</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {registrando && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setRegistrando(null)}>
