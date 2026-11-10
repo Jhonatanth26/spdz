@@ -730,7 +730,7 @@ const ROLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director"];
 const ROLES_ASIGNABLES_DIRECTOR = ["Director de Área", "Jefe de Área y Director", "Dirección Financiera", "Gerencia"];
 // se muestra en la pantalla para poder confirmar qué versión de la app está publicada
 const MODO_DEMO = import.meta.env.VITE_MODO_DEMO === 'true'; // solo se activa en el proyecto de demostración
-const VERSION_APP = "novedades v38e";
+const VERSION_APP = "novedades v39";
 // ¿esta persona es el director de esa área? Con director asignado en el área: solo esa persona. Sin asignar (áreas que
 // todavía no lo tienen): el criterio de antes — alguien con rol de director que tenga esa área a cargo.
 const esDirectorDeArea = (u, areaId) => (__directorPorArea[areaId] ? __directorPorArea[areaId] === u.id : ROLES_DIRECTOR.includes(u.rol) && tieneAreaACargo(u, areaId));
@@ -3237,6 +3237,31 @@ function CotizacionGeneralForm({ items, proveedores, guardarProveedor, onAplicar
   );
 }
 
+// ===================== Plantilla de correos =====================
+const URL_APP = "https://gestionspzf-jhonatanth26s-projects.vercel.app/";
+const escaparHtml = (t) => String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+// Correo con el aspecto de la aplicación: logos de las empresas arriba, datos en tabla, botón que abre la app y pie automático.
+function plantillaCorreo({ empresas = [], titulo, saludo, parrafos = [], datos = [], items = [], boton, pie }) {
+  const logos = empresas.filter((e) => e.logoUrl).map((e) => `<img src="${escaparHtml(e.logoUrl)}" alt="${escaparHtml(e.nombre)}" height="40" style="height:40px;max-width:150px;width:auto;margin-right:16px;vertical-align:middle;border:0">`).join("");
+  const filasDatos = datos.filter(([, v]) => v).map(([k, v]) => `<tr><td style="padding:6px 12px 6px 0;color:#64748b;font-size:13px;white-space:nowrap;vertical-align:top">${escaparHtml(k)}</td><td style="padding:6px 0;color:#1e293b;font-size:14px;font-weight:600">${escaparHtml(v)}</td></tr>`).join("");
+  const filasItems = items.slice(0, 12).map((it) => `<tr><td style="padding:5px 8px;border-top:1px solid #e2e8f0;font-size:13px;color:#1e293b">${escaparHtml(it.nombre)}</td><td style="padding:5px 8px;border-top:1px solid #e2e8f0;font-size:13px;color:#475569;text-align:right;white-space:nowrap">${escaparHtml(it.cantidad)} ${escaparHtml(it.unidad || "")}</td></tr>`).join("");
+  const masItems = items.length > 12 ? `<tr><td colspan="2" style="padding:5px 8px;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b">… y ${items.length - 12} ítem(s) más</td></tr>` : "";
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#f1f5f9">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;padding:24px 12px"><tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;font-family:Arial,Helvetica,sans-serif">
+<tr><td style="padding:18px 24px;border-bottom:4px solid #c8102e">${logos || '<span style="font-size:16px;font-weight:bold;color:#1e293b">CompraSPD&amp;ZF</span>'}</td></tr>
+<tr><td style="padding:24px">
+<div style="font-size:18px;font-weight:bold;color:#1e293b;margin-bottom:14px">${escaparHtml(titulo)}</div>
+<p style="margin:0 0 12px;font-size:14px;color:#334155;line-height:1.5">${escaparHtml(saludo)}</p>
+${parrafos.map((p) => `<p style="margin:0 0 12px;font-size:14px;color:#334155;line-height:1.5">${p}</p>`).join("")}
+${filasDatos ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:8px 0 16px">${filasDatos}</table>` : ""}
+${filasItems ? `<div style="font-size:12px;font-weight:bold;color:#64748b;margin:4px 0">ÍTEMS SOLICITADOS</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:18px;background:#f8fafc;border-radius:8px">${filasItems}${masItems}</table>` : ""}
+${boton ? `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:6px 0 10px"><tr><td style="background:#c8102e;border-radius:8px"><a href="${escaparHtml(boton.url)}" style="display:inline-block;padding:12px 22px;color:#ffffff;font-size:14px;font-weight:bold;text-decoration:none">${escaparHtml(boton.texto)}</a></td></tr></table><div style="font-size:12px;color:#64748b">Si el botón no abre, copia este enlace en tu navegador:<br><a href="${escaparHtml(boton.url)}" style="color:#475569">${escaparHtml(boton.url)}</a></div>` : ""}
+</td></tr>
+<tr><td style="padding:14px 24px;background:#f8fafc;font-size:11px;color:#94a3b8;line-height:1.5">${escaparHtml(pie || "Este correo es automático, generado por la aplicación de compras. Por favor no respondas a este mensaje.")}</td></tr>
+</table></td></tr></table></body></html>`;
+}
+
 function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardarItemCatalogo, proveedores, guardarProveedor, conceptosGasto, guardarConceptoGasto, usuarios, currentUser, solicitudes, onCrear, onCancel, borrador }) {
   const [tipo, setTipo] = useState(borrador?.tipo || "compra");
   const [empresaId, setEmpresaId] = useState(borrador?.empresaId || empresas[0]?.id || "");
@@ -3413,7 +3438,15 @@ function NuevaSolicitud({ areas, departamentos, empresas, itemsCatalogo, guardar
       enviarCorreo(
         director.email,
         `Nueva solicitud pendiente: ${folio}`,
-        `<p>Hola ${director.nombre},</p><p><b>${currentUser.nombre}</b> creó la solicitud <b>${folio}</b> (${tipo === "compra" ? "Solicitud de compra" : "Orden de servicio/trabajo"}) y quedó pendiente de tu aprobación como director de área.</p><p><b>Objetivo:</b> ${objetivo}</p>`
+        plantillaCorreo({
+          empresas,
+          titulo: `Nueva solicitud pendiente de tu aprobación: ${folio}`,
+          saludo: `Hola ${director.nombre},`,
+          parrafos: [`<b>${escaparHtml(currentUser.nombre)}</b> creó una ${tipo === "compra" ? "solicitud de compra" : "orden de servicio/trabajo"} que requiere tu aprobación como director de área.`],
+          datos: [["Solicitud", folio], ["Empresa", empresas.find((e) => e.id === empresaId)?.nombre], ["Área", areas.find((a) => a.id === areaId)?.nombre], ["Fecha estimada", fechaEstimada], ["Valor estimado", totalGeneral?.total ? fmt(totalGeneral.total) : ""], ["Objetivo", objetivo], ["Justificación", justificacion]],
+          items,
+          boton: { texto: "Revisar y aprobar la solicitud", url: `${URL_APP}#/pendientes` },
+        })
       );
     }
   };
